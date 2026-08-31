@@ -13,3 +13,12 @@
 # OS / editor
 .DS_Store
 *.swp
+
+# node
+node_modules/
+dist/
+.next/
+*.tsbuildinfo
+
+# prisma
+packages/db/prisma/*.db
