@@ -93,7 +93,9 @@ reserved
   → refund_pending        on condition_failed
 
 release_pending
-  → paying_out            guard: g_approvals_sufficient ∧ g_no_active_payout
+  → paying_out            guard: g_evidence_present ∧ g_fields_match
+                                 ∧ g_owner_matches ∧ g_beneficiary_locked
+                                 ∧ g_approvals_sufficient ∧ g_no_active_payout
                                  ∧ g_coverage_ok
   → release_blocked       on operator_blocked
 
@@ -101,6 +103,13 @@ release_blocked
   → release_pending       on approval_added ∧ расхождение снято
   → refund_pending        on refund_requested
   → collected             on reserve_expired
+
+⚠ Guards доказательств продублированы на переходе `release_pending → paying_out`
+намеренно. Без этого существовал путь `collecting → release_blocked →
+release_pending → paying_out`: платёж от третьего лица уводится в блокировку, а
+оттуда выходит по утверждению оператора — **мимо проверки пакета доказательств,
+совпадения полей и сверки собственника**. Guard, стоящий только на одном входе в
+состояние, не защищает состояние.
 
 paying_out
   → paid_out              on payout_result(settled)
@@ -220,7 +229,7 @@ frozen → settling | unwinding    on unfreeze(два разных пользо�
 | Транш одновременно `paid_out` и `refunded` | Оба терминальны, переходов между ними нет |
 | Две активные выплаты по одному траншу | Частичный уникальный индекс в базе |
 | `reserved` без поступивших денег | Вход только из `collected` |
-| `paying_out` без пакета доказательств | Guard `g_evidence_present` на переходе |
+| `paying_out` без пакета доказательств | Guard `g_evidence_present` **на переходе в `paying_out`**, а не только на входе в `release_pending` — иначе обход через `release_blocked` |
 | Повтор выплаты после `unknown` | Отсутствие перехода в автомате |
 | Выплата при покрытии меньше единицы | Guard `g_coverage_ok` |
 | Выплата на реквизиты, изменённые вчера | Guard `g_beneficiary_locked` |
