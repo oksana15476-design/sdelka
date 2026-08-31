@@ -1,0 +1,7 @@
+# Рантайм-конфиги и секреты скиллов — НЕ коммитить
+*/config/config.json
+*/config/service_account_key.json
+*/config/.env
+# Кэш скиллов (оставляем только .gitkeep)
+*/cache/*
+!*/cache/.gitkeep

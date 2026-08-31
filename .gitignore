@@ -1,0 +1,15 @@
+# Секреты скиллов — только из окружения, никогда в репозиторий
+.env
+.env.*
+!.env.example
+**/config/.env
+**/config/.env.*
+!**/config/.env.example
+
+# Локальные копии контекста проекта (заполняются из *.template.md)
+.claude/skills/yandex-direct/references/PRODUCT_CONTEXT.md
+.claude/skills/yandex-direct/references/KEYWORDS_SOURCE.md
+
+# OS / editor
+.DS_Store
+*.swp

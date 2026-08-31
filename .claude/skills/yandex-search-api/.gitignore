@@ -1,0 +1,11 @@
+# Config with secrets
+config/config.json
+config/service_account_key.json
+
+# Cache files (generated at runtime)
+cache/iam_token.json
+cache/ops/
+cache/results/
+
+# macOS
+.DS_Store

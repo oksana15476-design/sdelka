@@ -1,0 +1,41 @@
+{
+  "seed": {
+    "limit": 200,
+    "same_host_only": true,
+    "include_patterns": [],
+    "exclude_patterns": [
+      "\\?.*utm_",
+      "\\?.*fbclid=",
+      "\\?.*gclid=",
+      "/tag/",
+      "/author/",
+      "/feed/",
+      "#"
+    ],
+    "request_timeout_seconds": 20
+  },
+  "crawl": {
+    "cache_mode": "enabled",
+    "max_urls": 100,
+    "max_concurrency": 5,
+    "word_count_threshold": 20,
+    "page_timeout_ms": 45000,
+    "respect_cache": true,
+    "capture_markdown": true,
+    "capture_fit_markdown": true
+  },
+  "browser": {
+    "headless": true,
+    "verbose": false
+  },
+  "output": {
+    "preview_rows": 20,
+    "store_html": false,
+    "store_markdown": true
+  },
+  "scrapedo": {
+    "enabled": false,
+    "token_file": "../scrapedo-web-scraper/config/token.txt",
+    "api_base": "http://api.scrape.do"
+  }
+}
