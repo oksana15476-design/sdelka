@@ -41,7 +41,7 @@
 | `refund_pending` | Назначен возврат | нет |
 | `refunding` | Возврат отправлен | нет |
 | `refunded` | Возвращено покупателю | **да** |
-| `written_off` | Списано вручную с двумя утверждениями и проводкой | **да** |
+| `written_off` | **Невостребованные средства:** обязательство закрыто, деньги ушли с номинального счёта и остались долгом. Два утверждения (FUNCTIONAL.md §3.1, случай Б) | **да** |
 
 ### 1.2 События
 
@@ -52,7 +52,8 @@
 `operator_blocked(reason)` · `payout_result(settled|rejected|unknown)` ·
 `reconciliation_resolved(settled|rejected)` · `deadline_reached` ·
 `refund_requested(reason)` · `write_off_approved(user_id[2])` ·
-`instructions_issued` · `release_authorized` · `refund_initiated`
+`instructions_issued` · `release_authorized` · `refund_initiated` ·
+`condition_act_amended(редакция, принята покупателем и получателем)`
 
 Последние три перехода в §1.4 изначально были заданы скобочной пометкой или
 одними guard'ами, без имени события. Имена введены реализацией: **переход без
@@ -76,6 +77,8 @@
 | `g_mismatch_resolved` | Расхождение, приведшее в `release_blocked`, снято |
 | `g_write_off_approvers_distinct` | Списание утвердили два разных пользователя |
 | `g_no_stale_break` | Нет незакрытых расхождений сверки старше суток |
+| `g_condition_agreed` | Акт получателя об условии зафиксирован **до приёма средств** |
+| `g_amendment_accepted_by_both` | Новая редакция условия принята покупателем и получателем, лицами различными |
 
 ⚠ **`g_owner_matches` разделён на два guard'а.** Раньше он был один и определялся
 здесь как «собственник = **продавец**», а в `FUNCTIONAL.md` §3.5 — как
@@ -100,6 +103,7 @@
 ```
 pending
   → collecting            on instructions_issued
+                          guard: g_condition_agreed          ← ст. 27(2): условие до денег
 
 collecting
   → collected             on funds_received
@@ -267,6 +271,7 @@ unknown
 ```
 draft → parties_pending → property_pending → ready
 ready → funding           on первое funds_received по любому траншу
+                          guard: g_condition_agreed
 funding → funded          [все транши в reserved]
 funding → unwinding       on deadline_reached | revocation_requested
 funded → filed            on filing_registered(application_id)
@@ -397,6 +402,20 @@ draft | parties_pending | property_pending | ready → cancelled
 
 Последний пункт — тест на свойствах, а не на примерах. Он ловит то, что не
 приходит в голову при написании сценариев.
+
+**[решение] Изменение условия допускается только до резервирования.** Событие
+`condition_act_amended` принимается в `collecting` и `collected`; из `reserved` и
+далее — отвергается.
+
+Причина: в `reserved` продавец **уже увидел подтверждение средств** и на этом
+основании идёт подавать документы. Изменить условие под ним в этот момент — ровно
+то злоупотребление, против которого вся конструкция и строится. Чтобы поменять
+условие после резерва, резерв надо сначала снять, и продавец об этом узнает.
+
+**[решение] Акт об условии — по траншу, а не по сделке.** Транш — сущность
+первого класса, и у многотраншевой сделки условия могут отличаться. Guard на
+переходе сделки `ready → funding` проверяет акт **того транша, по которому пришли
+деньги**, а не общий акт сделки.
 
 ---
 
