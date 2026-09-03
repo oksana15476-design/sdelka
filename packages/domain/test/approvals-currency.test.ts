@@ -25,9 +25,11 @@ const approvals = (amount: Money<'USD' | 'GEL'>, rate: OfficialRateAtCreation | 
 
 describe('пороги утверждений в валюте, отличной от лари (FUNCTIONAL.md §4.3.1)', () => {
   it('keeps the lari ladder exactly as it was, boundary included', () => {
-    expect(approvals(money('GEL', 2_999_999n), null)).toBe(0);
-    // Граница ступени включительно: 30 000 ₾ — это ещё нулевая ступень.
-    expect(approvals(money('GEL', 3_000_000n), null)).toBe(0);
+    // Нулевой ступени в лестнице нет: релиз без человека запрещён при любой
+    // сумме (CRO-risk.md). Прежняя первая ступень разрешала автоисполнение до
+    // 30 000 ₾ и была недостижима только из-за минимума сделки.
+    expect(approvals(money('GEL', 1n), null)).toBe(1);
+    expect(approvals(money('GEL', 3_000_000n), null)).toBe(1);
     expect(approvals(money('GEL', 3_000_001n), null)).toBe(1);
     expect(approvals(money('GEL', 15_000_000n), null)).toBe(1);
     expect(approvals(money('GEL', 50_000_000n), null)).toBe(2);
@@ -47,8 +49,8 @@ describe('пороги утверждений в валюте, отличной 
     // равные до копейки, обязаны требовать одного числа подписей: асимметрия
     // здесь читалась бы как ошибка системы и однажды была бы «починена» в
     // неверную сторону (FUNCTIONAL.md §4.3.1).
-    expect(approvals(money('USD', 1_200_000n), official)).toBe(0);
-    expect(approvals(money('GEL', 3_000_000n), null)).toBe(0);
+    expect(approvals(money('USD', 1_200_000n), official)).toBe(1);
+    expect(approvals(money('GEL', 3_000_000n), null)).toBe(1);
     // На тетри выше границы — уже следующая ступень, тоже в обеих валютах.
     expect(approvals(money('GEL', 3_000_001n), null)).toBe(1);
     expect(approvals(money('USD', 1_200_001n), official)).toBe(1);
@@ -80,7 +82,7 @@ describe('пороги утверждений в валюте, отличной 
       rate: rationalFromDecimalString('2.6686875'),
     };
     expect(approvals(amount, officialRate)).toBe(1);
-    expect(approvals(amount, clientRate)).toBe(0);
+    expect(approvals(amount, clientRate)).toBe(1);
   });
 
   it('refuses closed when the rate is missing, stale or of another pair', () => {
@@ -135,5 +137,21 @@ describe('guard g_approvals_sufficient на валютном транше', () =
     expect(
       reject(stateAt('release_pending'), { type: 'release_authorized' }, ctx).failedGuards,
     ).toContain('g_approvals_sufficient');
+  });
+});
+
+describe('автоматический релиз запрещён при любой сумме', () => {
+  it('has no tier that allows a payout without a human approval', () => {
+    // Регрессия: первая ступень раньше разрешала автоисполнение до 30 000 ₾.
+    // На текущем минимуме сделки она недостижима — и потому опасна: включилась
+    // бы молча в день снижения минимума. CRO-risk.md: релиз без человека
+    // запрещён при любой сумме.
+    for (const tier of DEFAULT_APPROVAL_POLICY.tiers) {
+      expect(tier.requiredApprovals === 0).toBe(false);
+    }
+  });
+
+  it('requires at least one approval for the smallest possible amount', () => {
+    expect(requiredApprovals(DEFAULT_APPROVAL_POLICY, money('GEL', 1n), null, CREATED_ON)).toBe(1);
   });
 });

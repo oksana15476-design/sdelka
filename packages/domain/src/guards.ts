@@ -71,11 +71,22 @@ export interface ApprovalPolicy {
   readonly tiers: readonly ApprovalTier[];
 }
 
-/** Пороги утверждения из FUNCTIONAL.md §3.5, в тетри. */
+/**
+ * Пороги утверждения из FUNCTIONAL.md §3.5, в тетри.
+ *
+ * **Ступени с нулём утверждений здесь нет и быть не может.** Раньше первая
+ * ступень разрешала автоисполнение до 30 000 ₾. На сегодняшнем минимуме сделки
+ * она недостижима — и именно поэтому опасна: она молча включится в день, когда
+ * минимум снизят, и никакой тест этого не заметит, потому что ломаться будет
+ * не поведение, а его отсутствие.
+ *
+ * `CRO-risk.md`: автоматический релиз запрещён **при любой сумме**. Это риск с
+ * максимальной вероятностью и максимальным ущербом одновременно, и цена
+ * ошибки здесь — вся сумма сделки.
+ */
 export const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = Object.freeze({
   currency: 'GEL',
   tiers: Object.freeze([
-    Object.freeze({ upToMinor: 3_000_000n, requiredApprovals: 0 }),
     Object.freeze({ upToMinor: 15_000_000n, requiredApprovals: 1 }),
     Object.freeze({ upToMinor: 50_000_000n, requiredApprovals: 2 }),
     Object.freeze({ upToMinor: null, requiredApprovals: null }),

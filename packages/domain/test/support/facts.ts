@@ -55,7 +55,10 @@ export function facts(overrides: Partial<TrancheFacts> = {}): TrancheFacts {
     registryOwnerIsBuyer: true,
     beneficiary: { locked: true, lastChangedAt: null },
     preparedBy: 'operator-1',
-    approvals: [],
+    // Нулевой ступени в лестнице нет: любая выплата требует человека, поэтому
+    // базовая фикстура несёт одно утверждение. Утверждающий отличается от
+    // готовившего операцию — это проверяет сам guard.
+    approvals: [{ userId: 'approver-1' }],
     approvalPolicy: DEFAULT_APPROVAL_POLICY,
     createdOn: CREATED_ON,
     // Транш в лари: пересчитывать нечего, курс не нужен (§4.3.1).

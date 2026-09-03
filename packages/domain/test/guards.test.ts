@@ -135,11 +135,26 @@ describe('каждый guard проходит и не проходит', () => {
   });
 
   it('g_approvals_sufficient: пороги по сумме и запрет утверждения готовившим', () => {
-    // До 30 000 ₾ — без утверждений.
+    // Нулевой ступени нет: выплата без человека невозможна при любой сумме.
+    // Прежняя редакция теста утверждала обратное — «до 30 000 ₾ без
+    // утверждений» — и это была не проверка, а закрепление бага
+    // (CRO-risk.md: автоматический релиз запрещён при любой сумме).
+    expect(
+      check('g_approvals_sufficient', {
+        requiredAmount: money('GEL', 1n),
+        approvals: [],
+      }),
+    ).toBe(false);
     expect(
       check('g_approvals_sufficient', {
         requiredAmount: money('GEL', 3_000_000n),
         approvals: [],
+      }),
+    ).toBe(false);
+    expect(
+      check('g_approvals_sufficient', {
+        requiredAmount: money('GEL', 3_000_000n),
+        approvals: [{ userId: 'approver-1' }],
       }),
     ).toBe(true);
     // 30 000 – 150 000 ₾ — один утверждающий, и не тот, кто готовил.
