@@ -4,6 +4,7 @@ export const LedgerErrorCode = {
   entryTooFewPostings: 'ledger.entry.too_few_postings',
   entryUnbalanced: 'ledger.entry.unbalanced',
   entryFeeIntoClientFunds: 'ledger.entry.fee_into_client_funds',
+  entryClientFundsCrossSubsidy: 'ledger.entry.client_funds_cross_subsidy',
   entryCorrectionWithoutReference: 'ledger.entry.correction_without_reference',
   entrySettlementWithReference: 'ledger.entry.settlement_with_reference',
   postingNonPositiveAmount: 'ledger.posting.non_positive_amount',

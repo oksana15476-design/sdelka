@@ -2,6 +2,7 @@ import { money, rationalEquals, rational } from '@sdelka/money';
 import { describe, expect, it } from 'vitest';
 import {
   type Journal,
+  LedgerError,
   accountBalance,
   appendEntry,
   bankNominal,
@@ -16,6 +17,7 @@ import {
   isFullyCovered,
   negativeClientBalances,
 } from '../src/index';
+import { uncheckedEntry } from './support/unchecked-entry';
 
 const dealA = { dealId: 'A', trancheId: 't1' };
 const dealB = { dealId: 'B', trancheId: 't1' };
@@ -102,20 +104,22 @@ describe('пофайловая сверка (CORE.md Ф10, красная лин
     let journal = funded(emptyJournal, 'e1', dealA, 100n);
     journal = funded(journal, 'e2', dealB, 100n);
     // Ошибка, которую портфельная сверка не видит: выплата по сделке B
-    // финансируется средствами, отнесёнными к сделке A.
-    journal = appendEntry(
-      journal,
-      createJournalEntry({
-        id: 'e3',
-        occurredAt: '2026-09-03T12:00:00Z',
-        kind: 'settlement',
-        memoKey: 'ledger.entry.payout',
-        postings: [
-          debit(clientB, money('USD', 100n), dealB),
-          credit(bankNominal('USD'), money('USD', 100n), dealA),
-        ],
-      }),
-    );
+    // финансируется средствами, отнесёнными к сделке A. Собрать её через
+    // конструктор больше нельзя — красная линия №1 отвергает такую запись
+    // (FUNCTIONAL.md §3.1), — но отчёт обязан видеть уже существующее
+    // расхождение, поэтому запись кладётся в журнал в обход конструктора.
+    const crossSubsidy = {
+      id: 'e3',
+      occurredAt: '2026-09-03T12:00:00Z',
+      kind: 'settlement',
+      memoKey: 'ledger.entry.payout',
+      postings: [
+        debit(clientB, money('USD', 100n), dealB),
+        credit(bankNominal('USD'), money('USD', 100n), dealA),
+      ],
+    } as const;
+    expect(() => createJournalEntry(crossSubsidy)).toThrow(LedgerError);
+    journal = appendEntry(journal, uncheckedEntry(crossSubsidy));
 
     const [portfolio] = coverage(journal);
     expect(portfolio?.custody.minor).toBe(100n);

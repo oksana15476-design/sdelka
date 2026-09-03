@@ -12,6 +12,7 @@ import {
   emptyJournal,
   shouldStopAcceptingDeals,
 } from '../src/index';
+import { uncheckedEntry } from './support/unchecked-entry';
 
 const dealA = { dealId: 'A', trancheId: 't1' };
 const dealB = { dealId: 'B', trancheId: 't1' };
@@ -74,9 +75,12 @@ describe('инварианты учёта в коде', () => {
         }),
       );
     }
+    // Конструктор такую запись уже не соберёт (красная линия №1, FUNCTIONAL.md
+    // §3.1), поэтому расхождение кладётся в журнал в обход него: проверка
+    // инвариантов обязана находить его и в готовом журнале.
     journal = appendEntry(
       journal,
-      createJournalEntry({
+      uncheckedEntry({
         id: 'e3',
         occurredAt: '2026-09-03T12:00:00Z',
         kind: 'settlement',

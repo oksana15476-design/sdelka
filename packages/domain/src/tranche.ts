@@ -46,16 +46,28 @@ export function isTerminalTrancheStatus(status: TrancheStatus): status is Termin
  * Состояние транша. Дедлайн лежит внутри нетерминального варианта, поэтому
  * «нетерминальное состояние без дедлайна» невозможно собрать — это структура,
  * а не проверка (FUNCTIONAL.md инвариант 7, STATE-MACHINES.md §4).
+ *
+ * Отметок времени две, и смешивать их нельзя (STATE-MACHINES.md §5):
+ * `deadline` — по нему наступает автоматический переход, он двигается;
+ * `enteredAt` — момент входа в состояние, по нему считается возраст и работает
+ * эскалация, он не двигается. Повторный `payout_result(unknown)` отодвигает
+ * дедлайн, и если бы возраст считался по дедлайну, застрявшая выплата выглядела
+ * бы вечно свежей и никогда не попадала в эскалацию.
  */
 export type TrancheState =
-  | { readonly status: NonTerminalTrancheStatus; readonly deadline: Deadline }
+  | {
+      readonly status: NonTerminalTrancheStatus;
+      readonly deadline: Deadline;
+      readonly enteredAt: Instant;
+    }
   | { readonly status: TerminalTrancheStatus };
 
 export function nonTerminalTrancheState(
   status: NonTerminalTrancheStatus,
   at: Deadline,
+  enteredAt: Instant,
 ): TrancheState {
-  return Object.freeze({ status, deadline: at });
+  return Object.freeze({ status, deadline: at, enteredAt });
 }
 
 export function terminalTrancheState(status: TerminalTrancheStatus): TrancheState {
@@ -82,6 +94,64 @@ export const DEFAULT_DEADLINE_POLICY: DeadlinePolicy = Object.freeze({
   refunding: DAY,
   refund_pending: DAY,
 });
+
+export type EscalationPolicy = Readonly<Record<NonTerminalTrancheStatus, DurationMs>>;
+
+/**
+ * Пороги эскалации по возрасту состояния — STATE-MACHINES.md §5.
+ *
+ * Значения — рабочее умолчание, не норма: норматив дежурного документом не
+ * задан [открыто]. Смысл у них другой, чем у дедлайнов, поэтому и таблица
+ * другая: дедлайн — когда сработает автоматический переход, порог эскалации —
+ * когда транш поднимают дежурному.
+ *
+ * `paying_out` и `refunding` отпущены до двух суток: выход из них гарантирован
+ * ежедневной сверкой, а `payout_result(unknown)` двигает дедлайн — сюда
+ * попадает ровно та выплата, которая застряла между повторами.
+ *
+ * `release_blocked` — единственное состояние, выход из которого зависит от
+ * человека, поэтому порог у него самый короткий.
+ */
+export const DEFAULT_ESCALATION_POLICY: EscalationPolicy = Object.freeze({
+  pending: DAY,
+  collecting: (3 * DAY) as DurationMs,
+  collected: DAY,
+  reserved: DAY,
+  release_pending: (4 * HOUR) as DurationMs,
+  release_blocked: (4 * HOUR) as DurationMs,
+  paying_out: (2 * DAY) as DurationMs,
+  refunding: (2 * DAY) as DurationMs,
+  refund_pending: DAY,
+});
+
+/**
+ * Возраст состояния в миллисекундах — от входа в состояние, а не от дедлайна
+ * (STATE-MACHINES.md §5). `null` у терминального состояния: у закрытого транша
+ * возраста нет, его не эскалируют.
+ *
+ * Возвращается число, а не `DurationMs`: нулевой и отрицательный возраст —
+ * законные значения (транш только что вошёл в состояние; часы дежурного
+ * разошлись с записью), а `DurationMs` по построению строго положителен.
+ */
+export function trancheStateAge(state: TrancheState, now: Instant): number | null {
+  return 'enteredAt' in state ? now - state.enteredAt : null;
+}
+
+/**
+ * Пора ли поднимать транш дежурному. Отдельно от дедлайна: дедлайн отвечает за
+ * автоматический переход, эскалация — за человека (STATE-MACHINES.md §5).
+ */
+export function isEscalated(
+  state: TrancheState,
+  now: Instant,
+  policy: EscalationPolicy,
+): boolean {
+  if (!('enteredAt' in state)) {
+    return false;
+  }
+  const age = now - state.enteredAt;
+  return age >= policy[state.status];
+}
 
 export interface TrancheContext {
   readonly now: Instant;
@@ -347,6 +417,7 @@ export function reduceTranche(
     );
   }
 
+  const previousEnteredAt: Instant = 'enteredAt' in state ? state.enteredAt : context.now;
   const input: GuardInput = { facts: context.facts, event, now: context.now };
   let firstFailure: readonly GuardId[] = [];
   for (const candidate of candidates) {
@@ -364,8 +435,13 @@ export function reduceTranche(
     const at = plus(context.now, context.deadlinePolicy[nextStatus]);
     intents.push({ type: 'set_deadline', at });
     intents.push(...entryIntents(nextStatus, event, context));
+    // Переход `paying_out → paying_out` по `payout_result(unknown)` — это то же
+    // состояние: дедлайн пересчитывается, время входа сохраняется, иначе каждый
+    // неответ банка обнулял бы возраст и застрявшая выплата никогда не попадала
+    // бы в эскалацию (STATE-MACHINES.md §5).
+    const enteredAt = nextStatus === state.status ? previousEnteredAt : context.now;
     return ok({
-      state: nonTerminalTrancheState(nextStatus, deadline(at)),
+      state: nonTerminalTrancheState(nextStatus, deadline(at), enteredAt),
       intents: Object.freeze(intents),
     });
   }
@@ -379,5 +455,5 @@ export function reduceTranche(
 }
 
 export function initialTrancheState(now: Instant, policy: DeadlinePolicy): TrancheState {
-  return nonTerminalTrancheState('pending', deadline(plus(now, policy.pending)));
+  return nonTerminalTrancheState('pending', deadline(plus(now, policy.pending)), now);
 }

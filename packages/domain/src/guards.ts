@@ -1,4 +1,11 @@
-import { type CurrencyCode, type Money, compare } from '@sdelka/money';
+import {
+  type CurrencyCode,
+  type IsoDate,
+  type Money,
+  type Rational,
+  compare,
+  convertAtRate,
+} from '@sdelka/money';
 import { type Instant, HOUR } from './instant';
 import type { TrancheEvent } from './tranche-events';
 
@@ -66,6 +73,27 @@ export const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = Object.freeze({
   ]),
 });
 
+/**
+ * Официальный курс на дату создания транша — FUNCTIONAL.md §4.3.1.
+ *
+ * Курс лежит в фактах транша, а не выясняется в момент проверки guard'а: иначе
+ * планка утверждения плавает вместе с рынком и одна и та же сделка утром
+ * требует двух подписей, а вечером одной. Курс именно официальный, а не наш
+ * клиентский: в клиентском сидит наш спред, то есть мы влияли бы на собственный
+ * контрольный порог.
+ *
+ * Дата — календарная (`IsoDate`), а не момент времени: курс публикуется на дату,
+ * и превращение `Instant` в дату потребовало бы зашитой временной зоны.
+ */
+export interface OfficialRateAtCreation {
+  /** Дата публикации курса. Сверяется с датой создания транша, а не с «сегодня». */
+  readonly asOf: IsoDate;
+  readonly from: CurrencyCode;
+  readonly to: CurrencyCode;
+  /** Единиц валюты `to` за мажорную единицу валюты `from`. */
+  readonly rate: Rational;
+}
+
 /** Период охлаждения реквизитов: 72 часа (FUNCTIONAL.md инвариант 18). */
 export const BENEFICIARY_COOLDOWN_MS = 72 * HOUR;
 
@@ -90,6 +118,14 @@ export interface TrancheFacts {
   readonly preparedBy: string | null;
   readonly approvals: readonly Approval[];
   readonly approvalPolicy: ApprovalPolicy;
+  /** Дата создания транша: к ней привязан курс пересчёта порогов (§4.3.1). */
+  readonly createdOn: IsoDate;
+  /**
+   * Курс на дату создания. `null` для транша в валюте порогов — пересчитывать
+   * нечего. Для транша в другой валюте `null` означает, что курса нет, и
+   * утверждения не набираются: отказ закрытый, а не подстановка ближайшего.
+   */
+  readonly officialRateAtCreation: OfficialRateAtCreation | null;
   readonly activePayouts: number;
   /** Результат проверки покрытия из учёта: считает ledger, домен только читает. */
   readonly coverageOk: boolean;
@@ -103,18 +139,68 @@ export interface GuardInput {
   readonly now: Instant;
 }
 
-function requiredApprovals(policy: ApprovalPolicy, amount: Money<CurrencyCode>): number | null {
-  if (amount.currency !== policy.currency) {
-    // Fail-closed: пороги заданы в одной валюте, пересчёт по курсу здесь
-    // означал бы, что порог утверждения плавает вместе с рынком.
-    return null;
-  }
+/**
+ * Ступень по сумме, уже приведённой к валюте порогов.
+ *
+ * `boundaryBelongsToNextTier` — та самая «более строгая ступень» из §4.3.1. Для
+ * суммы в валюте порогов граница включительная, как и была. Для пересчитанной
+ * суммы граница отдаётся верхней ступени: пересчёт неточен, и на границе должно
+ * получаться больше подписей, а не меньше.
+ */
+function approvalsForTier(
+  policy: ApprovalPolicy,
+  minor: bigint,
+  boundaryBelongsToNextTier: boolean,
+): number | null {
   for (const tier of policy.tiers) {
-    if (tier.upToMinor === null || amount.minor <= tier.upToMinor) {
+    if (tier.upToMinor === null) {
+      return tier.requiredApprovals;
+    }
+    if (boundaryBelongsToNextTier ? minor < tier.upToMinor : minor <= tier.upToMinor) {
       return tier.requiredApprovals;
     }
   }
   return null;
+}
+
+/**
+ * Сколько утверждений нужно на сумму — FUNCTIONAL.md §3.5 и §4.3.1.
+ *
+ * Пороги заданы в лари. Сумма в другой валюте пересчитывается по официальному
+ * курсу на дату создания транша и округляется вверх — к более строгой ступени.
+ *
+ * `null` означает «утверждений не набрать» и всегда читается как отказ:
+ * сумма выше потолка пилота, курса на дату нет, курс не той пары или не на дату
+ * создания. Подставлять ближайший курс нельзя — отказ закрытый.
+ *
+ * Функция экспортирована: её же показывает кабинет и консоль операций, а
+ * второй реализации того же правила быть не должно.
+ */
+export function requiredApprovals(
+  policy: ApprovalPolicy,
+  amount: Money<CurrencyCode>,
+  officialRate: OfficialRateAtCreation | null,
+  createdOn: IsoDate,
+): number | null {
+  if (amount.currency === policy.currency) {
+    return approvalsForTier(policy, amount.minor, false);
+  }
+  if (officialRate === null) {
+    return null;
+  }
+  if (officialRate.from !== amount.currency || officialRate.to !== policy.currency) {
+    return null;
+  }
+  // Курс обязан быть именно на дату создания транша, а не «свежий»: проверка
+  // здесь, потому что иначе правило держится на добросовестности вызывающего.
+  if (officialRate.asOf !== createdOn) {
+    return null;
+  }
+  if (officialRate.rate.numerator <= 0n) {
+    return null;
+  }
+  const converted = convertAtRate(amount, policy.currency, officialRate.rate, 'ceil');
+  return approvalsForTier(policy, converted.minor, true);
 }
 
 function distinctApprovers(facts: TrancheFacts): number {
@@ -158,7 +244,12 @@ export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> =
    */
   g_owner_is_buyer: ({ facts }) => facts.registryOwnerIsBuyer,
   g_approvals_sufficient: ({ facts }) => {
-    const required = requiredApprovals(facts.approvalPolicy, facts.requiredAmount);
+    const required = requiredApprovals(
+      facts.approvalPolicy,
+      facts.requiredAmount,
+      facts.officialRateAtCreation,
+      facts.createdOn,
+    );
     if (required === null) return false;
     return distinctApprovers(facts) >= required;
   },

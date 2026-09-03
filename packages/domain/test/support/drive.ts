@@ -1,4 +1,5 @@
 import {
+  type Instant,
   type NonTerminalTrancheStatus,
   type Rejection,
   type TrancheContext,
@@ -13,9 +14,19 @@ import {
 } from '../../src/index';
 import { NOW } from './facts';
 
-/** Состояние на заданном статусе. Дедлайн обязателен по типу — его нельзя опустить. */
-export function stateAt(status: NonTerminalTrancheStatus): TrancheState {
-  return nonTerminalTrancheState(status, deadline(plus(NOW, DEFAULT_DEADLINE_POLICY[status])));
+/**
+ * Состояние на заданном статусе. Дедлайн и время входа обязательны по типу —
+ * их нельзя опустить (STATE-MACHINES.md §5).
+ */
+export function stateAt(
+  status: NonTerminalTrancheStatus,
+  enteredAt: Instant = NOW,
+): TrancheState {
+  return nonTerminalTrancheState(
+    status,
+    deadline(plus(NOW, DEFAULT_DEADLINE_POLICY[status])),
+    enteredAt,
+  );
 }
 
 export function accept(

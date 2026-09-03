@@ -4,6 +4,7 @@ import {
   accountCode,
   isClientCustodyAccount,
   isClientFundsAccount,
+  isClientObligationAccount,
   isPlatformIncomeAccount,
 } from './accounts';
 import { LedgerError, LedgerErrorCode } from './errors';
@@ -135,6 +136,59 @@ function assertFeeNeverLandsOnClientFunds(
   }
 }
 
+/**
+ * Ключ источника средств: транш, а для непознанного поступления — сам факт
+ * того, что сделки нет. Валюта входит в ключ: обязательство в долларах не
+ * гасится долями лари, пересчёт — это отдельная проводка.
+ */
+function fundsSourceKey(currency: CurrencyCode, ref: TrancheRef | null): string {
+  return ref === null ? `${currency}|suspense` : `${currency}|${ref.dealId}|${ref.trancheId}`;
+}
+
+function assertNoClientCrossSubsidy(postings: readonly Posting[]): void {
+  // Красная линия №1 и FUNCTIONAL.md §3.1: «проводка „дебет клиентского
+  // обязательства, кредит номинального счёта“ без встречной выплаты этому же
+  // клиенту отвергается при построении записи». Дыру по одной сделке нельзя
+  // закрывать деньгами другой, и это архитектурный запрет, а не дисциплина.
+  //
+  // Отличить выплату от списания за чужой счёт можно ровно по отнесению: в
+  // выплате деньги уходят с номинального счёта, отнесённые к тому же траншу,
+  // чьё обязательство гасится. Любое другое отнесение — и любое отсутствие
+  // отнесения — означает, что уходят средства, собранные под другую сделку.
+  //
+  // Проверка применяется и к исправлениям: у обратной проводки (дебет
+  // номинального, кредит обязательства) эта форма не возникает, поэтому
+  // законному исправлению исключение не нужно.
+  const settledObligations = new Set<string>();
+  for (const posting of postings) {
+    if (posting.direction === 'debit' && isClientObligationAccount(posting.account)) {
+      const ref =
+        posting.account.kind === 'client'
+          ? { dealId: posting.account.dealId, trancheId: posting.account.trancheId }
+          : null;
+      settledObligations.add(fundsSourceKey(posting.amount.currency, ref));
+    }
+  }
+  if (settledObligations.size === 0) {
+    return;
+  }
+  for (const posting of postings) {
+    if (posting.direction !== 'credit' || !isClientCustodyAccount(posting.account)) {
+      continue;
+    }
+    if (!settledObligations.has(fundsSourceKey(posting.amount.currency, posting.attribution))) {
+      throw new LedgerError(LedgerErrorCode.entryClientFundsCrossSubsidy, {
+        account: accountCode(posting.account),
+        currency: posting.amount.currency,
+        attribution:
+          posting.attribution === null
+            ? ''
+            : `${posting.attribution.dealId}:${posting.attribution.trancheId}`,
+      });
+    }
+  }
+}
+
 export function createJournalEntry(input: JournalEntryInput): JournalEntry {
   if (input.postings.length < 2) {
     throw new LedgerError(LedgerErrorCode.entryTooFewPostings, {
@@ -154,6 +208,7 @@ export function createJournalEntry(input: JournalEntryInput): JournalEntry {
   assertBalanced(input.postings);
   assertAttribution(input.postings);
   assertFeeNeverLandsOnClientFunds(input.kind, input.postings);
+  assertNoClientCrossSubsidy(input.postings);
   if (input.kind === 'correction' && input.correctsEntryId === undefined) {
     throw new LedgerError(LedgerErrorCode.entryCorrectionWithoutReference, { id: input.id });
   }

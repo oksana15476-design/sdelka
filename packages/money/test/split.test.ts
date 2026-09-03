@@ -40,6 +40,31 @@ describe('split: сумма частей строго равна исходно�
     expect(swapped.deductions.map((part) => part.key)).toEqual(['partner:fee', 'fee:income']);
   });
 
+  /**
+   * FUNCTIONAL.md §4.3, шаг 3: «База — исходная сумма поступления, а не остаток
+   * после нашей комиссии». Проверяется перестановкой шагов 2 и 3: при базе
+   * «остаток» партнёр получил бы 212 427 в одном порядке и 213 495 в другом, а
+   * платформа — 106 747 против 105 680. Тест падает ровно на такой реализации,
+   * и это единственное, что он должен доказывать.
+   */
+  it('takes the partner fee off the incoming amount, so swapping steps 2 and 3 changes nothing', () => {
+    const total = money('GEL', 21_349_500n);
+    const partner = { key: 'partner:fee', rate: rationalFromDecimalString('0.01') };
+    const direct = split(total, [platformFee, partner]);
+    const swapped = split(total, [partner, platformFee]);
+
+    const amountOf = (result: ReturnType<typeof split>, key: string): bigint | undefined =>
+      result.deductions.find((part) => part.key === key)?.amount.minor;
+
+    expect(amountOf(direct, 'fee:income')).toBe(106_747n);
+    expect(amountOf(direct, 'partner:fee')).toBe(213_495n);
+    expect(amountOf(swapped, 'fee:income')).toBe(amountOf(direct, 'fee:income'));
+    expect(amountOf(swapped, 'partner:fee')).toBe(amountOf(direct, 'partner:fee'));
+    expect(swapped.recipient.minor).toBe(direct.recipient.minor);
+    expect(splitPartsTotal(direct).minor).toBe(total.minor);
+    expect(splitPartsTotal(swapped).minor).toBe(total.minor);
+  });
+
   it('supports fixed part, minimum and maximum', () => {
     const withFixed = split(money('GEL', 10_000n), [
       { key: 'fee:income', rate: rationalFromDecimalString('0.005'), fixed: 200n },

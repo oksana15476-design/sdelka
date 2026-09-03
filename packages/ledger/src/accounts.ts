@@ -12,7 +12,9 @@ export type Account =
   | { readonly kind: 'service_income' }
   | { readonly kind: 'subscription_income' }
   | { readonly kind: 'psp_fee_expense' }
-  | { readonly kind: 'oracle_cost_expense' };
+  | { readonly kind: 'oracle_cost_expense' }
+  | { readonly kind: 'writeoff_expense' }
+  | { readonly kind: 'fx_accounting_diff' };
 
 export type AccountKind = Account['kind'];
 
@@ -35,6 +37,13 @@ const ACCOUNT_TYPE: Readonly<Record<AccountKind, AccountType>> = {
   subscription_income: 'income',
   psp_fee_expense: 'expense',
   oracle_cost_expense: 'expense',
+  writeoff_expense: 'expense',
+  // FUNCTIONAL.md §3.1 помечает учётную курсовую разницу как «расход/доход»:
+  // она бывает обеих знаков. Тип счёта в плане один, поэтому знак несёт
+  // направление проводки, а не отдельный счёт: кредитовый остаток на этом
+  // счёте читается как доход. Разводить на два счёта — решение владельца,
+  // здесь его нет.
+  fx_accounting_diff: 'expense',
 };
 
 const FUNDS_OWNERSHIP: Readonly<Record<AccountKind, FundsOwnership>> = {
@@ -50,6 +59,11 @@ const FUNDS_OWNERSHIP: Readonly<Record<AccountKind, FundsOwnership>> = {
   subscription_income: 'platform',
   psp_fee_expense: 'platform',
   oracle_cost_expense: 'platform',
+  // Списание идёт за счёт платформы, а не других клиентов (FUNCTIONAL.md §3.1).
+  writeoff_expense: 'platform',
+  // Учётная курсовая разница — средства платформы. Это не наш спред: спред и
+  // разница разведены типами в money (FUNCTIONAL.md §4.5, CORE.md Ф5).
+  fx_accounting_diff: 'platform',
 };
 
 export function accountType(account: Account): AccountType {
@@ -110,6 +124,10 @@ export function accountCode(account: Account): string {
       return 'psp:fee:expense';
     case 'oracle_cost_expense':
       return 'oracle:cost:expense';
+    case 'writeoff_expense':
+      return 'writeoff:expense';
+    case 'fx_accounting_diff':
+      return 'fx:accounting:diff';
   }
 }
 
@@ -127,3 +145,5 @@ export const clientAccount = (dealId: string, trancheId: string): Account => ({
   dealId,
   trancheId,
 });
+export const writeoffExpense: Account = Object.freeze({ kind: 'writeoff_expense' });
+export const fxAccountingDiff: Account = Object.freeze({ kind: 'fx_accounting_diff' });

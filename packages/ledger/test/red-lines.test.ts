@@ -83,6 +83,106 @@ describe('красная линия №2: комиссия не оседает �
   });
 });
 
+describe('красная линия №1: средства одной сделки не гасят обязательство другой', () => {
+  const other = { dealId: 'd2', trancheId: 't2' };
+
+  it('rejects settling one tranche obligation against custody attributed to another', () => {
+    // Ровно та проводка, которой пытались бы списать дыру по d1 деньгами d2
+    // (FUNCTIONAL.md §3.1): дебет обязательства, кредит номинального счёта,
+    // встречной выплаты этому же клиенту нет.
+    try {
+      createJournalEntry({
+        id: 'x1',
+        occurredAt: '2026-09-03T10:00:00Z',
+        kind: 'settlement',
+        memoKey: 'ledger.entry.write_off',
+        postings: [
+          debit(client, money('GEL', 50_000n), deal),
+          credit(bankNominal('GEL'), money('GEL', 50_000n), other),
+        ],
+      });
+      expect.unreachable();
+    } catch (error) {
+      expect((error as LedgerError).code).toBe(LedgerErrorCode.entryClientFundsCrossSubsidy);
+    }
+  });
+
+  it('rejects the same move hidden behind an unidentified posting', () => {
+    // Проводка по номинальному счёту без отнесения разрешена только рядом с
+    // непознанным поступлением. Эта запись пользуется тем послаблением, чтобы
+    // увести с номинального счёта обезличенные средства под гашение d1.
+    try {
+      createJournalEntry({
+        id: 'x2',
+        occurredAt: '2026-09-03T10:00:00Z',
+        kind: 'settlement',
+        memoKey: 'ledger.entry.write_off',
+        postings: [
+          debit(client, money('GEL', 50_000n), deal),
+          credit(bankNominal('GEL'), money('GEL', 50_000n)),
+          debit(bankNominal('GEL'), money('GEL', 100n)),
+          credit(suspense, money('GEL', 100n)),
+        ],
+      });
+      expect.unreachable();
+    } catch (error) {
+      expect((error as LedgerError).code).toBe(LedgerErrorCode.entryClientFundsCrossSubsidy);
+    }
+  });
+
+  it('rejects it in a correction entry too', () => {
+    // У законного исправления обратная форма (дебет номинального, кредит
+    // обязательства), поэтому исключения для `correction` здесь нет.
+    try {
+      createJournalEntry({
+        id: 'x3',
+        occurredAt: '2026-09-03T10:00:00Z',
+        kind: 'correction',
+        correctsEntryId: 'x0',
+        memoKey: 'ledger.entry.write_off',
+        postings: [
+          debit(client, money('GEL', 50_000n), deal),
+          credit(bankNominal('GEL'), money('GEL', 50_000n), other),
+        ],
+      });
+      expect.unreachable();
+    } catch (error) {
+      expect((error as LedgerError).code).toBe(LedgerErrorCode.entryClientFundsCrossSubsidy);
+    }
+  });
+
+  it('allows the payout of the tranche own funds, fee included', () => {
+    const entry = createJournalEntry({
+      id: 'x4',
+      occurredAt: '2026-09-03T10:00:00Z',
+      kind: 'settlement',
+      memoKey: 'ledger.entry.payout',
+      postings: [
+        debit(client, money('GEL', 50_000n), deal),
+        credit(bankNominal('GEL'), money('GEL', 49_750n), deal),
+        credit(feeIncome, money('GEL', 250n)),
+      ],
+    });
+    expect(entry.postings).toHaveLength(3);
+  });
+
+  it('allows returning an unidentified incoming payment', () => {
+    // Непознанное поступление возвращается теми же обезличенными средствами:
+    // сделки у него нет, и это не дефект отнесения, а его определение.
+    const entry = createJournalEntry({
+      id: 'x5',
+      occurredAt: '2026-09-03T10:00:00Z',
+      kind: 'settlement',
+      memoKey: 'ledger.entry.unidentified_returned',
+      postings: [
+        debit(suspense, money('GEL', 100n)),
+        credit(bankNominal('GEL'), money('GEL', 100n)),
+      ],
+    });
+    expect(entry.postings).toHaveLength(2);
+  });
+});
+
 describe('счета помечены по принадлежности средств', () => {
   it('marks client funds and platform funds apart', () => {
     expect(fundsOwnership(bankNominal('GEL'))).toBe('client');

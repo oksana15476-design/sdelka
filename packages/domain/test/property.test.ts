@@ -23,7 +23,7 @@ import {
   isTerminalTrancheStatus,
   reduceTranche,
 } from '../src/index';
-import { MATCHING_STATEMENT, NOW } from './support/facts';
+import { CREATED_ON, MATCHING_STATEMENT, NOW } from './support/facts';
 import { projectIntents } from './support/ledger-projection';
 
 /**
@@ -207,6 +207,8 @@ describe('свойства на случайных последовательн�
           preparedBy: 'operator-1',
           approvals: [{ userId: 'operator-2' }, { userId: 'operator-3' }],
           approvalPolicy: DEFAULT_APPROVAL_POLICY,
+          createdOn: CREATED_ON,
+          officialRateAtCreation: null,
           activePayouts: 0,
           coverageOk: true,
           sourceAccountKnown: random() < 0.8,

@@ -1,7 +1,7 @@
-import { type CurrencyCode } from './currency';
+import { type CurrencyCode, minorUnitScale } from './currency';
 import { MoneyError, MoneyErrorCode } from './errors';
 import { type Money, money, subtract } from './money';
-import { type Rational, type Rounding, scaleBy } from './rational';
+import { type Rational, type Rounding, applyRational, multiplyRational, rational } from './rational';
 
 /** Дата операции в форме YYYY-MM-DD. Курс без даты не является курсом. */
 export type IsoDate = string & { readonly __isoDate: unique symbol };
@@ -35,8 +35,35 @@ export interface ConvertedAmount<F extends CurrencyCode, T extends CurrencyCode>
   readonly asOf: IsoDate;
 }
 
-export interface ConvertOptions {
-  readonly rounding?: Rounding;
+/**
+ * Пересчёт суммы в другую валюту по одному курсу.
+ *
+ * Курс — единиц целевой валюты за **мажорную** единицу исходной, как его
+ * публикуют банк и Нацбанк. Разница в числе знаков (JPY — 0, GEL — 2) входит
+ * множителем: пересчёт «минорные на курс» верен только пока у обеих валют
+ * одинаковый порядок, и именно это молча ломается на первой же валюте с другим
+ * числом знаков (см. `CURRENCY_EXPONENT`).
+ *
+ * Направление округления — обязательный параметр: FUNCTIONAL.md §4.3,
+ * «значения по умолчанию у операции нет».
+ */
+export function convertAtRate<F extends CurrencyCode, T extends CurrencyCode>(
+  source: Money<F>,
+  targetCurrency: T,
+  rate: Rational,
+  rounding: Rounding,
+): Money<T> {
+  if ((source.currency as CurrencyCode) === (targetCurrency as CurrencyCode)) {
+    throw new MoneyError(MoneyErrorCode.fxCurrencyMismatch, {
+      source: source.currency,
+      target: targetCurrency,
+    });
+  }
+  const exponentFactor = rational(minorUnitScale(targetCurrency), minorUnitScale(source.currency));
+  return money(
+    targetCurrency,
+    applyRational(source.minor, multiplyRational(rate, exponentFactor), rounding),
+  );
 }
 
 export function convert<F extends CurrencyCode, T extends CurrencyCode>(
@@ -44,16 +71,9 @@ export function convert<F extends CurrencyCode, T extends CurrencyCode>(
   targetCurrency: T,
   rates: FxRates,
   asOf: IsoDate,
-  options: ConvertOptions = {},
+  rounding: Rounding,
 ): ConvertedAmount<F, T> {
-  if ((source.currency as CurrencyCode) === (targetCurrency as CurrencyCode)) {
-    throw new MoneyError(MoneyErrorCode.fxCurrencyMismatch, {
-      source: source.currency,
-      target: targetCurrency,
-    });
-  }
-  const rounding = options.rounding ?? 'trunc';
-  const target = money(targetCurrency, scaleBy(source, rates.client, rounding).minor);
+  const target = convertAtRate(source, targetCurrency, rates.client, rounding);
   return Object.freeze({ source, target, rates, asOf });
 }
 
@@ -79,11 +99,13 @@ export interface AccountingFxDifference<C extends CurrencyCode> {
 
 export function platformSpread<F extends CurrencyCode, T extends CurrencyCode>(
   converted: ConvertedAmount<F, T>,
-  rounding: Rounding = 'trunc',
+  rounding: Rounding,
 ): PlatformSpread<T> {
-  const atReference = money(
+  const atReference = convertAtRate(
+    converted.source,
     converted.target.currency,
-    scaleBy(converted.source, converted.rates.reference, rounding).minor,
+    converted.rates.reference,
+    rounding,
   );
   return Object.freeze({
     kind: 'platform_spread',
@@ -93,11 +115,13 @@ export function platformSpread<F extends CurrencyCode, T extends CurrencyCode>(
 
 export function accountingFxDifference<F extends CurrencyCode, T extends CurrencyCode>(
   converted: ConvertedAmount<F, T>,
-  rounding: Rounding = 'trunc',
+  rounding: Rounding,
 ): AccountingFxDifference<T> {
-  const atOfficial = money(
+  const atOfficial = convertAtRate(
+    converted.source,
     converted.target.currency,
-    scaleBy(converted.source, converted.rates.official, rounding).minor,
+    converted.rates.official,
+    rounding,
   );
   return Object.freeze({
     kind: 'accounting_fx_difference',
@@ -113,9 +137,10 @@ export interface FxBreakdown<C extends CurrencyCode> {
 
 export function fxBreakdown<F extends CurrencyCode, T extends CurrencyCode>(
   converted: ConvertedAmount<F, T>,
+  rounding: Rounding,
 ): FxBreakdown<T> {
   return Object.freeze({
-    spread: platformSpread(converted),
-    accounting: accountingFxDifference(converted),
+    spread: platformSpread(converted, rounding),
+    accounting: accountingFxDifference(converted, rounding),
   });
 }
