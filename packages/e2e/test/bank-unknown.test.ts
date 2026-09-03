@@ -42,16 +42,31 @@ describe('банк не ответил', () => {
     const deadlineBefore = 'deadline' in stateBefore ? stateBefore.deadline.at : null;
     expect(deadlineBefore).not.toBeNull();
 
+    // Поручение выпущено ровно один раз — на первом входе в `paying_out`.
+    // Считаем по журналу аудита, а не по состоянию приложения: приложение может
+    // погасить повтор у себя, журнал же покажет каждый выпуск.
+    const ordered = (): number =>
+      world.chain.records.filter((item) => item.body.kind === 'payout_ordered').length;
+    expect(ordered()).toBe(1);
+
     // --- Первый неответ ---
     const first = bank.outcomeFor(payoutIdempotencyKey(TRANCHE));
     expect(first.outcome).toBe('unknown');
     world = advance(world, DAY_MS);
-    world = applyTrancheEvent(
+    const repeated = applyTrancheEvent(
       world,
       TRANCHE,
       { type: 'payout_result', outcome: 'unknown' },
       trancheOptions(POLICY_VERSION, { payoutResponse: null, payoutReasonKey: 'payout.timeout' }),
-    ).world;
+    );
+    world = repeated.world;
+    // Самопереход `paying_out → paying_out` — внутренний: действий входа у него
+    // нет, поэтому и намерения выпустить поручение нет. Двигается только
+    // дедлайн — он и есть смысл события.
+    expect(repeated.transition.intents).toEqual([
+      { type: 'set_deadline', at: expect.any(Number) as unknown as number },
+    ]);
+    expect(ordered()).toBe(1);
 
     // Транш остаётся здесь: перехода наружу по неответу в таблице нет.
     expect(trancheStatusOf(world, TRANCHE)).toBe('paying_out');
@@ -85,12 +100,17 @@ describe('банк не ответил', () => {
     const stateAfterFirst = trancheOf(world, TRANCHE).state;
     const enteredAtFirst = 'enteredAt' in stateAfterFirst ? stateAfterFirst.enteredAt : null;
     world = advance(world, DAY_MS);
-    world = applyTrancheEvent(
+    const repeatedAgain = applyTrancheEvent(
       world,
       TRANCHE,
       { type: 'payout_result', outcome: 'unknown' },
       trancheOptions(POLICY_VERSION, { payoutResponse: null, payoutReasonKey: 'payout.timeout' }),
-    ).world;
+    );
+    world = repeatedAgain.world;
+    expect(repeatedAgain.transition.intents).toEqual([
+      { type: 'set_deadline', at: expect.any(Number) as unknown as number },
+    ]);
+    expect(ordered()).toBe(1);
     const stateAfterSecond = trancheOf(world, TRANCHE).state;
     expect('enteredAt' in stateAfterSecond ? stateAfterSecond.enteredAt : null).toBe(enteredAtFirst);
     const deadlineAfter = 'deadline' in stateAfterSecond ? stateAfterSecond.deadline.at : null;

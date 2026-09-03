@@ -11,7 +11,7 @@ import {
   prioritize,
   toBeneficiaryLock,
 } from '@sdelka/compliance';
-import { payoutIdempotencyKey } from '@sdelka/domain';
+import { instant, payoutIdempotencyKey } from '@sdelka/domain';
 import {
   accountBalance,
   bankNominal,
@@ -208,7 +208,7 @@ describe('реквизиты выплаты: доказательство вла
     // --- Внутри окна: отказ автоматом, а не задача в очередь ---
     const inside = openBeneficiaryChange(
       state,
-      { requestId: 'change-inside', proposed, releaseAt: world.now + 24 * HOUR_MS, dealFunded: true },
+      { requestId: 'change-inside', proposed, releaseAt: instant(world.now + 24 * HOUR_MS), dealFunded: true },
       writer,
       POLICY,
       world.now,

@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { assessRefundDestination, accountFingerprint, payerKeyForDomain } from '@sdelka/compliance';
 import { accountBalance, bankNominal, clientFreeAccount, coverage } from '@sdelka/ledger';
+import { toBeneficiaryLock } from '@sdelka/compliance';
 import {
   advance,
   applyDealEvent,
   applyTrancheEvent,
+  approve,
+  attachRegistryExtract,
   dealStatusOf,
   lockFundsForTranche,
+  patchFacts,
   receiveExternalPayment,
   rejectTrancheEvent,
   trancheOf,
@@ -23,9 +27,11 @@ import {
   POLICY_VERSION,
   SELLER,
   fp,
+  registryWithoutOwnerChange,
   registryWithoutTransfer,
 } from './support/fixtures';
 import { openDeal } from './support/open';
+import { toReserved } from './support/paths';
 
 const OPTIONS = trancheOptions(POLICY_VERSION);
 /** Деньги уже на счёте клиента: откат резерва их туда возвращает, а не зачисляет. */
@@ -127,5 +133,57 @@ describe('регистрация не состоялась', () => {
     expect(accountBalance(world.journal, bankNominal(GEL), GEL).minor).toBe(0n);
     const gel = coverage(world.journal).find((item) => item.currency === GEL);
     expect(gel?.difference.minor).toBe(0n);
+  });
+
+  it('не выпускает выплату, если новым собственником в выписке значится продавец', async () => {
+    const DEAL_B = 'deal-owner-unchanged';
+    const TRANCHE_B = 'tranche-owner-unchanged';
+
+    // Худший из случаев: выписка платная, приложена, все пять полей сошлись, и
+    // пакет доказательств собран. Не сошлось одно — собственник.
+    const reserved = await toReserved({ dealId: DEAL_B, trancheId: TRANCHE_B });
+    const extract = registryWithoutOwnerChange().paidExtract('cadastral-owner');
+    if (extract === null) throw new Error('unreachable');
+    expect(extract.ownerIsBuyer).toBe(false);
+    expect(extract.statementFields.ownerDocumentNumber).toBe(true);
+
+    let world = attachRegistryExtract(reserved.world, TRANCHE_B, extract, 'evidence-owner');
+    expect(trancheOf(world, TRANCHE_B).facts.evidenceBundleId).toBe('evidence-owner');
+
+    // --- Первое ребро пути выплаты ---
+    const refused = rejectTrancheEvent(world, TRANCHE_B, {
+      type: 'condition_established',
+      evidenceBundleId: 'evidence-owner',
+      conditionType: 'registration_transfer',
+    });
+    expect([...refused.failedGuards]).toEqual(['g_owner_is_buyer']);
+
+    // --- Второе ребро: обход через release_blocked закрыт тем же guard'ом ---
+    world = applyTrancheEvent(
+      world,
+      TRANCHE_B,
+      { type: 'mismatch_detected', field: 'registry.owner' },
+      OPTIONS,
+    ).world;
+    expect(trancheStatusOf(world, TRANCHE_B)).toBe('release_blocked');
+    world = approve(world, TRANCHE_B, 'approver-1');
+    world = approve(world, TRANCHE_B, 'approver-2');
+    world = applyTrancheEvent(world, TRANCHE_B, { type: 'approval_added', userId: 'approver-1' }, OPTIONS).world;
+    expect(trancheStatusOf(world, TRANCHE_B)).toBe('release_pending');
+
+    // Уход из резерва снял блокировку реквизитов — правило соседнее и здесь ни
+    // при чём, поэтому реквизиты запираются обратно: отказ обязан остаться
+    // ровно один и именно про собственника.
+    const beneficiary = trancheOf(world, TRANCHE_B).beneficiary;
+    world = patchFacts(world, TRANCHE_B, {
+      beneficiary: toBeneficiaryLock({ ...beneficiary, locked: true }),
+    });
+    const refusedAgain = rejectTrancheEvent(world, TRANCHE_B, { type: 'release_authorized' });
+    expect([...refusedAgain.failedGuards]).toEqual(['g_owner_is_buyer']);
+
+    // Ни поручения, ни движения денег: средства стоят в файле транша.
+    expect(trancheOf(world, TRANCHE_B).payouts).toEqual([]);
+    expect(accountBalance(world.journal, clientFreeAccount(reserved.sellerKey), GEL).minor).toBe(0n);
+    expect(accountBalance(world.journal, bankNominal(GEL), GEL).minor).toBe(20_000_000n);
   });
 });

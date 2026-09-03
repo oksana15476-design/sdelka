@@ -233,6 +233,27 @@ export function registryWithoutTransfer(): RegistryPort {
   return { paidExtract: (): RegistryExtract | null => null };
 }
 
+/**
+ * Выписка есть, все пять полей сошлись — но новым собственником в ней значится
+ * **продавец**, а не покупатель. Это не «данных нет»: это доказательство, что
+ * переход права не состоялся, и на нём стоит `g_owner_is_buyer` (§1.3).
+ *
+ * Отдельная фикстура, а не флаг у `registryWithTransfer`: случай, в котором
+ * пакет доказательств собран и поля совпали, а собственник не тот, — ровно тот,
+ * где ошибка стоит всей суммы сделки.
+ */
+export function registryWithoutOwnerChange(): RegistryPort {
+  return {
+    paidExtract: () => ({
+      statementFields: ALL_FIELDS_MATCH,
+      ownerIsBuyer: false,
+      ownerDocumentNumber: 'matched',
+      rawSource: REGISTRY_EXTRACT_SOURCE,
+      observedAt: NOW,
+    }),
+  };
+}
+
 export interface BankScript {
   readonly outcomes: readonly BankOutcome[];
   readonly reconciliation: ReconciliationOutcome | null;
