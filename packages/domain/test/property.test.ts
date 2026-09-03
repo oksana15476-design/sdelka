@@ -202,7 +202,7 @@ describe('свойства на случайных последовательн�
           buyerPayerKey: 'buyer-1',
           evidenceBundleId: random() < 0.9 ? 'evidence-1' : null,
           statementFields: MATCHING_STATEMENT,
-          ownerDocumentMatches: true,
+          registryOwnerIsBuyer: true,
           beneficiary: { locked: true, lastChangedAt: null },
           preparedBy: 'operator-1',
           approvals: [{ userId: 'operator-2' }, { userId: 'operator-3' }],

@@ -65,9 +65,9 @@ describe('каждый guard проходит и не проходит', () => {
     }
   });
 
-  it('g_owner_matches', () => {
-    expect(check('g_owner_matches', {})).toBe(true);
-    expect(check('g_owner_matches', { ownerDocumentMatches: false })).toBe(false);
+  it('g_owner_is_buyer', () => {
+    expect(check('g_owner_is_buyer', {})).toBe(true);
+    expect(check('g_owner_is_buyer', { registryOwnerIsBuyer: false })).toBe(false);
   });
 
   it('g_approvals_sufficient: пороги по сумме и запрет утверждения готовившим', () => {

@@ -116,7 +116,7 @@ function transition(
 const EVIDENCE_GUARDS: readonly GuardId[] = [
   'g_evidence_present',
   'g_fields_match',
-  'g_owner_matches',
+  'g_owner_is_buyer',
   'g_beneficiary_locked',
 ];
 

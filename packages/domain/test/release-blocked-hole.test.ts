@@ -30,7 +30,7 @@ describe('дыра release_blocked → release_pending → paying_out', () => {
         basis: false,
         noUnexpectedEncumbrances: false,
       },
-      ownerDocumentMatches: false,
+      registryOwnerIsBuyer: false,
       mismatchResolved: true,
     });
 
@@ -44,7 +44,7 @@ describe('дыра release_blocked → release_pending → paying_out', () => {
     expect(error.code).toBe(RejectionCode.guardFailed);
     expect(error.failedGuards).toContain('g_evidence_present');
     expect(error.failedGuards).toContain('g_fields_match');
-    expect(error.failedGuards).toContain('g_owner_matches');
+    expect(error.failedGuards).toContain('g_owner_is_buyer');
   });
 
   it('keeps the duplicated evidence guards on the transition into paying_out', () => {
@@ -56,7 +56,7 @@ describe('дыра release_blocked → release_pending → paying_out', () => {
     expect(edge?.guards).toEqual([
       'g_evidence_present',
       'g_fields_match',
-      'g_owner_matches',
+      'g_owner_is_buyer',
       'g_beneficiary_locked',
       'g_approvals_sufficient',
       'g_no_active_payout',

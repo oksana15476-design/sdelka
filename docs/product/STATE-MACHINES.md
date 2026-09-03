@@ -51,7 +51,12 @@
 `condition_failed` · `mismatch_detected(field)` · `approval_added(user_id)` ·
 `operator_blocked(reason)` · `payout_result(settled|rejected|unknown)` ·
 `reconciliation_resolved(settled|rejected)` · `deadline_reached` ·
-`refund_requested(reason)` · `write_off_approved(user_id[2])`
+`refund_requested(reason)` · `write_off_approved(user_id[2])` ·
+`instructions_issued` · `release_authorized` · `refund_initiated`
+
+Последние три перехода в §1.4 изначально были заданы скобочной пометкой или
+одними guard'ами, без имени события. Имена введены реализацией: **переход без
+события — это переход, который некому вызвать**, и в редьюсере он невыразим.
 
 ### 1.3 Guards
 
@@ -61,18 +66,40 @@
 | `g_payer_matches` | Имя отправителя совпадает с покупателем |
 | `g_evidence_present` | `evidence_bundle_id` не пуст |
 | `g_fields_match` | Все пять полей выписки совпали |
-| `g_owner_matches` | Собственник из реестра = продавец **по номеру документа** |
+| `g_seller_is_owner` | **На заведении сделки:** текущий собственник = продавец, по номеру документа |
+| `g_owner_is_buyer` | **Перед выплатой:** новый собственник из выписки = покупатель, по номеру документа |
 | `g_approvals_sufficient` | Число утверждений ≥ порога для этой суммы |
 | `g_beneficiary_locked` | Реквизиты заблокированы и не менялись 72 часа |
 | `g_no_active_payout` | Нет другой выплаты по этому траншу в активном статусе |
 | `g_coverage_ok` | Покрытие клиентских средств равно единице |
 | `g_source_account_known` | Известен счёт-источник для возврата |
+| `g_mismatch_resolved` | Расхождение, приведшее в `release_blocked`, снято |
+| `g_write_off_approvers_distinct` | Списание утвердили два разных пользователя |
+| `g_no_stale_break` | Нет незакрытых расхождений сверки старше суток |
+
+⚠ **`g_owner_matches` разделён на два guard'а.** Раньше он был один и определялся
+здесь как «собственник = **продавец**», а в `FUNCTIONAL.md` §3.5 — как
+«собственник = **покупатель**». Это поле, на котором стоит разрешение выплаты, и
+два документа говорили о нём противоположное.
+
+Верна редакция `FUNCTIONAL.md`: после регистрации перехода права выписка
+показывает **покупателя** новым собственником, и это и есть доказательство, что
+переход состоялся. Выписка, всё ещё показывающая продавца, доказывает обратное.
+
+Нужны обе проверки, но в разные моменты: `g_seller_is_owner` на заведении сделки
+(иначе продают чужое, деньги не принимаем), `g_owner_is_buyer` перед выплатой.
+Один guard на оба момента — приглашение перепутать стороны в единственном месте,
+где это стоит всей суммы сделки.
+
+Последние два раньше были описаны прозой в §1.4 («расхождение снято», «два
+разных пользователя»). §7 требует, чтобы **каждый guard проверялся по имени** —
+безымянный guard не тестируется.
 
 ### 1.4 Переходы
 
 ```
 pending
-  → collecting            [инструкции выданы]
+  → collecting            on instructions_issued
 
 collecting
   → collected             on funds_received
@@ -80,6 +107,7 @@ collecting
   → release_blocked       on funds_received
                           guard: ¬g_payer_matches            ← платёж третьего лица
   → refund_pending        on deadline_reached
+  → refund_pending        on revocation_requested            ← отзыв покупателем
 
 collected
   → reserved              on reserve_requested
@@ -89,15 +117,16 @@ collected
 reserved
   → release_pending       on condition_established
                           guard: g_evidence_present ∧ g_fields_match
-                                 ∧ g_owner_matches ∧ g_beneficiary_locked
+                                 ∧ g_owner_is_buyer ∧ g_beneficiary_locked
   → release_blocked       on mismatch_detected
   → collected             on reserve_expired                 ← откат резерва
   → refund_pending        on condition_failed
   → refund_pending        on revocation_requested            ← отзыв покупателем
 
 release_pending
-  → paying_out            guard: g_evidence_present ∧ g_fields_match
-                                 ∧ g_owner_matches ∧ g_beneficiary_locked
+  → paying_out            on release_authorized
+                          guard: g_evidence_present ∧ g_fields_match
+                                 ∧ g_owner_is_buyer ∧ g_beneficiary_locked
                                  ∧ g_approvals_sufficient ∧ g_no_active_payout
                                  ∧ g_coverage_ok
   → release_blocked       on operator_blocked
@@ -137,15 +166,20 @@ paying_out
   → paid_out              on payout_result(settled)
   → release_blocked       on payout_result(rejected)
   → paying_out            on payout_result(unknown)          ← остаётся здесь
+  → paid_out              on reconciliation_resolved(settled)
+  → release_blocked       on reconciliation_resolved(rejected)
 
 refund_pending
-  → refunding             guard: g_source_account_known
+  → refunding             on refund_initiated
+                          guard: g_source_account_known
   → release_blocked       guard: ¬g_source_account_known      ← счёт-источник неизвестен
 
 refunding
   → refunded              on payout_result(settled)
   → release_blocked       on payout_result(rejected)
   → refunding             on payout_result(unknown)
+  → refunded              on reconciliation_resolved(settled)
+  → release_blocked       on reconciliation_resolved(rejected)
 
 release_blocked
   → written_off           on write_off_approved(два разных пользователя)
@@ -221,6 +255,15 @@ unknown
 
 ### 3.2 Ключевые переходы
 
+События сделки: `parties_check_started` · `parties_verified` ·
+`property_verified` · `funds_received` (первое поступление по любому траншу) ·
+`tranches_reserved` · `filing_registered(application_id)` ·
+`condition_established` · `condition_failed` · `tranches_settled` ·
+`tranches_refunded` · `deadline_reached` · `revocation_requested` ·
+`cancellation_requested` · `compliance_hold` · `dispute_raised` ·
+`unfreeze(user_id[2], target)`.
+
+
 ```
 draft → parties_pending → property_pending → ready
 ready → funding           on первое funds_received по любому траншу
@@ -233,13 +276,27 @@ settling → settled        [все транши терминальны в paid_
 unwinding → unwound       [все транши терминальны в refunded]
 
 любое нетерминальное → frozen    on compliance_hold | dispute_raised
-frozen → settling | unwinding    on unfreeze(два разных пользователя)
-любое до funded → cancelled
+frozen → settling | unwinding    on unfreeze(два разных пользователя, target)
+draft | parties_pending | property_pending | ready → cancelled
+                                 on cancellation_requested
 ```
+
+**Отмена возможна только до появления денег.** Раньше здесь стояло «любое до
+`funded` → `cancelled`», что включало `funding`, где деньги уже внесены. Это
+противоречило §3.1, где `cancelled` определена как отмена **до внесения денег**, и
+красной линии №7: при живых деньгах единственный выход — `unwinding`, то есть
+возврат покупателю, а не отмена.
+
+**У `unfreeze` целевое состояние — явное поле события.** Разморозка не может
+«вернуть как было»: заморозка длится, состояние сделки за это время могло стать
+неактуальным, и выбор между `settling` и `unwinding` — это решение человека,
+которое обязано быть записано, а не выведено. ⚠️ **[открыто]** Владельцу: должна
+ли разморозка вместо этого возвращать в состояние до заморозки.
 
 ### 3.3 Правило соответствия
 
-Сделка не может быть в `settled`, пока хотя бы один транш не терминален. Это
+Сделка не переходит в `settled`, если хотя бы один её транш находится в
+нетерминальном состоянии. Это
 инвариант, проверяемый на каждом переходе, а не порядок вызовов в коде.
 
 ---

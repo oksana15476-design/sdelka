@@ -14,7 +14,7 @@ export const GUARD_IDS = [
   'g_payer_matches',
   'g_evidence_present',
   'g_fields_match',
-  'g_owner_matches',
+  'g_owner_is_buyer',
   'g_approvals_sufficient',
   'g_beneficiary_locked',
   'g_no_active_payout',
@@ -84,7 +84,7 @@ export interface TrancheFacts {
   readonly buyerPayerKey: string;
   readonly evidenceBundleId: string | null;
   readonly statementFields: StatementFields;
-  readonly ownerDocumentMatches: boolean;
+  readonly registryOwnerIsBuyer: boolean;
   readonly beneficiary: BeneficiaryLock;
   /** Учётная запись, готовившая операцию: она не может быть утверждающей. */
   readonly preparedBy: string | null;
@@ -146,7 +146,17 @@ export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> =
     facts.statementFields.share &&
     facts.statementFields.basis &&
     facts.statementFields.noUnexpectedEncumbrances,
-  g_owner_matches: ({ facts }) => facts.ownerDocumentMatches,
+  /**
+   * Перед выплатой сверяется, что новый собственник в выписке — **покупатель**:
+   * это и есть доказательство, что переход права состоялся. Выписка, всё ещё
+   * показывающая продавца, доказывает обратное.
+   *
+   * Проверка «текущий собственник = продавец» — другая, она стоит на заведении
+   * сделки (Ф3) и сюда не относится. Раньше оба момента назывались одним
+   * guard'ом `g_owner_matches`, и STATE-MACHINES.md §1.3 с FUNCTIONAL.md §3.5
+   * определяли его противоположно. См. §1.3.
+   */
+  g_owner_is_buyer: ({ facts }) => facts.registryOwnerIsBuyer,
   g_approvals_sufficient: ({ facts }) => {
     const required = requiredApprovals(facts.approvalPolicy, facts.requiredAmount);
     if (required === null) return false;

@@ -32,7 +32,7 @@ export function facts(overrides: Partial<TrancheFacts> = {}): TrancheFacts {
     buyerPayerKey: 'buyer-1',
     evidenceBundleId: 'evidence-1',
     statementFields: MATCHING_STATEMENT,
-    ownerDocumentMatches: true,
+    registryOwnerIsBuyer: true,
     beneficiary: { locked: true, lastChangedAt: null },
     preparedBy: 'operator-1',
     approvals: [],
