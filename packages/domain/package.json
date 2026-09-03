@@ -1,0 +1,24 @@
+{
+  "name": "@sdelka/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sdelka/money": "workspace:*"
+  },
+  "devDependencies": {
+    "@sdelka/ledger": "workspace:*"
+  }
+}

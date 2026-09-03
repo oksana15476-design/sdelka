@@ -9,5 +9,10 @@
     "test": "pnpm -r test",
     "db:generate": "pnpm --filter @sdelka/db generate",
     "db:migrate": "pnpm --filter @sdelka/db migrate"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "typescript": "5.6.3",
+    "vitest": "2.1.9"
   }
 }

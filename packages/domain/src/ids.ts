@@ -1,0 +1,67 @@
+import { createHash } from 'node:crypto';
+import { DomainError, RejectionCode } from './result';
+
+/**
+ * UUID версии 5 (RFC 4122): SHA-1 от пространства имён и имени. Реализован
+ * здесь, а не взят зависимостью: алгоритм на двадцать строк, а лишняя
+ * зависимость в денежном ядре — лишняя поверхность атаки.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
+function uuidToBytes(uuid: string): Uint8Array {
+  if (!UUID_PATTERN.test(uuid)) {
+    throw new DomainError(RejectionCode.invalidUuid, uuid);
+  }
+  const hex = uuid.replace(/-/gu, '');
+  const bytes = new Uint8Array(16);
+  for (let index = 0; index < 16; index += 1) {
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+function bytesToUuid(bytes: Uint8Array): string {
+  const hex: string[] = [];
+  for (const byte of bytes) {
+    hex.push(byte.toString(16).padStart(2, '0'));
+  }
+  const joined = hex.join('');
+  return [
+    joined.slice(0, 8),
+    joined.slice(8, 12),
+    joined.slice(12, 16),
+    joined.slice(16, 20),
+    joined.slice(20, 32),
+  ].join('-');
+}
+
+export function uuid5(namespace: string, name: string): string {
+  const hash = createHash('sha1');
+  hash.update(uuidToBytes(namespace));
+  hash.update(new TextEncoder().encode(name));
+  const digest = new Uint8Array(hash.digest()).slice(0, 16);
+  const versionByte = digest[6];
+  const variantByte = digest[8];
+  if (versionByte === undefined || variantByte === undefined) {
+    throw new DomainError(RejectionCode.invalidUuid);
+  }
+  digest[6] = (versionByte & 0x0f) | 0x50;
+  digest[8] = (variantByte & 0x3f) | 0x80;
+  return bytesToUuid(digest);
+}
+
+/** Пространства имён RFC 4122. */
+export const UUID_NAMESPACE_DNS = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+export const UUID_NAMESPACE_URL = '6ba7b811-9dad-11d1-80b4-00c04fd430c8';
+
+/** Пространство имён выплат выводится детерминированно и не является магической константой. */
+export const PAYOUT_NAMESPACE = uuid5(UUID_NAMESPACE_URL, 'https://sdelka.example/ns/payout');
+
+/**
+ * Ключ идемпотентности выплаты (FUNCTIONAL.md инвариант 13, STATE-MACHINES.md §1.5).
+ * Аргумент ровно один: ни номера попытки, ни времени в ключе быть не может —
+ * иначе повтор при потерянном ответе банка создаст вторую выплату.
+ */
+export function payoutIdempotencyKey(trancheId: string): string {
+  return uuid5(PAYOUT_NAMESPACE, trancheId);
+}
