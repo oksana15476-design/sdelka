@@ -132,7 +132,22 @@ describe('реквизиты выплаты: доказательство вла
     expect(trancheStatusOf(world, TRANCHE)).toBe('release_pending');
 
     const refusedAgain = rejectTrancheEvent(world, TRANCHE, { type: 'release_authorized' });
-    expect([...refusedAgain.failedGuards]).toEqual(['g_beneficiary_verified']);
+    // Guard'а два, потому что уход из резерва снял блокировку реквизитов
+    // (§1.5: блокировка сохраняется, только если уходим в выплату). Это
+    // отдельное правило, и оно здесь не при чём — поэтому ниже реквизиты
+    // запираются обратно, чтобы остался ровно тот отказ, о котором сценарий.
+    expect([...refusedAgain.failedGuards].sort()).toEqual([
+      'g_beneficiary_locked',
+      'g_beneficiary_verified',
+    ]);
+
+    const unlocked = trancheOf(world, TRANCHE).beneficiary;
+    expect(unlocked.locked).toBe(false);
+    world = patchFacts(world, TRANCHE, {
+      beneficiary: toBeneficiaryLock({ ...unlocked, locked: true }),
+    });
+    const refusedLocked = rejectTrancheEvent(world, TRANCHE, { type: 'release_authorized' });
+    expect([...refusedLocked.failedGuards]).toEqual(['g_beneficiary_verified']);
 
     // --- Итог: денег не двинулось ---
     expect(trancheOf(world, TRANCHE).payouts).toEqual([]);
