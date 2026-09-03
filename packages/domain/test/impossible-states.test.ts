@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type NonTerminalTrancheStatus,
   type TrancheEvent,
   type TrancheState,
-  BENEFICIARY_COOLDOWN_MS,
+  BENEFICIARY_PRE_RELEASE_BLACKOUT_MS,
+  DAY,
   DEAL_TRANSITIONS,
   PAYOUT_TRANSITIONS,
   RejectionCode,
+  TERMINAL_TRANCHE_STATUSES,
+  THAWED_TRANCHE_STATUSES,
+  TRANCHE_STATUSES,
   TRANCHE_TRANSITIONS,
   createPayout,
   dealState,
@@ -15,7 +20,7 @@ import {
   reducePayout,
 } from '../src/index';
 import { AMOUNT, CONDITION_ACT, NOW, context } from './support/facts';
-import { accept, reject, stateAt } from './support/drive';
+import { accept, frozenStateAt, reject, stateAt } from './support/drive';
 
 const fundsReceived: TrancheEvent = {
   type: 'funds_received',
@@ -23,6 +28,19 @@ const fundsReceived: TrancheEvent = {
   sender: 'buyer-1',
   reference: 'ref-1',
 };
+
+/**
+ * Представитель статуса — состояние, которое в этом статусе действительно
+ * собирается. Ветка на каждый вид часов, и `never` в конце: нетерминальный
+ * статус, для которого состояния собрать нечем, не даст этому файлу собраться.
+ */
+function representativeState(status: NonTerminalTrancheStatus): TrancheState {
+  if (status === 'frozen') {
+    // У замороженного дедлайна нет по типу — есть остаток (CORE.md Ф17).
+    return frozenStateAt('collected', DAY);
+  }
+  return stateAt(status);
+}
 
 /** STATE-MACHINES.md §4: каждое невозможное состояние отвергается. */
 describe('невозможные состояния', () => {
@@ -38,7 +56,12 @@ describe('невозможные состояния', () => {
 
   it('reserved без поступивших денег: вход только из collected', () => {
     const incoming = TRANCHE_TRANSITIONS.filter((item) => item.to === 'reserved');
-    expect(incoming.map((item) => item.from)).toEqual(['collected']);
+    // `frozen` в списке входов — не ослабление правила, а его следствие: из
+    // заморозки транш возвращается в тот статус, из которого его заморозили, а
+    // заморозить `reserved` можно было только после `collected`. Денег без
+    // `collected` в `reserved` по-прежнему не появляется: заморозка их не
+    // приносит, она останавливает часы (CORE.md Ф17).
+    expect(incoming.map((item) => item.from).sort()).toEqual(['collected', 'frozen']);
     expect(reject(stateAt('collecting'), { type: 'reserve_requested' }, context()).code).toBe(
       RejectionCode.transitionNotAllowed,
     );
@@ -74,11 +97,11 @@ describe('невозможные состояния', () => {
 
   it('выплата на реквизиты, изменённые вчера', () => {
     const yesterday = instant(NOW - 24 * 60 * 60 * 1000);
-    expect(24 * 60 * 60 * 1000).toBeLessThan(BENEFICIARY_COOLDOWN_MS);
+    expect(24 * 60 * 60 * 1000).toBeLessThan(BENEFICIARY_PRE_RELEASE_BLACKOUT_MS);
     const error = reject(
       stateAt('release_pending'),
       { type: 'release_authorized' },
-      context({ beneficiary: { locked: true, lastChangedAt: yesterday } }),
+      context({ beneficiary: { status: 'verified', locked: true, lastChangedAt: yesterday } }),
     );
     expect(error.failedGuards).toContain('g_beneficiary_locked');
   });
@@ -98,18 +121,57 @@ describe('невозможные состояния', () => {
     expect(result.state.status).toBe('release_blocked');
   });
 
-  it('транш без дедлайна в нетерминальном состоянии не собирается', () => {
+  it('нетерминальный транш всегда несёт часы: дедлайн либо остаток приостановки', () => {
     // @ts-expect-error нетерминальное состояние обязано нести дедлайн
     const broken: TrancheState = { status: 'collecting' };
     expect(broken.status).toBe('collecting');
 
-    // ...и ни один принятый переход не порождает состояние без дедлайна.
-    for (const edge of TRANCHE_TRANSITIONS) {
-      if (isTerminalTrancheStatus(edge.to)) continue;
-      expect(['pending', 'collecting', 'collected', 'reserved', 'release_pending', 'release_blocked', 'paying_out', 'refund_pending', 'refunding']).toContain(edge.to);
+    // Формулировка инварианта 7 здесь изменена, а не подогнана. Раньше она
+    // звучала «нетерминальное состояние обязано нести дедлайн» и перечисляла
+    // статусы литералом. После E9-10 у `frozen` дедлайна нет по типу: он
+    // **приостановлен**, а не отменён, и неистёкшая часть лежит в `remaining`
+    // (CORE.md Ф17). Правильное утверждение: нетерминальное состояние несёт
+    // **дедлайн либо остаток приостановленного**, и пустого не бывает ни у
+    // одного.
+    //
+    // Промежуточная редакция свела перебор к `expect(TRANCHE_STATUSES)
+    // .toContain(edge.to)` — тавтологии: `edge.to` имеет тип `TrancheStatus` и
+    // упасть не может ни при какой правке. Ценность прежнего литерального
+    // списка была ровно в том, что новый нетерминальный статус без часов его
+    // ронял, — что и произошло с `frozen`. Перебор восстановлен по
+    // **рантайм-списку** статусов.
+    const nonTerminal = TRANCHE_STATUSES.filter(
+      (status): status is NonTerminalTrancheStatus => !isTerminalTrancheStatus(status),
+    );
+    expect(nonTerminal).toHaveLength(
+      TRANCHE_STATUSES.length - TERMINAL_TRANCHE_STATUSES.length,
+    );
+
+    // Видов часов ровно два, и разбиение исчерпывающее: остывшие несут дедлайн
+    // по типу, замороженный — остаток. Третьего вида нет, поэтому новый
+    // нетерминальный статус обязан попасть в один из двух — иначе это
+    // равенство падает. Это и есть то, что делал литеральный список, но по
+    // рантайм-спискам, а не по копии от руки.
+    expect([...THAWED_TRANCHE_STATUSES, 'frozen'].sort()).toEqual([...nonTerminal].sort());
+
+    for (const status of nonTerminal) {
+      const state = representativeState(status);
+      expect(state.status).toBe(status);
+      expect('deadline' in state || 'remaining' in state).toBe(true);
     }
-    const state = accept(stateAt('collecting'), fundsReceived, context()).state;
-    expect('deadline' in state).toBe(true);
+
+    // Те же часы — на состояниях, которые вернул сам редьюсер, а не собрал
+    // помощник: приём денег оставляет идущий дедлайн, заморозка — остаток.
+    const collected = accept(stateAt('collecting'), fundsReceived, context()).state;
+    expect('deadline' in collected).toBe(true);
+
+    const frozen = accept(
+      stateAt('collecting'),
+      { type: 'compliance_hold', reason: 'sanctions', frozenBy: 'compliance-1' },
+      context(),
+    ).state;
+    expect('deadline' in frozen).toBe(false);
+    expect('remaining' in frozen).toBe(true);
   });
 
   it('утверждение той же учётной записью, что готовила операцию', () => {

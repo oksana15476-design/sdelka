@@ -2,6 +2,7 @@ import {
   type Journal,
   appendEntries,
   balanceByCurrency,
+  checkLedgerInvariants,
   coverage,
   coverageByTranche,
   emptyJournal,
@@ -102,7 +103,7 @@ function randomEvent(random: () => number, required: Money<'GEL'>): TrancheEvent
         reference: 'ref',
       };
     case 'revocation_requested':
-      return { type: 'revocation_requested', actor: 'buyer' };
+      return { type: 'revocation_requested', actor: 'buyer', reason: 'changed_mind' };
     case 'condition_established':
       return {
         type: 'condition_established',
@@ -183,6 +184,12 @@ function assertLedgerInvariants(journal: Journal): void {
   expect(isEveryTrancheCovered(journal)).toBe(true);
   // Остаток клиентского счёта никогда не отрицателен.
   expect(negativeClientBalances(journal)).toEqual([]);
+  // ...и полный набор инвариантов учёта — тот же, по которому останавливается
+  // приём новых сделок. Три проверки выше он покрывает целиком, но добавляет
+  // недостачу по файлу клиента и **профицит** по любому файлу: деньги
+  // платформы, оставшиеся на номинальном счёте (красная линия №2), и
+  // опустошённый файл выглядят одинаково, и ни одна из трёх их не видит.
+  expect(checkLedgerInvariants(journal)).toEqual([]);
 }
 
 describe('свойства на случайных последовательностях событий', () => {
@@ -211,7 +218,11 @@ describe('свойства на случайных последовательн�
           evidenceBundleId: random() < 0.9 ? 'evidence-1' : null,
           statementFields: MATCHING_STATEMENT,
           registryOwnerIsBuyer: true,
-          beneficiary: { locked: true, lastChangedAt: null },
+          // `verified`, а не `name_consistent`: с последним ни один прогон не
+          // дошёл бы до выплаты, и пороги ниже проверяли бы пустое свойство.
+          // Проверка «имя сошлось не пускает» живёт отдельным тестом, а не
+          // порчей случайного блуждания.
+          beneficiary: { status: 'verified', locked: true, lastChangedAt: null },
           preparedBy: 'operator-1',
           approvals: [{ userId: 'operator-2' }, { userId: 'operator-3' }],
           approvalPolicy: DEFAULT_APPROVAL_POLICY,
@@ -226,6 +237,7 @@ describe('свойства на случайных последовательн�
           now: NOW,
           dealId,
           trancheId,
+          payerClientKey: `client-${run}`,
           facts,
           deadlinePolicy: DEFAULT_DEADLINE_POLICY,
         };
@@ -235,7 +247,12 @@ describe('свойства на случайных последовательн�
         if (!result.ok) {
           continue;
         }
-        runJournal = projectIntents(runJournal, result.value.intents, { feeRate: FEE_RATE });
+        runJournal = projectIntents(runJournal, result.value.intents, {
+          feeRate: FEE_RATE,
+          // Получатель расчёта — не плательщик: `trancheSettlement` отвергает
+          // одну личность на обеих сторонах сделки (FUNCTIONAL.md §2.1).
+          recipientClientKey: `seller-${run}`,
+        });
         if (result.value.state.status === 'collected' && event.type === 'funds_received') {
           collected = event.amount as Money<'GEL'>;
         }

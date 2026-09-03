@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   type PayerFacts,
+  type PayerOrigin,
   type PayerRelationship,
   assessPayer,
   compareNames,
@@ -21,18 +22,26 @@ import {
   OTHER_NAMES,
   POLICY,
   POLICY_VERSION,
+  SAME_PERSON_DOCUMENT,
 } from '../support/fixtures';
 
 const strong = { strongThresholdBp: POLICY.nameThresholds.ownerReconciliation.valueBp };
 const sameName = compareNames(BUYER_NAMES, BUYER_NAMES, strong);
 const otherName = compareNames(BUYER_NAMES, OTHER_NAMES, strong);
 
+/** Внешний перевод — источник по умолчанию: только у него есть имя отправителя. */
+function external(
+  payerDocument: PayerFacts['buyerDocument'] | null = BUYER_DOCUMENT,
+  senderNameMatch = sameName,
+): PayerOrigin {
+  return { kind: 'external_transfer', payerDocument, senderNameMatch };
+}
+
 function facts(overrides: Partial<PayerFacts> = {}): PayerFacts {
   return {
     buyerDocument: BUYER_DOCUMENT,
-    payerDocument: BUYER_DOCUMENT,
+    origin: external(),
     relationship: { kind: 'self' },
-    senderNameMatch: sameName,
     evidence: [evidence(1)],
     ...overrides,
   };
@@ -72,38 +81,81 @@ describe('плательщик — сам покупатель', () => {
 
   it('та же личность при расходящемся имени уходит в разбор, а не проходит молча', () => {
     const noName = compareNames([latinName('Aaa', 'Bbb')], [latinName('Xxx', 'Yyy')], strong);
-    const result = assess({ senderNameMatch: { ...noName, degree: 'none' } });
+    const result = assess({ origin: external(BUYER_DOCUMENT, { ...noName, degree: 'none' }) });
     expect(result.outcome).toBe('review');
   });
 
   it('заявлено «сам», но документ другой — удержание', () => {
-    const result = assess({ payerDocument: OTHER_DOCUMENT, relationship: { kind: 'self' } });
+    const result = assess({ origin: external(OTHER_DOCUMENT), relationship: { kind: 'self' } });
     expect(result.outcome).toBe('hold');
     expect(result.reasons).toContain('compliance.identity.keys_differ');
   });
 });
 
+describe('движение внутри сервиса со своего же остатка', () => {
+  // `ROADMAP.md` И12.4 критерий 4, `FUNCTIONAL.md` §2.1: сторона, продавшая одну
+  // квартиру и покупающая другую, направляет свои деньги на свою сделку.
+  const internal = (accountHolder = SAME_PERSON_DOCUMENT): PayerOrigin => ({
+    kind: 'internal_balance',
+    accountHolder,
+  });
+
+  it('срабатывает: свой остаток на свою сделку — пропуск без задачи в очередь', () => {
+    const result = assess({ origin: internal() });
+    expect(result.outcome).toBe('clear');
+    expect(result.reasons).toContain('compliance.payer.self');
+    expect(result.reasons).toContain('compliance.payer.internal_own_balance');
+    expect(result.exceptionApplied).toBeNull();
+  });
+
+  it('исход не зависит от имени: у внутреннего движения имени нет вовсе', () => {
+    // Тип не даёт передать `senderNameMatch` во внутреннюю ветку — проверяем,
+    // что и причина «имена расходятся» в решении не появляется.
+    const result = assess({ origin: internal() });
+    expect(result.reasons).not.toContain('compliance.name.evidence_insufficient_alone');
+    expect(result.reasons).not.toContain('compliance.payer.name_match_is_not_identity');
+  });
+
+  it('не срабатывает: остаток другого лица — то же третье лицо, удержание', () => {
+    const result = assess({
+      origin: internal(OTHER_DOCUMENT),
+      relationship: { kind: 'unrelated_third_party' },
+    });
+    expect(result.outcome).toBe('hold');
+    expect(result.reasons).toContain('compliance.payer.third_party_hold');
+    expect(result.reasons).toContain('compliance.identity.keys_differ');
+    expect(result.reasons).not.toContain('compliance.payer.internal_own_balance');
+  });
+
+  it('не срабатывает: остаток другого лица не смягчается перечнем исключений', () => {
+    const result = assess({
+      origin: internal(OTHER_DOCUMENT),
+      relationship: { kind: 'intermediary' },
+    });
+    expect(result.outcome).toBe('block');
+    expect(result.reasons).toContain('compliance.payer.intermediary_blocked');
+  });
+});
+
 describe('третье лицо: удержание при любой сумме', () => {
   it('неопознанный отправитель — удержание', () => {
-    const result = assess({ payerDocument: null, relationship: { kind: 'unknown' } });
+    const result = assess({ origin: external(null), relationship: { kind: 'unknown' } });
     expect(result.outcome).toBe('hold');
     expect(result.reasons).toContain('compliance.payer.third_party_hold');
   });
 
   it('постороннее третье лицо — удержание', () => {
     const result = assess({
-      payerDocument: OTHER_DOCUMENT,
+      origin: external(OTHER_DOCUMENT, otherName),
       relationship: { kind: 'unrelated_third_party' },
-      senderNameMatch: otherName,
     });
     expect(result.outcome).toBe('hold');
   });
 
   it('совпадение имени при другом документе правило не смягчает', () => {
     const result = assess({
-      payerDocument: OTHER_DOCUMENT,
+      origin: external(OTHER_DOCUMENT, sameName),
       relationship: { kind: 'unrelated_third_party' },
-      senderNameMatch: sameName,
     });
     expect(result.outcome).toBe('hold');
     expect(result.reasons).toContain('compliance.payer.name_match_is_not_identity');
@@ -115,7 +167,7 @@ describe('исключение: супруг', () => {
     ({ kind: 'spouse', proof: verifiedKinship, payerKyc: 'complete', ...over }) as PayerRelationship;
 
   it('срабатывает: документы о родстве и полный KYC', () => {
-    const result = assess({ payerDocument: OTHER_DOCUMENT, relationship: relationship() });
+    const result = assess({ origin: external(OTHER_DOCUMENT), relationship: relationship() });
     expect(result.outcome).toBe('review');
     expect(result.exceptionApplied).toBe('spouse');
     expect(result.reasons).toContain('compliance.payer.exception_applied');
@@ -123,7 +175,7 @@ describe('исключение: супруг', () => {
 
   it('не срабатывает: документы не проверены', () => {
     const result = assess({
-      payerDocument: OTHER_DOCUMENT,
+      origin: external(OTHER_DOCUMENT),
       relationship: relationship({ proof: unverifiedKinship }),
     });
     expect(result.outcome).toBe('hold');
@@ -133,7 +185,7 @@ describe('исключение: супруг', () => {
 
   it('не срабатывает: KYC на плательщика не полный', () => {
     const result = assess({
-      payerDocument: OTHER_DOCUMENT,
+      origin: external(OTHER_DOCUMENT),
       relationship: relationship({ payerKyc: 'basic' }),
     });
     expect(result.outcome).toBe('hold');
@@ -144,7 +196,7 @@ describe('исключение: супруг', () => {
 describe('исключение: родитель', () => {
   it('срабатывает', () => {
     const result = assess({
-      payerDocument: OTHER_DOCUMENT,
+      origin: external(OTHER_DOCUMENT),
       relationship: { kind: 'parent', proof: verifiedKinship, payerKyc: 'complete' },
     });
     expect(result.outcome).toBe('review');
@@ -153,7 +205,7 @@ describe('исключение: родитель', () => {
 
   it('не срабатывает без полного KYC', () => {
     const result = assess({
-      payerDocument: OTHER_DOCUMENT,
+      origin: external(OTHER_DOCUMENT),
       relationship: { kind: 'parent', proof: verifiedKinship, payerKyc: 'none' },
     });
     expect(result.outcome).toBe('hold');
@@ -163,7 +215,7 @@ describe('исключение: родитель', () => {
 describe('исключение: ребёнок', () => {
   it('срабатывает', () => {
     const result = assess({
-      payerDocument: OTHER_DOCUMENT,
+      origin: external(OTHER_DOCUMENT),
       relationship: { kind: 'child', proof: verifiedKinship, payerKyc: 'complete' },
     });
     expect(result.outcome).toBe('review');
@@ -172,7 +224,7 @@ describe('исключение: ребёнок', () => {
 
   it('не срабатывает без документов о родстве', () => {
     const result = assess({
-      payerDocument: OTHER_DOCUMENT,
+      origin: external(OTHER_DOCUMENT),
       relationship: { kind: 'child', proof: unverifiedKinship, payerKyc: 'complete' },
     });
     expect(result.outcome).toBe('hold');
@@ -189,7 +241,7 @@ describe('исключение: юрлицо, где покупатель вла
 
   it('срабатывает ровно на пороге 50%', () => {
     const result = assess({
-      payerDocument: document(5),
+      origin: external(document(5)),
       relationship: ownership(CONTROLLING_OWNERSHIP_BP),
     });
     expect(result.outcome).toBe('review');
@@ -198,7 +250,7 @@ describe('исключение: юрлицо, где покупатель вла
 
   it('не срабатывает при 49,99%', () => {
     const result = assess({
-      payerDocument: document(5),
+      origin: external(document(5)),
       relationship: ownership(CONTROLLING_OWNERSHIP_BP - 1),
     });
     expect(result.outcome).toBe('hold');
@@ -207,7 +259,7 @@ describe('исключение: юрлицо, где покупатель вла
 
   it('не срабатывает при непроверенном документе о владении', () => {
     const result = assess({
-      payerDocument: document(5),
+      origin: external(document(5)),
       relationship: ownership(10_000, false),
     });
     expect(result.outcome).toBe('hold');
@@ -216,14 +268,14 @@ describe('исключение: юрлицо, где покупатель вла
 
 describe('блок без исключений', () => {
   it('посредник', () => {
-    const result = assess({ payerDocument: document(6), relationship: { kind: 'intermediary' } });
+    const result = assess({ origin: external(document(6)), relationship: { kind: 'intermediary' } });
     expect(result.outcome).toBe('block');
     expect(result.reasons).toContain('compliance.payer.intermediary_blocked');
   });
 
   it('обменник', () => {
     const result = assess({
-      payerDocument: document(7),
+      origin: external(document(7)),
       relationship: { kind: 'currency_exchange' },
     });
     expect(result.outcome).toBe('block');
@@ -231,7 +283,7 @@ describe('блок без исключений', () => {
   });
 
   it('юрфирма', () => {
-    const result = assess({ payerDocument: document(8), relationship: { kind: 'law_firm' } });
+    const result = assess({ origin: external(document(8)), relationship: { kind: 'law_firm' } });
     expect(result.outcome).toBe('block');
     expect(result.reasons).toContain('compliance.payer.law_firm_blocked');
   });
@@ -239,7 +291,7 @@ describe('блок без исключений', () => {
   it('блок не смягчается никакими документами и полным KYC', () => {
     // У блокирующих видов отношений нет полей доказательств вовсе — передать их
     // некуда, и это ровно то, чего мы хотели: ослабление невозможно данными.
-    const result = assess({ payerDocument: document(6), relationship: { kind: 'intermediary' } });
+    const result = assess({ origin: external(document(6)), relationship: { kind: 'intermediary' } });
     expect(result.exceptionApplied).toBeNull();
   });
 });
@@ -247,7 +299,7 @@ describe('блок без исключений', () => {
 describe('решение хранит версию политики', () => {
   it('версия политики есть в каждом исходе', () => {
     expect(assess().policyVersionId).toBe(POLICY_VERSION);
-    expect(assess({ relationship: { kind: 'intermediary' }, payerDocument: document(9) }).policyVersionId).toBe(
+    expect(assess({ relationship: { kind: 'intermediary' }, origin: external(document(9)) }).policyVersionId).toBe(
       POLICY_VERSION,
     );
   });

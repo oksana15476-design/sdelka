@@ -21,5 +21,6 @@ export function uncheckedEntry(input: JournalEntryInput): JournalEntry {
     postings: Object.freeze([...input.postings]),
     memoKey: input.memoKey,
     correctsEntryId: input.correctsEntryId ?? null,
+    settles: input.settles ?? null,
   });
 }

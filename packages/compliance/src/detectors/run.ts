@@ -7,6 +7,7 @@ import {
 } from '../decision';
 import type { ReasonKey } from '../keys';
 import type { CompliancePolicy } from '../policy';
+import { type CounterpartyFacts, assessCounterparty } from './counterparty';
 import { type FlippingFacts, assessFlipping } from './flipping';
 import { type LinkageFacts, assessLinkage } from './linkage';
 import { type PayerFacts, assessPayer } from './payer';
@@ -25,6 +26,7 @@ export const DETECTOR_IDS = [
   'structuring',
   'linkage',
   'flipping',
+  'counterparty',
 ] as const;
 export type DetectorId = (typeof DETECTOR_IDS)[number];
 
@@ -40,6 +42,7 @@ export type DetectorFacts = {
   readonly structuring: StructuringFacts | null;
   readonly linkage: LinkageFacts | null;
   readonly flipping: FlippingFacts | null;
+  readonly counterparty: CounterpartyFacts | null;
 };
 
 export interface DetectorResult {
@@ -86,6 +89,13 @@ export function runDetectors(
     results.push({
       id: 'flipping',
       decision: assessFlipping(facts.flipping, version, policy.flipping, now),
+    });
+  }
+
+  if (facts.counterparty !== null) {
+    results.push({
+      id: 'counterparty',
+      decision: assessCounterparty(facts.counterparty, version, now),
     });
   }
 

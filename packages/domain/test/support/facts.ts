@@ -15,6 +15,14 @@ export const NOW: Instant = instant(Date.UTC(2026, 8, 3, 10, 0, 0));
 export const DEAL_ID = 'deal-1';
 export const TRANCHE_ID = 'tranche-1';
 
+/**
+ * Владелец обязательства по траншу. После E12-1 счёт клиента в плане счетов
+ * адресуется ключом личности, и намерение проводки его несёт. Форма ключа —
+ * алфавит `@sdelka/ledger` (`[A-Za-z0-9._-]`): двоеточие там разделитель кода
+ * счёта.
+ */
+export const PAYER_CLIENT_KEY = 'ge.passport.buyer-1';
+
 export const AMOUNT: Money<CurrencyCode> = money('GEL', 1_000_000n);
 
 export const BUYER_PARTY_ID = 'party-buyer-1';
@@ -53,7 +61,11 @@ export function facts(overrides: Partial<TrancheFacts> = {}): TrancheFacts {
     evidenceBundleId: 'evidence-1',
     statementFields: MATCHING_STATEMENT,
     registryOwnerIsBuyer: true,
-    beneficiary: { locked: true, lastChangedAt: null },
+    // Базовая фикстура описывает счастливый путь: владение счётом доказано.
+    // `name_consistent` здесь поставить нельзя — это увело бы каждый тест в
+    // отказ по `g_beneficiary_verified`; отдельные проверки статуса живут в
+    // `beneficiary-status.test.ts`.
+    beneficiary: { status: 'verified', locked: true, lastChangedAt: null },
     preparedBy: 'operator-1',
     // Нулевой ступени в лестнице нет: любая выплата требует человека, поэтому
     // базовая фикстура несёт одно утверждение. Утверждающий отличается от
@@ -80,6 +92,7 @@ export function context(
     now,
     dealId: DEAL_ID,
     trancheId: TRANCHE_ID,
+    payerClientKey: PAYER_CLIENT_KEY,
     facts: facts(overrides),
     deadlinePolicy,
   };

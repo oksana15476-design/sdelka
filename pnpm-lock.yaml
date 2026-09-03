@@ -18,6 +18,8 @@ importers:
         specifier: 2.1.9
         version: 2.1.9(@types/node@22.10.2)
 
+  packages/audit: {}
+
   packages/compliance:
     dependencies:
       '@sdelka/domain':
@@ -36,6 +38,24 @@ importers:
       '@sdelka/ledger':
         specifier: workspace:*
         version: link:../ledger
+
+  packages/e2e:
+    dependencies:
+      '@sdelka/audit':
+        specifier: workspace:*
+        version: link:../audit
+      '@sdelka/compliance':
+        specifier: workspace:*
+        version: link:../compliance
+      '@sdelka/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@sdelka/ledger':
+        specifier: workspace:*
+        version: link:../ledger
+      '@sdelka/money':
+        specifier: workspace:*
+        version: link:../money
 
   packages/ledger:
     dependencies:

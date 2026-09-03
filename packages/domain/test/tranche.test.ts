@@ -140,7 +140,7 @@ describe('транш: приём средств', () => {
 describe('транш: отзыв покупателем', () => {
   it('accepts revocation from collecting, collected and reserved', () => {
     const ctx = context();
-    const event: TrancheEvent = { type: 'revocation_requested', actor: 'buyer' };
+    const event: TrancheEvent = { type: 'revocation_requested', actor: 'buyer', reason: 'changed_mind' };
     for (const status of ['collecting', 'collected', 'reserved'] as const) {
       expect(accept(stateAt(status), event, ctx).state.status).toBe('refund_pending');
     }
@@ -148,9 +148,44 @@ describe('транш: отзыв покупателем', () => {
 
   it('refuses revocation after the condition is established', () => {
     const ctx = context();
-    const event: TrancheEvent = { type: 'revocation_requested', actor: 'buyer' };
+    const event: TrancheEvent = { type: 'revocation_requested', actor: 'buyer', reason: 'changed_mind' };
     for (const status of ['release_pending', 'release_blocked', 'paying_out'] as const) {
       expect(reject(stateAt(status), event, ctx).code).toBe(RejectionCode.transitionNotAllowed);
+    }
+  });
+
+  it('tells the other side from the cabinet, not by the money failing to arrive', () => {
+    // ROADMAP.md И12.3: «карточка подтверждения средств у второй стороны
+    // немедленно меняет состояние — она узнаёт об этом из кабинета, а не по
+    // факту неполучения денег». Ветки `refund_pending` в намерениях входа не
+    // было вовсе, то есть отзыв не порождал ни одного уведомления, хотя §6
+    // задаёт представление этого состояния для обеих сторон.
+    const result = accept(
+      stateAt('reserved'),
+      { type: 'revocation_requested', actor: 'buyer', reason: 'changed_mind' },
+      context(),
+    );
+    expect(result.state.status).toBe('refund_pending');
+    expect(result.intents).toContainEqual({
+      type: 'notify',
+      audience: 'both',
+      // Ключ локализации: формулировка идёт через копирайтера и главреда.
+      messageKey: 'tranche.refund_pending.both',
+    });
+  });
+
+  it('notifies both sides on every path into refund_pending, not only on revocation', () => {
+    const ctx = context();
+    const paths: readonly [Parameters<typeof stateAt>[0], TrancheEvent][] = [
+      ['collecting', { type: 'deadline_reached' }],
+      ['collected', { type: 'refund_requested', reason: 'r' }],
+      ['reserved', { type: 'condition_failed' }],
+      ['release_blocked', { type: 'refund_requested', reason: 'r' }],
+    ];
+    for (const [status, event] of paths) {
+      const result = accept(stateAt(status), event, ctx);
+      expect(result.state.status).toBe('refund_pending');
+      expect(result.intents.map((intent) => intent.type)).toContain('notify');
     }
   });
 });
@@ -179,8 +214,21 @@ describe('транш: возврат и списание', () => {
   });
 
   it('keeps an unknown payout result in place instead of retrying', () => {
-    const result = accept(stateAt('paying_out'), { type: 'payout_result', outcome: 'unknown' }, context());
+    const first = accept(stateAt('release_pending'), { type: 'release_authorized' }, context());
+    expect(first.state.status).toBe('paying_out');
+    // Первый вход в `paying_out` — поручение выпускается.
+    expect(first.intents.map((intent) => intent.type)).toContain('enqueue_outbound_payout');
+
+    const result = accept(first.state, { type: 'payout_result', outcome: 'unknown' }, context());
     expect(result.state.status).toBe('paying_out');
+    // ...а неответ банка его НЕ выпускает заново (красная линия №8, §2.2).
+    // Самопереход — внутренний переход: состояние то же, значит, ни выхода из
+    // него, ни входа в него не было. Раньше намерения входа возвращались
+    // безусловно, и каждый неответ велел отправить поручение второй раз; от
+    // второй выплаты спасал только детерминированный ключ идемпотентности на
+    // стороне адаптера, то есть чужая дисциплина.
+    expect(result.intents.map((intent) => intent.type)).toEqual(['set_deadline']);
+    expect(result.intents.map((intent) => intent.type)).not.toContain('enqueue_outbound_payout');
   });
 
   it('resolves paying_out through reconciliation', () => {

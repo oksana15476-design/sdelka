@@ -6,6 +6,7 @@ import {
   compare,
   convertAtRate,
 } from '@sdelka/money';
+import type { BeneficiaryLock } from './beneficiary';
 import { type ConditionAct, isConditionActValid } from './condition-act';
 import { type Instant, HOUR } from './instant';
 import type { TrancheEvent } from './tranche-events';
@@ -25,6 +26,14 @@ export const GUARD_IDS = [
   'g_owner_is_buyer',
   'g_approvals_sufficient',
   'g_beneficiary_locked',
+  /**
+   * введено кодом (E13-2, ROADMAP.md И13.1): доказательство владения счётом
+   * приложено. Отдельный guard, а не расширение `g_beneficiary_locked`: §1.3
+   * определяет тот как «заблокированы и не менялись 72 часа», а владение счётом
+   * — другое утверждение. Guard, склеивающий два правила, невозможно проверить
+   * поимённо, как требует §7.
+   */
+  'g_beneficiary_verified',
   'g_no_active_payout',
   'g_coverage_ok',
   'g_source_account_known',
@@ -40,6 +49,11 @@ export const GUARD_IDS = [
   'g_write_off_approvers_distinct',
   /** введено кодом (E11-4): новую редакцию условия приняли обе стороны */
   'g_amendment_accepted_by_both',
+  /**
+   * введено кодом (E9-9, CORE.md Ф17): разморозку утвердили два разных
+   * пользователя. Форма та же, что у `g_write_off_approvers_distinct`.
+   */
+  'g_unfreeze_approvers_distinct',
 ] as const;
 
 export type GuardId = (typeof GUARD_IDS)[number];
@@ -52,11 +66,6 @@ export interface StatementFields {
   readonly share: boolean;
   readonly basis: boolean;
   readonly noUnexpectedEncumbrances: boolean;
-}
-
-export interface BeneficiaryLock {
-  readonly locked: boolean;
-  readonly lastChangedAt: Instant | null;
 }
 
 export interface ApprovalTier {
@@ -114,8 +123,20 @@ export interface OfficialRateAtCreation {
   readonly rate: Rational;
 }
 
-/** Период охлаждения реквизитов: 72 часа (FUNCTIONAL.md инвариант 18). */
-export const BENEFICIARY_COOLDOWN_MS = 72 * HOUR;
+/**
+ * Запретное окно перед расчётом: 72 часа (FUNCTIONAL.md инвариант 18,
+ * `CORE.md` Ф15 — «изменение реквизитов в последние 72 часа перед расчётом
+ * отвергается автоматом»). Guard `g_beneficiary_locked` — та же норма с другой
+ * стороны: выплата на реквизиты, изменённые внутри окна, не выпускается.
+ *
+ * ⚠ Это **не** период охлаждения. Охлаждение — инвариант 17 и `CORE.md` Ф15,
+ * 24–48 часов, и оно живёт отдельно: `packages/compliance/src/policy.ts`,
+ * `beneficiary.cooldown`, применяется в `applyBeneficiaryChange`. Второй копии
+ * охлаждения в домене нет намеренно: раньше эта константа называлась
+ * `BENEFICIARY_COOLDOWN_MS` и её комментарий ссылался на инвариант 18 — то есть
+ * имя и ссылка описывали два разных правила.
+ */
+export const BENEFICIARY_PRE_RELEASE_BLACKOUT_MS = 72 * HOUR;
 
 export interface Approval {
   readonly userId: string;
@@ -296,8 +317,19 @@ export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> =
     if (!facts.beneficiary.locked) return false;
     const changedAt = facts.beneficiary.lastChangedAt;
     if (changedAt === null) return true;
-    return now - changedAt >= BENEFICIARY_COOLDOWN_MS;
+    return now - changedAt >= BENEFICIARY_PRE_RELEASE_BLACKOUT_MS;
   },
+  /**
+   * Доказательство владения счётом (ROADMAP.md И13.1: «доказательства владения
+   * нет → переход в `paying_out` отвергается»).
+   *
+   * Сравнение именно с `verified`. `name_consistent` не проходит: совпадение
+   * имени не является достаточным основанием ни для чего — латинизация
+   * грузинского необратима, и разные люди сходятся в одной латинской форме.
+   * `applyBeneficiaryChange` возвращает реквизиты именно в `name_consistent`,
+   * то есть после смены реквизитов выплата заперта до повторной верификации.
+   */
+  g_beneficiary_verified: ({ facts }) => facts.beneficiary.status === 'verified',
   g_no_active_payout: ({ facts }) => facts.activePayouts === 0,
   g_coverage_ok: ({ facts }) => facts.coverageOk,
   g_source_account_known: ({ facts }) => facts.sourceAccountKnown,
@@ -315,6 +347,22 @@ export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> =
   g_mismatch_resolved: ({ facts }) => facts.mismatchResolved,
   g_write_off_approvers_distinct: ({ facts, event }) => {
     if (event.type !== 'write_off_approved') return false;
+    const approvers = new Set(event.userIds.filter((userId) => userId !== facts.preparedBy));
+    return approvers.size >= 2;
+  },
+  /**
+   * Разморозку утверждают два разных человека, и ни один из них не готовил
+   * операцию (CORE.md Ф17, форма как у списания).
+   *
+   * ⚠ Здесь проверяется только `facts.preparedBy` — учётная запись, готовившая
+   * операцию, которая приходит снаружи на каждый вызов. Автор **самой
+   * заморозки** лежит в состоянии (`frozenBy`), а `GuardInput` состояния не
+   * видит, и расширять его ради одного правила значит трогать все места вызова
+   * guard'ов. Поэтому сверка с `frozenBy` сделана в ветке `unfreeze` редьюсера —
+   * см. комментарий там. Полное закрытие — E7-4 (журнал с хеш-цепочкой).
+   */
+  g_unfreeze_approvers_distinct: ({ facts, event }) => {
+    if (event.type !== 'unfreeze') return false;
     const approvers = new Set(event.userIds.filter((userId) => userId !== facts.preparedBy));
     return approvers.size >= 2;
   },

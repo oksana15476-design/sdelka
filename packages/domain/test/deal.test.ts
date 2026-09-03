@@ -107,8 +107,16 @@ describe('сделка: заморозка', () => {
 
   it('freezes from any non-terminal state on hold or dispute', () => {
     for (const status of nonTerminal) {
-      expect(step(dealState(status), { type: 'compliance_hold', reason: 'r' }).status).toBe('frozen');
-      expect(step(dealState(status), { type: 'dispute_raised', reason: 'r' }).status).toBe('frozen');
+      expect(
+        step(dealState(status), {
+          type: 'compliance_hold',
+          reason: 'sanctions',
+          frozenBy: 'compliance-1',
+        }).status,
+      ).toBe('frozen');
+      expect(
+        step(dealState(status), { type: 'dispute_raised', frozenBy: 'party-1' }).status,
+      ).toBe('frozen');
     }
   });
 
@@ -136,9 +144,74 @@ describe('сделка: заморозка', () => {
     expect(preparerApproves.ok).toBe(false);
   });
 
+  it('cascades the freeze down to the tranches instead of stopping at the deal', () => {
+    // Без каскада комплаенс замораживает сделку, а её транши продолжают идти к
+    // автовозврату по дедлайну — то есть заморозка не делает ровно того, ради
+    // чего существует (CORE.md Ф17). Раньше `reduceDeal` не возвращал намерений
+    // вообще, и это было не «пока не нужно», а дыра.
+    const held = reduceDeal(
+      dealState('funding'),
+      { type: 'compliance_hold', reason: 'sanctions', frozenBy: 'compliance-1' },
+      context(),
+    );
+    expect(held.ok).toBe(true);
+    if (held.ok) {
+      expect(held.value.intents).toEqual([
+        { type: 'freeze_tranches', reason: 'sanctions', frozenBy: 'compliance-1' },
+      ]);
+    }
+
+    const disputed = reduceDeal(
+      dealState('funding'),
+      { type: 'dispute_raised', frozenBy: 'party-1' },
+      context(),
+    );
+    expect(disputed.ok).toBe(true);
+    if (disputed.ok) {
+      expect(disputed.value.intents).toEqual([
+        { type: 'freeze_tranches', reason: 'dispute', frozenBy: 'party-1' },
+      ]);
+    }
+  });
+
+  it('maps the deal-level resume onto the tranche-level one explicitly', () => {
+    // Целевые состояния у сделки и у транша разные, и отображение записано в
+    // коде, а не оставлено приложению: `settling` — «продолжаем как шли»,
+    // `unwinding` — «откатываем».
+    const ctx = context([], 'operator-1');
+    for (const [dealResume, trancheResume] of [
+      ['settling', 'suspended_from'],
+      ['unwinding', 'refund_pending'],
+    ] as const) {
+      const result = reduceDeal(
+        dealState('frozen'),
+        { type: 'unfreeze', userIds: ['a', 'b'], resume: dealResume },
+        ctx,
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.intents).toEqual([
+          { type: 'unfreeze_tranches', userIds: ['a', 'b'], resume: trancheResume },
+        ]);
+      }
+    }
+  });
+
+  it('emits no intents on the ordinary orchestration steps', () => {
+    const plain = reduceDeal(dealState('draft'), { type: 'parties_check_started' }, context());
+    expect(plain.ok).toBe(true);
+    if (plain.ok) {
+      expect(plain.value.intents).toEqual([]);
+    }
+  });
+
   it('refuses events in terminal states', () => {
     for (const status of ['settled', 'unwound', 'cancelled'] as const) {
-      const result = reduceDeal(dealState(status), { type: 'compliance_hold', reason: 'r' }, context());
+      const result = reduceDeal(
+        dealState(status),
+        { type: 'compliance_hold', reason: 'sanctions', frozenBy: 'compliance-1' },
+        context(),
+      );
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe(RejectionCode.terminalState);

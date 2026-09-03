@@ -1,24 +1,34 @@
 import { money } from '@sdelka/money';
 import { describe, expect, it } from 'vitest';
 import {
+  InvariantCode,
   LedgerError,
   LedgerErrorCode,
   appendEntry,
   bankNominal,
   bankOperating,
-  clientAccount,
+  checkLedgerInvariants,
+  clientAccountOwner,
+  clientFreeAccount,
+  clientKey,
+  clientLockedAccount,
   createJournalEntry,
   credit,
   debit,
   emptyJournal,
   fundsOwnership,
   isClientCustodyAccount,
+  isClientLockedAccount,
   isClientObligationAccount,
   isEveryTrancheCovered,
 } from '../src/index';
 
 const deal = { dealId: 'd1', trancheId: 't1' };
-const client = clientAccount(deal.dealId, deal.trancheId);
+// Владелец счёта — ключ личности (FUNCTIONAL.md §2.1): один клиент, один счёт
+// на все его сделки в любых ролях. Здесь он один и тот же во всех записях.
+const owner = clientKey('c1');
+const client = clientLockedAccount(owner, deal.dealId, deal.trancheId);
+const free = clientFreeAccount(owner);
 const feeIncome = { kind: 'fee_income' } as const;
 const suspense = { kind: 'suspense_unidentified' } as const;
 
@@ -154,7 +164,11 @@ describe('красная линия №1: средства одной сделк
     }
   });
 
-  it('allows the payout of the tranche own funds, fee included', () => {
+  it('allows the payout of the tranche own funds, fee included and swept at once', () => {
+    // Комиссия признаётся и уходит на операционный счёт в той же записи
+    // (красная линия №2). Прежняя редакция теста оставляла её на номинальном
+    // счёте: 49 750 уходило получателю, 250 лежало в файле транша до
+    // отдельного вывода — того самого, забыть который ничего не мешало.
     const entry = createJournalEntry({
       id: 'x4',
       occurredAt: '2026-09-03T10:00:00Z',
@@ -162,21 +176,34 @@ describe('красная линия №1: средства одной сделк
       memoKey: 'ledger.entry.payout',
       postings: [
         debit(client, money('GEL', 50_000n), deal),
-        credit(bankNominal('GEL'), money('GEL', 49_750n), deal),
+        credit(bankNominal('GEL'), money('GEL', 50_000n), deal),
         credit(feeIncome, money('GEL', 250n)),
+        debit(bankOperating('GEL'), money('GEL', 250n)),
       ],
     });
-    expect(entry.postings).toHaveLength(3);
+    expect(entry.postings).toHaveLength(4);
+    // Файл транша закрыт с обеих сторон: ни обязательства, ни остатка средств.
+    const journal = appendEntry(emptyJournal, entry);
+    expect(checkLedgerInvariants(journal).map((item) => item.code)).not.toContain(
+      InvariantCode.custodySurplus,
+    );
   });
 
   /**
    * Известная и осознанно оставленная дыра. Запись ниже переносит обеспечение
-   * с транша d1 на транш d2, не трогая ни одного обязательства: по форме она
-   * неотличима от законного вывода комиссии на операционный счёт, где кредит
-   * кастодиана тоже стоит без дебета обязательства. При построении записи её не
-   * поймать — ловит пофайловое обеспечение (`coverageByTranche`), но уже после
-   * факта. Закрывается вместе со сверкой в E7; до тех пор тест держит дыру
-   * видимой, чтобы её не сочли невозможной.
+   * с транша d1 на транш d2, не трогая ни одного обязательства.
+   *
+   * После E12-1 у этой формы появился законный близнец: привязка к сделке и
+   * отвязка от неё переносят отнесение кастодиана ровно так же — двумя
+   * встречными проводками по номинальному счёту, — только вместе с дебетом и
+   * кредитом обязательств в той же записи. Голое переотнесение отличается от
+   * законного отсутствием этих обязательств, но по одной проводке это не видно:
+   * та же форма встречается и в законном выводе комиссии на операционный счёт.
+   *
+   * При построении записи её по-прежнему не поймать — ловит пофайловое
+   * обеспечение (`coverageByTranche`), но уже после факта. Закрывается вместе
+   * со сверкой в E7; до тех пор тест держит дыру видимой, чтобы её не сочли
+   * невозможной.
    */
   it('does not catch a custody re-attribution between tranches — known gap, closed in E7', () => {
     const entry = createJournalEntry({
@@ -223,6 +250,16 @@ describe('счета помечены по принадлежности сред
     expect(isClientCustodyAccount(bankOperating('USD'))).toBe(false);
     expect(isClientObligationAccount(client)).toBe(true);
     expect(isClientObligationAccount(suspense)).toBe(true);
+    // Свободная часть счёта клиента — такое же обязательство и такие же чужие
+    // деньги: разделение на свободно/заперто ничего в принадлежности не меняет.
+    expect(fundsOwnership(free)).toBe('client');
+    expect(isClientObligationAccount(free)).toBe(true);
+    expect(isClientLockedAccount(free)).toBe(false);
+    expect(isClientLockedAccount(client)).toBe(true);
+    expect(clientAccountOwner(free)).toBe(owner);
+    expect(clientAccountOwner(client)).toBe(owner);
+    // У непознанного поступления владельца нет — это его определение, а не пробел.
+    expect(clientAccountOwner(suspense)).toBeNull();
   });
 });
 
@@ -274,6 +311,64 @@ describe('отнесение проводок к сделке', () => {
       expect.unreachable();
     } catch (error) {
       expect((error as LedgerError).code).toBe(LedgerErrorCode.postingAttributionMismatch);
+    }
+  });
+});
+
+describe('красная линия №1 на счёте клиента: запертое не переезжает между сделками', () => {
+  const otherOwner = clientKey('c2');
+
+  it('rejects a move from one locked account straight into another', () => {
+    // FUNCTIONAL.md §2.1, «Граница, которая здесь проходит»: средства,
+    // зарезервированные под сделку А, на сделку Б пойти не могут, даже если
+    // владелец тот же человек — сделка А может откатиться, и тогда они обязаны
+    // вернуться. Красная линия №1 говорит про обязательства, а не про людей.
+    try {
+      createJournalEntry({
+        id: 'lk1',
+        occurredAt: '2026-09-03T10:00:00Z',
+        kind: 'settlement',
+        memoKey: 'ledger.entry.locked_for_tranche',
+        postings: [
+          debit(clientLockedAccount(owner, 'A', 't1'), money('GEL', 100n), {
+            dealId: 'A',
+            trancheId: 't1',
+          }),
+          credit(clientLockedAccount(owner, 'B', 't1'), money('GEL', 100n), {
+            dealId: 'B',
+            trancheId: 't1',
+          }),
+        ],
+      });
+      expect.unreachable();
+    } catch (error) {
+      expect((error as LedgerError).code).toBe(LedgerErrorCode.entryLockedToLocked);
+    }
+  });
+
+  it('rejects free funds of one client becoming an obligation to another', () => {
+    // Одно лицо в двух ролях — законный случай (FUNCTIONAL.md §2.1), но это
+    // одно лицо. Дебет свободной части X и кредит обязательства перед Y — уже
+    // перевод между людьми: деньгами X финансировалась бы сделка Y.
+    try {
+      createJournalEntry({
+        id: 'lk2',
+        occurredAt: '2026-09-03T10:00:00Z',
+        kind: 'settlement',
+        memoKey: 'ledger.entry.locked_for_tranche',
+        postings: [
+          debit(free, money('GEL', 100n), { clientKey: owner }),
+          credit(clientLockedAccount(otherOwner, 'B', 't1'), money('GEL', 100n), {
+            dealId: 'B',
+            trancheId: 't1',
+          }),
+          credit(bankNominal('GEL'), money('GEL', 100n), { clientKey: owner }),
+          debit(bankNominal('GEL'), money('GEL', 100n), { dealId: 'B', trancheId: 't1' }),
+        ],
+      });
+      expect.unreachable();
+    } catch (error) {
+      expect((error as LedgerError).code).toBe(LedgerErrorCode.entryClientOwnerMismatch);
     }
   });
 });

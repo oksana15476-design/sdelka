@@ -1,4 +1,12 @@
-import { type BeneficiaryLock, type Instant, type Result, failure, ok } from '@sdelka/domain';
+import {
+  type BeneficiaryLock,
+  type BeneficiaryStatus,
+  type Instant,
+  type Result,
+  BENEFICIARY_STATUSES,
+  failure,
+  ok,
+} from '@sdelka/domain';
 import {
   type Decision,
   type EvidenceRef,
@@ -38,8 +46,15 @@ export interface BeneficiaryRequisites {
   readonly ownershipEvidence: EvidenceRef | null;
 }
 
-export const BENEFICIARY_STATUSES = ['draft', 'name_consistent', 'verified', 'blocked'] as const;
-export type BeneficiaryStatus = (typeof BENEFICIARY_STATUSES)[number];
+/**
+ * Перечень статусов переехал в `@sdelka/domain` (E13-2) и здесь только
+ * реэкспортируется. Решение о статусе по-прежнему принимает комплаенс, но на
+ * этом статусе стоит guard домена `g_beneficiary_verified`, а два перечня одних
+ * и тех же четырёх значений — тот самый класс расхождения, который однажды уже
+ * стоил `g_owner_matches` (STATE-MACHINES.md §1.3).
+ */
+export { BENEFICIARY_STATUSES };
+export type { BeneficiaryStatus };
 
 export interface BeneficiaryState {
   readonly requisites: BeneficiaryRequisites;
@@ -144,7 +159,15 @@ export function lockOnFunding(state: BeneficiaryState): BeneficiaryState {
  * там изменится, здесь перестанет собираться, а не разойдётся молча.
  */
 export function toBeneficiaryLock(state: BeneficiaryState): BeneficiaryLock {
-  return Object.freeze({ locked: state.locked, lastChangedAt: state.lastChangedAt });
+  // Статус доезжает до домена целиком. Раньше он здесь **выбрасывался**, и
+  // различение `name_consistent` / `verified`, ради которого написан
+  // `verifyBeneficiaryHolder`, до автомата не доходило: выплата на реквизиты,
+  // прошедшие только сверку имени, проходила (ROADMAP.md И13.1, E13-2).
+  return Object.freeze({
+    status: state.status,
+    locked: state.locked,
+    lastChangedAt: state.lastChangedAt,
+  });
 }
 
 /**

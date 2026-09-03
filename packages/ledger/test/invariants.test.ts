@@ -5,7 +5,8 @@ import {
   appendEntry,
   bankNominal,
   checkLedgerInvariants,
-  clientAccount,
+  clientKey,
+  clientLockedAccount,
   createJournalEntry,
   credit,
   debit,
@@ -16,6 +17,10 @@ import { uncheckedEntry } from './support/unchecked-entry';
 
 const dealA = { dealId: 'A', trancheId: 't1' };
 const dealB = { dealId: 'B', trancheId: 't1' };
+// Владелец счёта — ключ личности (FUNCTIONAL.md §2.1): один клиент, один счёт
+// на все его сделки в любых ролях. Здесь он один и тот же во всех записях.
+const owner = clientKey('c1');
+
 
 describe('инварианты учёта в коде', () => {
   it('reports nothing on a clean journal', () => {
@@ -28,7 +33,7 @@ describe('инварианты учёта в коде', () => {
         memoKey: 'ledger.entry.funds_received',
         postings: [
           debit(bankNominal('USD'), money('USD', 100n), dealA),
-          credit(clientAccount('A', 't1'), money('USD', 100n), dealA),
+          credit(clientLockedAccount(owner, 'A', 't1'), money('USD', 100n), dealA),
         ],
       }),
     );
@@ -45,7 +50,7 @@ describe('инварианты учёта в коде', () => {
         kind: 'settlement',
         memoKey: 'ledger.entry.payout',
         postings: [
-          debit(clientAccount('A', 't1'), money('USD', 50n), dealA),
+          debit(clientLockedAccount(owner, 'A', 't1'), money('USD', 50n), dealA),
           credit(bankNominal('USD'), money('USD', 50n), dealA),
         ],
       }),
@@ -70,7 +75,11 @@ describe('инварианты учёта в коде', () => {
           memoKey: 'ledger.entry.funds_received',
           postings: [
             debit(bankNominal('USD'), money('USD', 100n), deal),
-            credit(clientAccount(deal.dealId, deal.trancheId), money('USD', 100n), deal),
+            credit(
+              clientLockedAccount(owner, deal.dealId, deal.trancheId),
+              money('USD', 100n),
+              deal,
+            ),
           ],
         }),
       );
@@ -86,15 +95,25 @@ describe('инварианты учёта в коде', () => {
         kind: 'settlement',
         memoKey: 'ledger.entry.payout',
         postings: [
-          debit(clientAccount('B', 't1'), money('USD', 100n), dealB),
+          debit(clientLockedAccount(owner, 'B', 't1'), money('USD', 100n), dealB),
           credit(bankNominal('USD'), money('USD', 100n), dealA),
         ],
       }),
     );
     const violations = checkLedgerInvariants(journal);
-    expect(violations.map((violation) => violation.code)).toEqual([InvariantCode.trancheUncovered]);
+    // Расхождение двустороннее, и теперь видно обе стороны: у файла A средств
+    // не хватает, у файла B они остались без обязательства. Раньше вторая
+    // сторона молчала — профицит по файлу считался покрытием, и ровно этим
+    // зазором проходила двухзаписная схема (дебет обязательства одной записью,
+    // увод денег другой).
+    expect(violations.map((violation) => violation.code)).toEqual([
+      InvariantCode.trancheUncovered,
+      InvariantCode.custodySurplus,
+    ]);
     expect(violations[0]?.subject).toBe('A:t1');
     expect(violations[0]?.amountMinor).toBe(-100n);
+    expect(violations[1]?.subject).toBe('B:t1');
+    expect(violations[1]?.amountMinor).toBe(100n);
     expect(shouldStopAcceptingDeals(journal)).toBe(true);
   });
 });

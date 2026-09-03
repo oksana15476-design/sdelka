@@ -1,4 +1,5 @@
 import { type ConditionAct, isConditionActValid } from './condition-act';
+import type { ComplianceFreezeReason, FreezeReason, UnfreezeTarget } from './freeze';
 import type { Instant } from './instant';
 import type { Intent } from './intents';
 import { RELEASE_CONDITIONS } from './release-condition';
@@ -50,8 +51,18 @@ export type DealEvent =
   | { readonly type: 'revocation_requested' }
   | { readonly type: 'tranches_settled' }
   | { readonly type: 'tranches_refunded' }
-  | { readonly type: 'compliance_hold'; readonly reason: string }
-  | { readonly type: 'dispute_raised'; readonly reason: string }
+  /**
+   * Основание заморозки — закрытый перечень, а не строка (CORE.md Ф17). От
+   * основания зависит, какие исходы разморозки законны, и строковое основание
+   * означает, что этот выбор делается в момент инцидента. `dispute_raised`
+   * основания не несёт: оно у него одно по построению.
+   */
+  | {
+      readonly type: 'compliance_hold';
+      readonly reason: ComplianceFreezeReason;
+      readonly frozenBy: string;
+    }
+  | { readonly type: 'dispute_raised'; readonly frozenBy: string }
   | {
       readonly type: 'unfreeze';
       readonly userIds: readonly string[];
@@ -192,6 +203,49 @@ export interface DealTransitionResult {
   readonly intents: readonly Intent[];
 }
 
+/**
+ * Каскад сделка → транши (CORE.md Ф17, E9-9).
+ *
+ * Без него заморозка сделки не останавливает её транши: комплаенс замораживает
+ * сделку, а транш продолжает идти к автовозврату по дедлайну — то есть
+ * заморозка не делает ровно того, ради чего существует. Раньше `reduceDeal` не
+ * возвращал намерений вообще.
+ */
+function dealIntents(event: DealEvent): readonly Intent[] {
+  switch (event.type) {
+    case 'compliance_hold':
+      return Object.freeze([
+        { type: 'freeze_tranches' as const, reason: event.reason, frozenBy: event.frozenBy },
+      ]);
+    case 'dispute_raised':
+      return Object.freeze([
+        {
+          type: 'freeze_tranches' as const,
+          reason: 'dispute' as FreezeReason,
+          frozenBy: event.frozenBy,
+        },
+      ]);
+    case 'unfreeze': {
+      // Целевые состояния у сделки и у транша разные, и отображение между ними
+      // записано здесь, а не выведено в приложении: `settling` — «продолжаем как
+      // шли», то есть транш возвращается в свой приостановленный статус;
+      // `unwinding` — «откатываем», то есть транш идёт в возврат.
+      //
+      // Транш, замороженный в `paying_out` или `refunding`, это отображение не
+      // примет: у него законен только `release_blocked`, и редьюсер транша
+      // ответит `unfreezeTargetNotAllowed`. Так и задумано — исход поручения,
+      // ушедшего в банк, разбирает человек по каждому траншу отдельно.
+      const resume: UnfreezeTarget =
+        event.resume === 'settling' ? 'suspended_from' : 'refund_pending';
+      return Object.freeze([
+        { type: 'unfreeze_tranches' as const, userIds: event.userIds, resume },
+      ]);
+    }
+    default:
+      return Object.freeze([]);
+  }
+}
+
 export function reduceDeal(
   state: DealState,
   event: DealEvent,
@@ -236,7 +290,7 @@ export function reduceDeal(
       if (firstFailure.length === 0) firstFailure = failed;
       continue;
     }
-    return ok({ state: dealState(candidate.to), intents: Object.freeze([]) });
+    return ok({ state: dealState(candidate.to), intents: dealIntents(event) });
   }
   return failure(
     rejection(RejectionCode.guardFailed, firstFailure, {

@@ -27,6 +27,7 @@ const empty: DetectorFacts = {
   structuring: null,
   linkage: null,
   flipping: null,
+  counterparty: null,
 };
 
 describe('прогон детекторов', () => {
@@ -43,9 +44,12 @@ describe('прогон детекторов', () => {
         ...empty,
         payer: {
           buyerDocument: BUYER_DOCUMENT,
-          payerDocument: document(6),
+          origin: {
+            kind: 'external_transfer',
+            payerDocument: document(6),
+            senderNameMatch: compareNames(BUYER_NAMES, BUYER_NAMES, strong),
+          },
           relationship: { kind: 'intermediary' },
-          senderNameMatch: compareNames(BUYER_NAMES, BUYER_NAMES, strong),
           evidence: [],
         },
         price: {
@@ -89,6 +93,27 @@ describe('прогон детекторов', () => {
     expect(report.outcome).toBe('block');
   });
 
+  it('одна личность на обеих сторонах поднимает сводный исход до отказа', () => {
+    const report = runDetectors(
+      {
+        ...empty,
+        counterparty: {
+          participations: [
+            { partyId: 'p', role: 'payer', document: BUYER_DOCUMENT },
+            { partyId: 'r', role: 'recipient', document: BUYER_DOCUMENT },
+          ],
+          relation: { kind: 'unrelated' },
+          nameMatch: null,
+          evidence: [],
+        },
+      },
+      POLICY,
+      NOW,
+    );
+    expect(report.outcome).toBe('block');
+    expect(report.reasons).toContain('compliance.counterparty.same_identity');
+  });
+
   it('перечень детекторов совпадает с реализованными', () => {
     expect([...DETECTOR_IDS]).toEqual([
       'payer',
@@ -97,6 +122,7 @@ describe('прогон детекторов', () => {
       'structuring',
       'linkage',
       'flipping',
+      'counterparty',
     ]);
   });
 });

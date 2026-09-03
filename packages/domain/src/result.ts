@@ -22,6 +22,13 @@ export const RejectionCode = {
   conditionActSubstituted: 'domain.condition_act.substituted',
   /** Нетерминальное состояние после `pending` собрано без акта (Ф13). */
   conditionActMissing: 'domain.condition_act.missing',
+  /**
+   * Целевое состояние разморозки недопустимо для того статуса, из которого
+   * заморозили (CORE.md Ф17). Отдельный код, а не «переход запрещён»: разница
+   * между «так нельзя вообще» и «так нельзя из этой заморозки» — это разница
+   * между ошибкой вызывающего и решением, которое оператору надо переиграть.
+   */
+  unfreezeTargetNotAllowed: 'domain.unfreeze.target_not_allowed',
   invalidInstant: 'domain.instant.invalid',
   invalidUuid: 'domain.uuid.invalid',
 } as const;

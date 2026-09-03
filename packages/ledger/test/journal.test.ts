@@ -7,7 +7,9 @@ import {
   appendEntries,
   appendEntry,
   bankNominal,
-  clientAccount,
+  clientFreeAccount,
+  clientKey,
+  clientLockedAccount,
   createJournalEntry,
   credit,
   debit,
@@ -15,6 +17,10 @@ import {
 } from '../src/index';
 
 const deal = { dealId: 'd1', trancheId: 't1' };
+// Владелец счёта — ключ личности (FUNCTIONAL.md §2.1): один клиент, один счёт
+// на все его сделки в любых ролях. Здесь он один и тот же во всех записях.
+const owner = clientKey('c1');
+
 
 function entry(id: string) {
   return createJournalEntry({
@@ -24,7 +30,7 @@ function entry(id: string) {
     memoKey: 'ledger.entry.funds_received',
     postings: [
       debit(bankNominal('USD'), money('USD', 100n), deal),
-      credit(clientAccount(deal.dealId, deal.trancheId), money('USD', 100n), deal),
+      credit(clientLockedAccount(owner, deal.dealId, deal.trancheId), money('USD', 100n), deal),
     ],
   });
 }
@@ -59,10 +65,17 @@ describe('журнал только дополняется', () => {
 
   it('renders the documented account codes', () => {
     expect(accountCode(bankNominal('GEL'))).toBe('bank:nominal:gel');
-    expect(accountCode(clientAccount('d1', 't1'))).toBe('client:d1:t1');
+    // Коды счёта клиента из FUNCTIONAL.md §3.1 после E12-1: свободная и
+    // запертая части. Сегменты `free` и `tranche` фиксированные, а не
+    // позиционные — иначе сделка с идентификатором `free` даёт код чужого счёта.
+    expect(accountCode(clientFreeAccount(owner))).toBe('client:c1:free');
+    expect(accountCode(clientLockedAccount(owner, 'd1', 't1'))).toBe('client:c1:tranche:d1:t1');
     expect(accountCode({ kind: 'psp_fee_expense' })).toBe('psp:fee:expense');
     expect(accountCode({ kind: 'oracle_cost_expense' })).toBe('oracle:cost:expense');
     expect(accountCode({ kind: 'suspense_unidentified' })).toBe('suspense:unidentified');
-    expect(() => accountCode(clientAccount('d:1', 't1'))).toThrow(LedgerError);
+    expect(() => accountCode(clientLockedAccount(owner, 'd:1', 't1'))).toThrow(LedgerError);
+    // Ключ личности содержит двоеточие (`страна:тип:отпечаток`) и на месте
+    // ключа счёта неприемлем: перевод одного в другое — забота compliance.
+    expect(() => clientKey('GE:passport:abc')).toThrow(LedgerError);
   });
 });

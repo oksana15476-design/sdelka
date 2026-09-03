@@ -1,5 +1,6 @@
 import type { CurrencyCode, Money } from '@sdelka/money';
 import type { ConditionAct } from './condition-act';
+import type { ComplianceFreezeReason, UnfreezeTarget } from './freeze';
 import type { ReleaseConditionType } from './release-condition';
 
 export type PayoutOutcome = 'settled' | 'rejected' | 'unknown';
@@ -24,7 +25,13 @@ export type TrancheEvent =
     }
   | { readonly type: 'reserve_requested' }
   | { readonly type: 'reserve_expired' }
-  | { readonly type: 'revocation_requested'; readonly actor: 'buyer' }
+  /**
+   * Отзыв покупателем. `reason` обязателен: ROADMAP.md И12.3 требует, чтобы
+   * причина фиксировалась, а у соседнего `refund_requested` она уже есть —
+   * одно и то же требование не может быть выполнено у одного события и не
+   * выполнено у другого.
+   */
+  | { readonly type: 'revocation_requested'; readonly actor: 'buyer'; readonly reason: string }
   | {
       readonly type: 'condition_established';
       readonly evidenceBundleId: string;
@@ -53,6 +60,26 @@ export type TrancheEvent =
       readonly act: ConditionAct;
       /** Ключи сторон, принявших новую редакцию: покупатель и получатель. */
       readonly acceptedBy: readonly string[];
+    }
+  /**
+   * Заморозка комплаенсом и заморозка по спору (CORE.md Ф17, E9-9). Имена
+   * событий взяты у сделки буква в букву: STATE-MACHINES.md §9 — словарь один,
+   * и «то же действие под другим именем» здесь стоит дороже, чем экономия.
+   *
+   * `frozenBy` записывается **в состояние**: разморозку не может утвердить тот,
+   * кто заморозил, а факты приходят снаружи на каждый вызов и такой проверки
+   * не выдержат.
+   */
+  | {
+      readonly type: 'compliance_hold';
+      readonly reason: ComplianceFreezeReason;
+      readonly frozenBy: string;
+    }
+  | { readonly type: 'dispute_raised'; readonly frozenBy: string }
+  | {
+      readonly type: 'unfreeze';
+      readonly userIds: readonly string[];
+      readonly resume: UnfreezeTarget;
     };
 
 export type TrancheEventType = TrancheEvent['type'];

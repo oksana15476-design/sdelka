@@ -62,11 +62,29 @@ describe('все состояния достижимы из стартового
 describe('release_blocked — единственное состояние с выходом только через человека', () => {
   it('has no event-free exit other than operator decisions', () => {
     const exits = TRANCHE_TRANSITIONS.filter((item) => item.from === 'release_blocked');
-    expect(exits.map((item) => item.event).sort()).toEqual([
+    // Ожидание расширено, а не ослаблено: `compliance_hold` и `dispute_raised`
+    // — тоже действия человека, и смысл теста («ни одного автоматического
+    // выхода») от них не страдает. Ни `deadline_reached`, ни `payout_result` в
+    // списке по-прежнему нет.
+    expect([...new Set(exits.map((item) => item.event))].sort()).toEqual([
       'approval_added',
+      'compliance_hold',
+      'dispute_raised',
       'refund_requested',
       'reserve_expired',
       'write_off_approved',
     ]);
+  });
+});
+
+describe('заморозка не открывает автоматических выходов (CORE.md Ф17, E9-9)', () => {
+  it('leaves frozen with no automatic exit at all', () => {
+    const exits = TRANCHE_TRANSITIONS.filter((item) => item.from === 'frozen');
+    // Единственное событие выхода — разморозка, то есть решение двух людей.
+    // Приоритет заморозки над возвратом по умолчанию (красная линия №7 против
+    // Ф17) реализован **отсутствием строк** в таблице, а не проверкой в
+    // редьюсере: проверку можно обойти новой веткой, таблицу — нет.
+    expect([...new Set(exits.map((item) => item.event))]).toEqual(['unfreeze']);
+    expect(exits.some((item) => item.to === 'pending')).toBe(false);
   });
 });

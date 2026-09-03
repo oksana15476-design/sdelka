@@ -65,3 +65,20 @@ export const PAYOUT_NAMESPACE = uuid5(UUID_NAMESPACE_URL, 'https://sdelka.exampl
 export function payoutIdempotencyKey(trancheId: string): string {
   return uuid5(PAYOUT_NAMESPACE, trancheId);
 }
+
+/** Своё пространство имён у вывода со счёта клиента: у него нет транша. */
+export const WITHDRAWAL_NAMESPACE = uuid5(
+  UUID_NAMESPACE_URL,
+  'https://sdelka.example/ns/withdrawal',
+);
+
+/**
+ * Ключ идемпотентности вывода со счёта клиента (ROADMAP.md И12.2).
+ *
+ * Ключ по траншу здесь не годится: у вывода транша нет вовсе. Аргумент, как и у
+ * выплаты, ровно один — ни попытки, ни времени: иначе повтор при потерянном
+ * ответе банка создаст второй вывод (FUNCTIONAL.md инвариант 13).
+ */
+export function withdrawalIdempotencyKey(withdrawalId: string): string {
+  return uuid5(WITHDRAWAL_NAMESPACE, withdrawalId);
+}

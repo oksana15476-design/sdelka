@@ -8,7 +8,8 @@ import {
   appendEntry,
   bankNominal,
   bankOperating,
-  clientAccount,
+  clientKey,
+  clientLockedAccount,
   coverageByTranche,
   createJournalEntry,
   credit,
@@ -22,7 +23,10 @@ import {
 } from '../src/index';
 
 const deal = { dealId: 'd1', trancheId: 't1' };
-const client = clientAccount(deal.dealId, deal.trancheId);
+// Владелец счёта — ключ личности (FUNCTIONAL.md §2.1): один клиент, один счёт
+// на все его сделки в любых ролях. Здесь он один и тот же во всех записях.
+const owner = clientKey('c1');
+const client = clientLockedAccount(owner, deal.dealId, deal.trancheId);
 const owed = money('GEL', 100_000n);
 
 /** Деньги по траншу дошли полностью и лежат на номинальном счёте. */

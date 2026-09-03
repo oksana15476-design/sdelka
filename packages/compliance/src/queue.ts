@@ -21,6 +21,8 @@ export const REVIEW_TASK_KINDS = [
   'structuring',
   'linkage',
   'flipping',
+  /** Связанные лица по обе стороны одной сделки — усиленная проверка, не отказ (И6.4). */
+  'related_parties',
   'beneficiary_change',
   'source_of_funds',
 ] as const;

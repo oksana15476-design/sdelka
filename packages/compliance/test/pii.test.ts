@@ -28,9 +28,12 @@ describe('персональные данные не попадают в реш�
     const result = assessPayer(
       {
         buyerDocument: BUYER_DOCUMENT,
-        payerDocument: OTHER_DOCUMENT,
+        origin: {
+          kind: 'external_transfer',
+          payerDocument: OTHER_DOCUMENT,
+          senderNameMatch: compareNames(BUYER_NAMES, OTHER_NAMES, strong),
+        },
         relationship: { kind: 'unrelated_third_party' },
-        senderNameMatch: compareNames(BUYER_NAMES, OTHER_NAMES, strong),
         evidence: [evidence(1)],
       },
       POLICY_VERSION,
@@ -41,6 +44,21 @@ describe('персональные данные не попадают в реш�
     expect(serialized).not.toContain('Zerlan');
     expect(serialized).not.toContain(BUYER_DOCUMENT.numberFingerprint);
     expect(serialized).not.toContain(OTHER_DOCUMENT.numberFingerprint);
+  });
+
+  it('внутреннее движение не тащит владельца остатка в журнальную проекцию', () => {
+    const result = assessPayer(
+      {
+        buyerDocument: BUYER_DOCUMENT,
+        origin: { kind: 'internal_balance', accountHolder: BUYER_DOCUMENT },
+        relationship: { kind: 'self' },
+        evidence: [evidence(1)],
+      },
+      POLICY_VERSION,
+      NOW,
+    );
+    expect(result.outcome).toBe('clear');
+    expect(JSON.stringify(logSafeDecision(result))).not.toContain(BUYER_DOCUMENT.numberFingerprint);
   });
 
   it('решение по возврату не содержит отпечатков счетов', () => {

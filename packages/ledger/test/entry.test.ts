@@ -5,14 +5,19 @@ import {
   LedgerErrorCode,
   balanceByCurrency,
   bankNominal,
-  clientAccount,
+  bankOperating,
+  clientKey,
+  clientLockedAccount,
   createJournalEntry,
   credit,
   debit,
 } from '../src/index';
 
 const deal = { dealId: 'd1', trancheId: 't1' };
-const client = clientAccount(deal.dealId, deal.trancheId);
+// Владелец счёта — ключ личности (FUNCTIONAL.md §2.1): один клиент, один счёт
+// на все его сделки в любых ролях. Здесь он один и тот же во всех записях.
+const owner = clientKey('c1');
+const client = clientLockedAccount(owner, deal.dealId, deal.trancheId);
 const feeIncome = { kind: 'fee_income' } as const;
 const fxIncome = { kind: 'fx_income' } as const;
 
@@ -63,6 +68,14 @@ describe('journal entry: сумма проводок равна нулю', () =>
   it('balances every currency separately, not in conversion', () => {
     // Одна запись конвертации из FUNCTIONAL.md §3.3, шаг 2: обе ноги внутри
     // одной записи, каждая валюта сходится сама по себе.
+    //
+    // Спред приходит на операционный счёт, а не на номинальный: §3.3 шаг 2
+    // показывает его кредитом `fx:income` против номинального счёта, то есть
+    // оставляет доход платформы на счёте клиентских средств. Красная линия №2
+    // запрещает это не только комиссии — `fx:income` такой же наш доход (§4.1),
+    // и `convertClientBalance` в приложении делит поступление ровно так же.
+    // Купленные по рыночному курсу 21 500 000 лари приходят двумя ногами:
+    // клиентская часть на номинальный счёт, спред — сразу на операционный.
     const entry = createJournalEntry({
       id: 'e3',
       occurredAt: '2026-09-03T10:00:00Z',
@@ -71,12 +84,27 @@ describe('journal entry: сумма проводок равна нулю', () =>
       postings: [
         debit(client, money('USD', 8_000_000n), deal),
         credit(bankNominal('USD'), money('USD', 8_000_000n), deal),
-        debit(bankNominal('GEL'), money('GEL', 21_500_000n), deal),
+        debit(bankNominal('GEL'), money('GEL', 21_349_500n), deal),
         credit(client, money('GEL', 21_349_500n), deal),
+        debit(bankOperating('GEL'), money('GEL', 150_500n)),
         credit(fxIncome, money('GEL', 150_500n)),
       ],
     });
     expect([...balanceByCurrency(entry.postings).values()]).toEqual([0n, 0n]);
+    // На номинальном счёте — ровно клиентская сумма по клиентскому курсу,
+    // спред на операционном: 21 349 500 + 150 500 = 21 500 000 по рыночному.
+    const gelOn = (kind: 'bank_nominal' | 'bank_operating'): bigint =>
+      entry.postings
+        .filter((posting) => posting.account.kind === kind && posting.amount.currency === 'GEL')
+        .reduce(
+          (total, posting) =>
+            posting.direction === 'debit'
+              ? total + posting.amount.minor
+              : total - posting.amount.minor,
+          0n,
+        );
+    expect(gelOn('bank_nominal')).toBe(21_349_500n);
+    expect(gelOn('bank_operating')).toBe(150_500n);
 
     // А «сходится в пересчёте» — не сходится: курс не заменяет проводку.
     expectCode(
@@ -155,7 +183,7 @@ describe('journal entry: сумма проводок равна нулю', () =>
     );
   });
 
-  it('accepts the settlement entry where fee income is recognised in the same journal', () => {
+  it('accepts the settlement entry where fee income is recognised and swept in the same journal', () => {
     const entry = createJournalEntry({
       id: 'e9',
       occurredAt: '2026-09-03T10:00:00Z',
@@ -163,10 +191,51 @@ describe('journal entry: сумма проводок равна нулю', () =>
       memoKey: 'ledger.entry.payout',
       postings: [
         debit(client, money('GEL', 21_349_500n), deal),
-        credit(bankNominal('GEL'), money('GEL', 21_242_753n), deal),
+        credit(bankNominal('GEL'), money('GEL', 21_349_500n), deal),
         credit(feeIncome, money('GEL', 106_747n)),
+        debit(bankOperating('GEL'), money('GEL', 106_747n)),
       ],
     });
-    expect(entry.postings).toHaveLength(3);
+    expect(entry.postings).toHaveLength(4);
+  });
+
+  it('refuses to recognise platform income without moving it off the nominal account', () => {
+    // Прежняя редакция этой же записи (без ноги операционного счёта) считалась
+    // законной: комиссия признавалась доходом и оставалась на номинальном
+    // счёте до отдельного вывода, забыть который ничего не мешало. Красная
+    // линия №2 требует вывода «в том же журнале» — теперь буквально.
+    expectCode(
+      () =>
+        createJournalEntry({
+          id: 'e10',
+          occurredAt: '2026-09-03T10:00:00Z',
+          kind: 'settlement',
+          memoKey: 'ledger.entry.payout',
+          postings: [
+            debit(client, money('GEL', 21_349_500n), deal),
+            credit(bankNominal('GEL'), money('GEL', 21_242_753n), deal),
+            credit(feeIncome, money('GEL', 106_747n)),
+          ],
+        }),
+      LedgerErrorCode.entryPlatformIncomeNotSwept,
+    );
+    // Частичный вывод — тоже не вывод: остаток комиссии на номинальном счёте
+    // ничем не отличается от полной комиссии на нём.
+    expectCode(
+      () =>
+        createJournalEntry({
+          id: 'e11',
+          occurredAt: '2026-09-03T10:00:00Z',
+          kind: 'settlement',
+          memoKey: 'ledger.entry.payout',
+          postings: [
+            debit(client, money('GEL', 21_349_500n), deal),
+            credit(bankNominal('GEL'), money('GEL', 21_342_753n), deal),
+            credit(feeIncome, money('GEL', 106_747n)),
+            debit(bankOperating('GEL'), money('GEL', 100_000n)),
+          ],
+        }),
+      LedgerErrorCode.entryPlatformIncomeNotSwept,
+    );
   });
 });

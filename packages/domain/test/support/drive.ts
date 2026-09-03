@@ -1,13 +1,16 @@
 import {
+  type DurationMs,
+  type FreezeReason,
   type Instant,
-  type NonTerminalTrancheStatus,
   type Rejection,
+  type ThawedTrancheStatus,
   type TrancheContext,
   type TrancheEvent,
   type TrancheState,
   type TrancheTransitionResult,
   DEFAULT_DEADLINE_POLICY,
   deadline,
+  frozenTrancheState,
   nonTerminalTrancheState,
   plus,
   reduceTranche,
@@ -19,7 +22,7 @@ import { CONDITION_ACT, NOW } from './facts';
  * их нельзя опустить (STATE-MACHINES.md §5).
  */
 export function stateAt(
-  status: NonTerminalTrancheStatus,
+  status: ThawedTrancheStatus,
   enteredAt: Instant = NOW,
 ): TrancheState {
   return nonTerminalTrancheState(
@@ -28,6 +31,30 @@ export function stateAt(
     enteredAt,
     // Акт есть у всего, что вышло из `pending`: до него деньги не принимаются.
     status === 'pending' ? null : CONDITION_ACT,
+  );
+}
+
+/**
+ * Замороженное состояние собирается **другим** помощником, и это правильно: у
+ * него нет дедлайна, зато есть остаток, основание и автор заморозки. Общий
+ * `stateAt` его собрать не может по типу.
+ */
+export function frozenStateAt(
+  suspendedFrom: ThawedTrancheStatus,
+  remaining: DurationMs,
+  options: {
+    readonly enteredAt?: Instant;
+    readonly reason?: FreezeReason;
+    readonly frozenBy?: string;
+  } = {},
+): TrancheState {
+  return frozenTrancheState(
+    suspendedFrom,
+    remaining,
+    options.enteredAt ?? NOW,
+    CONDITION_ACT,
+    options.reason ?? 'sanctions',
+    options.frozenBy ?? 'compliance-1',
   );
 }
 

@@ -3,17 +3,33 @@ import { type LinkageFacts, type PartySignals, assessLinkage } from '../../src/i
 import {
   ACCOUNT_OTHER,
   ACCOUNT_SOURCE,
+  ACCOUNT_THIRD,
   ADDRESS_SHARED,
+  BUYER_DOCUMENT,
   DEVICE_SHARED,
+  document,
   evidence,
   NOW,
   PHONE_SHARED,
   POLICY_VERSION,
+  SAME_PERSON_DOCUMENT,
 } from '../support/fixtures';
+
+/**
+ * По умолчанию у каждой стороны **свой** документ: иначе кейсы «общее устройство»
+ * и «общий счёт» описывали бы одно лицо и обязаны были бы возвращать `clear`.
+ * Совпадающий ключ передаётся явно там, где кейс именно про одно лицо.
+ */
+const DOCUMENTS: Readonly<Record<string, ReturnType<typeof document>>> = {
+  a: BUYER_DOCUMENT,
+  b: document(31),
+  c: document(32),
+};
 
 function party(partyId: string, overrides: Partial<PartySignals> = {}): PartySignals {
   return {
     partyId,
+    identity: DOCUMENTS[partyId] ?? document(39),
     accounts: [],
     devices: [],
     networkAddresses: [],
@@ -87,6 +103,68 @@ describe('совпадение устройства и реквизитов у �
     expect(result.reasons).toContain('compliance.linkage.declared_relationship');
   });
 
+  it('одно лицо в двух ролях — не связанность: общий счёт не удерживает', () => {
+    // `FUNCTIONAL.md` §2.1, `ROADMAP.md` И6.4 (крайний случай): человек продаёт
+    // одну квартиру и покупает другую. Счёт, устройство и телефон у него одни.
+    const result = assess({
+      parties: [
+        party('a', {
+          accounts: [ACCOUNT_SOURCE],
+          devices: [DEVICE_SHARED],
+          phones: [PHONE_SHARED],
+        }),
+        party('b', {
+          identity: SAME_PERSON_DOCUMENT,
+          accounts: [ACCOUNT_SOURCE],
+          devices: [DEVICE_SHARED],
+          phones: [PHONE_SHARED],
+        }),
+      ],
+    });
+    expect(result.outcome).toBe('clear');
+    expect(result.links[0]?.sameIdentity).toBe(true);
+    expect(result.reasons).toContain('compliance.linkage.same_identity');
+    expect(result.reasons).not.toContain('compliance.linkage.shared_account');
+  });
+
+  it('одно лицо не требует заявленного родства с самим собой', () => {
+    const result = assess({
+      parties: [
+        party('a', { accounts: [ACCOUNT_SOURCE] }),
+        party('b', { identity: SAME_PERSON_DOCUMENT, accounts: [ACCOUNT_SOURCE] }),
+      ],
+      declaredRelationships: [],
+    });
+    expect(result.outcome).toBe('clear');
+    expect(result.reasons).not.toContain('compliance.linkage.declared_relationship');
+  });
+
+  it('те же сигналы при разных ключах личности удерживают по-прежнему', () => {
+    const result = assess({
+      parties: [
+        party('a', { accounts: [ACCOUNT_SOURCE] }),
+        party('b', { accounts: [ACCOUNT_SOURCE] }),
+      ],
+    });
+    expect(result.outcome).toBe('hold');
+    expect(result.links[0]?.sameIdentity).toBe(false);
+    expect(result.reasons).toContain('compliance.linkage.shared_account');
+  });
+
+  it('совпадение ключа у пары не глушит связанность третьей стороны', () => {
+    const result = assess({
+      parties: [
+        party('a', { accounts: [ACCOUNT_SOURCE], devices: [DEVICE_SHARED] }),
+        party('b', { identity: SAME_PERSON_DOCUMENT, accounts: [ACCOUNT_SOURCE] }),
+        party('c', { accounts: [ACCOUNT_THIRD], devices: [DEVICE_SHARED] }),
+      ],
+    });
+    expect(result.outcome).toBe('review');
+    expect(result.reasons).toContain('compliance.linkage.same_identity');
+    expect(result.reasons).toContain('compliance.linkage.shared_device');
+    expect(result.reasons).not.toContain('compliance.linkage.shared_account');
+  });
+
   it('в отчёт попадает метка отпечатка, а не сам отпечаток', () => {
     const result = assess({
       parties: [party('a', { devices: [DEVICE_SHARED] }), party('b', { devices: [DEVICE_SHARED] })],
@@ -94,5 +172,8 @@ describe('совпадение устройства и реквизитов у �
     const label = result.links[0]?.shared[0]?.label ?? '';
     expect(label).toHaveLength(8);
     expect(JSON.stringify(result.links)).not.toContain(DEVICE_SHARED);
+    // Ключ личности считается внутри и в отчёт не переносится: он несёт
+    // отпечаток номера документа, а в `PartyLink` попадают только метки.
+    expect(JSON.stringify(result.links)).not.toContain(BUYER_DOCUMENT.numberFingerprint);
   });
 });

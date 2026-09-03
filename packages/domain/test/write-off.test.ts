@@ -3,7 +3,8 @@ import {
   accountBalance,
   bankNominal,
   bankOperating,
-  clientAccount,
+  clientKey,
+  clientLockedAccount,
   emptyJournal,
   isEveryTrancheCovered,
   isFullyCovered,
@@ -13,11 +14,11 @@ import {
 import { rationalFromDecimalString } from '@sdelka/money';
 import { describe, expect, it } from 'vitest';
 import { type TrancheEvent, type TrancheState } from '../src/index';
-import { AMOUNT, DEAL_ID, TRANCHE_ID, context } from './support/facts';
+import { AMOUNT, DEAL_ID, PAYER_CLIENT_KEY, TRANCHE_ID, context } from './support/facts';
 import { accept, stateAt } from './support/drive';
 import { projectIntents } from './support/ledger-projection';
 
-const client = clientAccount(DEAL_ID, TRANCHE_ID);
+const client = clientLockedAccount(clientKey(PAYER_CLIENT_KEY), DEAL_ID, TRANCHE_ID);
 
 const fundsReceived: TrancheEvent = {
   type: 'funds_received',
@@ -42,6 +43,8 @@ describe('невостребованные средства доходят до 
       state = step.state;
       journal = projectIntents(journal, step.intents, {
         feeRate: rationalFromDecimalString('0.005'),
+        // Списание получателя не касается, но проекция одна на все шаблоны.
+        recipientClientKey: 'seller-1',
       });
     }
 

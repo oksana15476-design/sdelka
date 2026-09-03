@@ -107,7 +107,21 @@ describe('сверка владельца счёта', () => {
 describe('форма факта согласована с guard-ом домена', () => {
   it('блокировка при финансировании', () => {
     const locked = lockOnFunding(state());
-    expect(toBeneficiaryLock(locked)).toEqual({ locked: true, lastChangedAt: null });
+    // Статус в факте обязателен и не теряется по дороге: домен стоит на нём
+    // guard'ом `g_beneficiary_verified`, и `name_consistent` выплату не
+    // открывает (E13-2, ROADMAP.md И13.1). Точное сравнение здесь и держит
+    // форму факта: появление поля обязано ломать этот тест.
+    expect(toBeneficiaryLock(locked)).toEqual({
+      status: 'name_consistent',
+      locked: true,
+      lastChangedAt: null,
+    });
+  });
+
+  it('статус реквизитов переносится в факт без потери', () => {
+    for (const status of ['draft', 'name_consistent', 'verified', 'blocked'] as const) {
+      expect(toBeneficiaryLock(state({ status })).status).toBe(status);
+    }
   });
 
   it('момент последнего изменения переносится в факт', () => {

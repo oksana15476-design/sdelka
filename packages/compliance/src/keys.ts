@@ -38,6 +38,7 @@ export const REASON_KEYS = {
   payerExchangeBlocked: 'compliance.payer.exchange_blocked',
   payerLawFirmBlocked: 'compliance.payer.law_firm_blocked',
   payerNameMatchIsNotIdentity: 'compliance.payer.name_match_is_not_identity',
+  payerInternalOwnBalance: 'compliance.payer.internal_own_balance',
 
   /* --- Возврат --- */
   refundSourceAccountUnknown: 'compliance.refund.source_account_unknown',
@@ -66,6 +67,13 @@ export const REASON_KEYS = {
   linkageSharedNetworkAddress: 'compliance.linkage.shared_network_address',
   linkageSharedPhone: 'compliance.linkage.shared_phone',
   linkageDeclaredRelationship: 'compliance.linkage.declared_relationship',
+  linkageSameIdentity: 'compliance.linkage.same_identity',
+
+  /* --- Одна личность на обеих сторонах сделки --- */
+  counterpartySameIdentity: 'compliance.counterparty.same_identity',
+  counterpartyRelatedParties: 'compliance.counterparty.related_parties',
+  counterpartyDistinct: 'compliance.counterparty.distinct',
+  counterpartyNameMatchIsNotIdentity: 'compliance.counterparty.name_match_is_not_identity',
 
   /* --- Быстрая перепродажа --- */
   flippingNone: 'compliance.flipping.none',

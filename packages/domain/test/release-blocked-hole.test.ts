@@ -58,6 +58,11 @@ describe('дыра release_blocked → release_pending → paying_out', () => {
       'g_fields_match',
       'g_owner_is_buyer',
       'g_beneficiary_locked',
+      // E13-2: доказательство владения счётом — отдельное условие рядом с
+      // блокировкой реквизитов, и оно тоже продублировано на этом ребре. Без
+      // дубля путь через `release_blocked` выпускал бы выплату на реквизиты, у
+      // которых сошлось только имя.
+      'g_beneficiary_verified',
       'g_approvals_sufficient',
       'g_no_active_payout',
       'g_coverage_ok',

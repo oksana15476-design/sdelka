@@ -1,5 +1,6 @@
 import type { CurrencyCode, Money } from '@sdelka/money';
 import { type ConditionAct, conditionActsEqual } from './condition-act';
+import type { FreezeReason, UnfreezeTarget } from './freeze';
 import { type GuardId, type GuardInput, type TrancheFacts, evaluateGuard } from './guards';
 import { payoutIdempotencyKey } from './ids';
 import {
@@ -9,6 +10,7 @@ import {
   DAY,
   HOUR,
   deadline,
+  duration,
   plus,
 } from './instant';
 import type { Intent, LedgerTemplate } from './intents';
@@ -38,6 +40,13 @@ export const TRANCHE_STATUSES = [
   'refunding',
   'refunded',
   'written_off',
+  /**
+   * Заморожен комплаенсом или спором — CORE.md Ф17, E9-9. У сделки это
+   * состояние было с самого начала, у транша его не было, и поэтому конфликт
+   * красной линии №7 (по умолчанию возвращаем) с Ф17 (замороженное исполнять
+   * запрещено) разрешался в пользу возврата молча.
+   */
+  'frozen',
 ] as const;
 
 export type TrancheStatus = (typeof TRANCHE_STATUSES)[number];
@@ -46,6 +55,62 @@ export const TERMINAL_TRANCHE_STATUSES = ['paid_out', 'refunded', 'written_off']
 
 export type TerminalTrancheStatus = (typeof TERMINAL_TRANCHE_STATUSES)[number];
 export type NonTerminalTrancheStatus = Exclude<TrancheStatus, TerminalTrancheStatus>;
+
+/**
+ * Нетерминальный статус с идущими часами. Различение «остывший / замороженный»
+ * поднято на уровень типа: у замороженного дедлайна нет поля вовсе, а у
+ * остальных оно обязательно. Политика дедлайнов индексируется этим типом —
+ * замороженному состоянию политике нечего дать.
+ */
+export type ThawedTrancheStatus = Exclude<NonTerminalTrancheStatus, 'frozen'>;
+
+export const THAWED_TRANCHE_STATUSES: readonly ThawedTrancheStatus[] = Object.freeze(
+  TRANCHE_STATUSES.filter(
+    (status): status is ThawedTrancheStatus =>
+      !(TERMINAL_TRANCHE_STATUSES as readonly string[]).includes(status) && status !== 'frozen',
+  ),
+);
+
+/**
+ * Из каких статусов транш можно заморозить.
+ *
+ * Все остывшие, кроме `pending`. В `pending` денег ещё нет — замораживать
+ * нечего, а обратный переход из заморозки открыл бы вход в `pending` заново,
+ * то есть транш, у которого деньги уже были, снова назывался бы «создан, денег
+ * нет». Гарантия §5 «стартовое состояние не переоткрывается» держится этим
+ * списком, и обход графа в `reachability.test.ts` её проверяет.
+ */
+export const FREEZABLE_TRANCHE_STATUSES: readonly ThawedTrancheStatus[] = Object.freeze(
+  THAWED_TRANCHE_STATUSES.filter((status) => status !== 'pending'),
+);
+
+/**
+ * Статусы, из которых поручение **уже ушло наружу**: банк его получил, и исход
+ * нам неизвестен, пока не ответит выписка.
+ *
+ * Список один на два места — таблицу переходов и редьюсер, — потому что это одно
+ * правило. Разъехавшись, они дали бы ровно то, что было до E9-11: ребро в
+ * таблице есть, редьюсер его не пускает, обход графа считает проходимым.
+ */
+export const DISPATCHED_TRANCHE_STATUSES: readonly ThawedTrancheStatus[] = Object.freeze([
+  'paying_out',
+  'refunding',
+]);
+
+/**
+ * Куда разморозка возвращает транш «туда, откуда заморозили».
+ *
+ * Из `paying_out` и `refunding` — **никогда**: вернуться в «поручение
+ * отправлено» значит выпустить его второй раз (§2.2, красная линия №8). Запрет
+ * выражен **отсутствием строки** в таблице, тем же приёмом, что приоритет
+ * заморозки над возвратом и запрет повтора из `unknown`. Раньше строки были, а
+ * запрет стоял только в редьюсере: обход графа в `reachability.test.ts` считал
+ * `frozen → paying_out` и `frozen → refunding` проходимыми, и снятие проверки в
+ * редьюсере правкой в другом месте обход бы не заметил.
+ */
+export const RESUMABLE_TRANCHE_STATUSES: readonly ThawedTrancheStatus[] = Object.freeze(
+  FREEZABLE_TRANCHE_STATUSES.filter((status) => !DISPATCHED_TRANCHE_STATUSES.includes(status)),
+);
 
 export function isTerminalTrancheStatus(status: TrancheStatus): status is TerminalTrancheStatus {
   return (TERMINAL_TRANCHE_STATUSES as readonly string[]).includes(status);
@@ -70,34 +135,97 @@ export function isTerminalTrancheStatus(status: TrancheStatus): status is Termin
  */
 export type TrancheState =
   | {
-      readonly status: NonTerminalTrancheStatus;
+      readonly status: ThawedTrancheStatus;
       readonly deadline: Deadline;
       readonly enteredAt: Instant;
       /** `null` допустим только в `pending`: до выдачи инструкций денег нет. */
       readonly conditionAct: ConditionAct | null;
     }
+  /**
+   * Замороженное состояние (CORE.md Ф17). **Отсутствие поля `deadline` и есть
+   * приостановка**: дедлайн не отменён — остаток хранится в `remaining`, — но и
+   * не тикает, потому что момента срабатывания нет. Флаг «заморожен» рядом с
+   * живым дедлайном можно забыть проверить, отсутствующее поле — нельзя.
+   *
+   * `enteredAt` есть и здесь: возраст состояния — часы внимания дежурного, и
+   * §5 требует «обязательный срок разбора» именно для `frozen`. Дедлайн и
+   * возраст здесь окончательно разведены: первый приостановлен, второй идёт.
+   */
+  | {
+      readonly status: 'frozen';
+      readonly enteredAt: Instant;
+      readonly conditionAct: ConditionAct | null;
+      /** Статус, часы которого приостановлены. */
+      readonly suspendedFrom: ThawedTrancheStatus;
+      /** Неистёкшая часть дедлайна на момент заморозки. */
+      readonly remaining: DurationMs;
+      readonly reason: FreezeReason;
+      /** Кто заморозил: он же не может утвердить разморозку. */
+      readonly frozenBy: string;
+    }
   | { readonly status: TerminalTrancheStatus };
 
-export function nonTerminalTrancheState(
-  status: NonTerminalTrancheStatus,
-  at: Deadline,
-  enteredAt: Instant,
-  conditionAct: ConditionAct | null,
-): TrancheState {
+function assertConditionAct(status: TrancheStatus, conditionAct: ConditionAct | null): void {
   if (status !== 'pending' && conditionAct === null) {
     // Состояние после `pending` без акта собрать нельзя: приём средств
     // открывается только актом получателя (CORE.md Ф13). Это ошибка сборки
     // состояния, а не отказ автомата, поэтому исключение, а не Rejection.
     throw new DomainError(RejectionCode.conditionActMissing, status);
   }
+}
+
+export function nonTerminalTrancheState(
+  status: ThawedTrancheStatus,
+  at: Deadline,
+  enteredAt: Instant,
+  conditionAct: ConditionAct | null,
+): TrancheState {
+  assertConditionAct(status, conditionAct);
   return Object.freeze({ status, deadline: at, enteredAt, conditionAct });
+}
+
+export function frozenTrancheState(
+  suspendedFrom: ThawedTrancheStatus,
+  remaining: DurationMs,
+  enteredAt: Instant,
+  conditionAct: ConditionAct | null,
+  reason: FreezeReason,
+  frozenBy: string,
+): TrancheState {
+  assertConditionAct(suspendedFrom, conditionAct);
+  return Object.freeze({
+    status: 'frozen',
+    enteredAt,
+    conditionAct,
+    suspendedFrom,
+    remaining,
+    reason,
+    frozenBy,
+  });
 }
 
 export function terminalTrancheState(status: TerminalTrancheStatus): TrancheState {
   return Object.freeze({ status });
 }
 
-export type DeadlinePolicy = Readonly<Record<NonTerminalTrancheStatus, DurationMs>>;
+/**
+ * Остаток дедлайна на момент заморозки.
+ *
+ * Планировщик ходит раз в пятнадцать минут (FUNCTIONAL.md инвариант 7), поэтому
+ * существует окно, где дедлайн уже прошёл, а перехода ещё не было. `DurationMs`
+ * по построению строго положителен, и остаток в этом окне зажимается в минимум:
+ * сразу после разморозки отсечка срабатывает. **Заморозка не дарит времени** —
+ * это выбор в пользу красной линии №7, а не арифметическая мелочь.
+ */
+export function remainingUntil(at: Deadline, now: Instant): DurationMs {
+  return duration(Math.max(1, at.at - now));
+}
+
+/**
+ * Сроки жизни остывших состояний. `frozen` здесь нет по типу: у замороженного
+ * дедлайна не существует, и политике нечего ему дать.
+ */
+export type DeadlinePolicy = Readonly<Record<ThawedTrancheStatus, DurationMs>>;
 
 /**
  * Сроки жизни нетерминальных состояний. Значения — рабочее умолчание, не норма:
@@ -145,6 +273,10 @@ export const DEFAULT_ESCALATION_POLICY: EscalationPolicy = Object.freeze({
   paying_out: (2 * DAY) as DurationMs,
   refunding: (2 * DAY) as DurationMs,
   refund_pending: DAY,
+  // §5 требует у `frozen` «обязательный срок разбора». Дедлайна у замороженного
+  // нет — значит, единственное, что вообще поднимает его дежурному, это возраст,
+  // и порог обязан быть. Строка держится типом `Record`: без неё не соберётся.
+  frozen: DAY,
 });
 
 /**
@@ -180,6 +312,13 @@ export interface TrancheContext {
   readonly now: Instant;
   readonly dealId: string;
   readonly trancheId: string;
+  /**
+   * Владелец обязательства по траншу — ключ личности плательщика. Нужен
+   * проводкам: после E12-1 счёт клиента адресуется владельцем, а не парой
+   * «сделка + транш» (FUNCTIONAL.md §3.1). Домен ключ не разбирает и не хранит
+   * — только передаёт в намерение.
+   */
+  readonly payerClientKey: string;
   readonly facts: TrancheFacts;
   readonly deadlinePolicy: DeadlinePolicy;
 }
@@ -193,6 +332,8 @@ export interface TrancheTransition {
   readonly negatedGuards: readonly GuardId[];
   /** Различитель исхода для `payout_result` и `reconciliation_resolved`. */
   readonly outcome: PayoutOutcome | null;
+  /** Различитель целевого состояния для `unfreeze` — как `resume` у сделки. */
+  readonly resume: UnfreezeTarget | null;
 }
 
 function transition(
@@ -202,15 +343,26 @@ function transition(
   guards: readonly GuardId[] = [],
   negatedGuards: readonly GuardId[] = [],
   outcome: PayoutOutcome | null = null,
+  resume: UnfreezeTarget | null = null,
 ): TrancheTransition {
-  return Object.freeze({ from, to, event, guards, negatedGuards, outcome });
+  return Object.freeze({ from, to, event, guards, negatedGuards, outcome, resume });
 }
 
+/**
+ * Guard'ы доказательств. `g_beneficiary_verified` стоит рядом с
+ * `g_beneficiary_locked`, а не вместо него: «реквизиты заперты и не менялись в
+ * запретном окне» и «владение счётом доказано» — два условия, и оба обязательны
+ * (ROADMAP.md И13.1, E13-2). Оба ребра — `reserved → release_pending` и
+ * `release_pending → paying_out` — несут этот список целиком по той же причине,
+ * по которой продублированы остальные guard'ы доказательств: вход через
+ * `release_blocked` обходит проверку, стоящую на одном входе.
+ */
 const EVIDENCE_GUARDS: readonly GuardId[] = [
   'g_evidence_present',
   'g_fields_match',
   'g_owner_is_buyer',
   'g_beneficiary_locked',
+  'g_beneficiary_verified',
 ];
 
 /**
@@ -279,6 +431,27 @@ export const TRANCHE_TRANSITIONS: readonly TrancheTransition[] = Object.freeze([
   transition('refunding', 'payout_result', 'refunding', [], [], 'unknown'),
   transition('refunding', 'reconciliation_resolved', 'refunded', [], [], 'settled'),
   transition('refunding', 'reconciliation_resolved', 'release_blocked', [], [], 'rejected'),
+
+  // Заморозка — CORE.md Ф17, E9-9. Из каждого статуса с деньгами, по образцу
+  // сделки (`deal.ts`: те же два события на все нетерминальные состояния).
+  ...FREEZABLE_TRANCHE_STATUSES.map((status) => transition(status, 'compliance_hold', 'frozen')),
+  ...FREEZABLE_TRANCHE_STATUSES.map((status) => transition(status, 'dispute_raised', 'frozen')),
+
+  // ⚠ Из `frozen` нет строки ни на `deadline_reached`, ни на `refund_initiated`,
+  // ни на `payout_result` — ни на что автоматическое. **Приоритет заморозки над
+  // возвратом реализован отсутствием перехода**, тем же приёмом, что запрет
+  // повтора выплаты из `unknown` (§2.2: «реализуется отсутствием перехода в
+  // автомате, а не проверкой в коде обработчика»). Проверку в редьюсере можно
+  // обойти новой веткой, таблицу — нет.
+  //
+  // `RESUMABLE_TRANCHE_STATUSES`, а не `FREEZABLE_TRANCHE_STATUSES`: из
+  // заморозки, взятой в `paying_out` или `refunding`, возврата «туда, откуда
+  // заморозили», нет вовсе — и это тоже отсутствие строки, а не проверка.
+  ...RESUMABLE_TRANCHE_STATUSES.map((status) =>
+    transition('frozen', 'unfreeze', status, ['g_unfreeze_approvers_distinct'], [], null, 'suspended_from'),
+  ),
+  transition('frozen', 'unfreeze', 'refund_pending', ['g_unfreeze_approvers_distinct'], [], null, 'refund_pending'),
+  transition('frozen', 'unfreeze', 'release_blocked', ['g_unfreeze_approvers_distinct'], [], null, 'release_blocked'),
 ]);
 
 export interface TrancheTransitionResult {
@@ -308,8 +481,19 @@ function moneyForTemplate(event: TrancheEvent, facts: TrancheFacts): Money<Curre
 
 function exitIntents(from: TrancheStatus, to: TrancheStatus): readonly Intent[] {
   // §1.5: блокировка реквизитов снимается, только если уходим не в выплату.
-  const payoutPath: readonly TrancheStatus[] = ['release_pending', 'paying_out', 'paid_out'];
-  if (from === 'reserved' && !payoutPath.includes(to)) {
+  //
+  // `frozen` в списке «блокировка сохраняется» намеренно. Заморозка — не уход
+  // из резерва, а его приостановка, и без этой строки переход
+  // `reserved → frozen` снимал бы блокировку реквизитов на всё время
+  // расследования: заморозка стала бы способом сбросить периметр Ф15, то есть
+  // защита превратилась бы в дыру.
+  const keepsBeneficiaryLock: readonly TrancheStatus[] = [
+    'release_pending',
+    'paying_out',
+    'paid_out',
+    'frozen',
+  ];
+  if (from === 'reserved' && !keepsBeneficiaryLock.includes(to)) {
     return [{ type: 'unlock_beneficiary' }];
   }
   return [];
@@ -330,13 +514,21 @@ function entryIntents(
             template,
             dealId: context.dealId,
             trancheId: context.trancheId,
+            clientKey: context.payerClientKey,
             amount,
           },
         ];
   switch (to) {
     case 'collected':
       return [
-        ...ledger('funds_received'),
+        // Проводка зачисления принадлежит **событию поступления**, а не статусу
+        // `collected`. В `collected` возвращаются и из `reserved`
+        // (`reserve_expired`), и из `release_blocked`: деньги при этом уже лежат
+        // в файле транша, и вторая проводка придумала бы поступление, которого
+        // не было, — удвоив и обязательство перед клиентом, и отнесение
+        // кастодиана. Обеспечение при этом сходится с обеих сторон, поэтому ни
+        // один инвариант учёта такую запись не поймал бы.
+        ...(event.type === 'funds_received' ? ledger('funds_received') : []),
         { type: 'notify', audience: 'buyer', messageKey: 'tranche.collected.buyer' },
       ];
     case 'reserved':
@@ -384,6 +576,13 @@ function entryIntents(
         { type: 'enqueue_operator_task', priorityAmount: context.facts.requiredAmount },
         { type: 'notify', audience: 'both', messageKey: 'tranche.release_blocked.both' },
       ];
+    case 'refund_pending':
+      // ROADMAP.md И12.3: «вторая сторона узнаёт из кабинета, а не по факту
+      // неполучения денег». Ветки здесь не было вовсе, то есть отзыв покупателя
+      // не порождал ни одного уведомления, хотя §6 задаёт представление
+      // `refund_pending` для обеих сторон. `messageKey` — ключ локализации:
+      // формулировка идёт через копирайтера и главреда, в коде её нет.
+      return [{ type: 'notify', audience: 'both', messageKey: 'tranche.refund_pending.both' }];
     default:
       return [];
   }
@@ -474,9 +673,51 @@ export function reduceTranche(
   }
 
   const outcome = eventOutcome(event);
+  const resume: UnfreezeTarget | null = event.type === 'unfreeze' ? event.resume : null;
+
+  if (event.type === 'unfreeze' && 'suspendedFrom' in state) {
+    // Разморозку не утверждает тот, кто заморозил. Проверка здесь, а не в
+    // guard'е: автор заморозки лежит **в состоянии**, а `GuardInput` состояния
+    // не видит, и расширять его ради одного правила значит трогать все места
+    // вызова guard'ов (см. комментарий у `g_unfreeze_approvers_distinct`).
+    if (event.userIds.includes(state.frozenBy)) {
+      return failure(
+        rejection(RejectionCode.guardFailed, ['g_unfreeze_approvers_distinct'], {
+          status: state.status,
+          event: event.type,
+        }),
+      );
+    }
+    // Заморозка, взятая в `paying_out` или `refunding`, выходит **только** в
+    // `release_blocked`. Поручение уже ушло в банк: вернуться в состояние
+    // «поручение отправлено» значит выпустить его второй раз, а уйти в возврат
+    // значит вернуть деньги, которые, возможно, уже выплачены. Исход поручения
+    // обязан сначала пройти сверку человеком (§2.2, красная линия №8).
+    // Список тот же, что убирает строки из таблицы: одно правило — одна константа.
+    if (
+      DISPATCHED_TRANCHE_STATUSES.includes(state.suspendedFrom) &&
+      event.resume !== 'release_blocked'
+    ) {
+      return failure(
+        rejection(RejectionCode.unfreezeTargetNotAllowed, [], {
+          suspendedFrom: state.suspendedFrom,
+          resume: event.resume,
+        }),
+      );
+    }
+  }
+
   const candidates = TRANCHE_TRANSITIONS.filter(
     (item) =>
-      item.from === state.status && item.event === event.type && item.outcome === outcome,
+      item.from === state.status &&
+      item.event === event.type &&
+      item.outcome === outcome &&
+      item.resume === resume &&
+      // `suspended_from` — не одно ребро, а по ребру на каждый остывший статус:
+      // целевое состояние берётся из состояния, а не из события, и в таблице
+      // всё равно присутствует поимённо, иначе обход графа его не увидит.
+      (item.resume !== 'suspended_from' ||
+        ('suspendedFrom' in state && item.to === state.suspendedFrom)),
   );
   if (candidates.length === 0) {
     return failure(
@@ -495,23 +736,104 @@ export function reduceTranche(
       continue;
     }
     const nextStatus = candidate.to;
-    const intents: Intent[] = [...exitIntents(state.status, nextStatus)];
+    /**
+     * Самопереход — **внутренний** переход, а не выход и повторный вход.
+     *
+     * Единственный такой переход с действиями входа — `paying_out
+     * --payout_result(unknown)--> paying_out`. Действия входа в `paying_out`
+     * включают `enqueue_outbound_payout`, то есть каждый неответ банка велел
+     * выпустить поручение **заново** — ровно то, что красная линия №8 и §2.2
+     * объявляют невозможным без сверки. От второй выплаты спасал только
+     * детерминированный ключ идемпотентности, то есть дисциплина адаптера:
+     * приложение, доверившееся намерению, выпустило бы вторую.
+     *
+     * Признак берётся тот же, по которому не двигается `enteredAt`: состояние
+     * не менялось, значит, ни выхода из него, ни входа в него не было. Дедлайн
+     * пересчитывается — он и есть смысл этого события.
+     */
+    const internal = nextStatus === state.status;
+    const intents: Intent[] = internal ? [] : [...exitIntents(state.status, nextStatus)];
     if (isTerminalTrancheStatus(nextStatus)) {
       intents.push(...entryIntents(nextStatus, event, context));
       return ok({ state: terminalTrancheState(nextStatus), intents: Object.freeze(intents) });
     }
-    const at = plus(context.now, context.deadlinePolicy[nextStatus]);
-    intents.push({ type: 'set_deadline', at });
-    intents.push(...entryIntents(nextStatus, event, context));
-    // Переход `paying_out → paying_out` по `payout_result(unknown)` — это то же
-    // состояние: дедлайн пересчитывается, время входа сохраняется, иначе каждый
-    // неответ банка обнулял бы возраст и застрявшая выплата никогда не попадала
-    // бы в эскалацию (STATE-MACHINES.md §5).
-    const enteredAt = nextStatus === state.status ? previousEnteredAt : context.now;
+
     // Акт привязывается к траншу на выходе из `pending` — в тот момент, когда
     // открывается приём средств, и ровно тот, который прошёл `g_condition_agreed`.
     // Дальше он переносится без изменений: сменить его может только амендмент.
     const conditionAct = boundAct ?? context.facts.conditionAct;
+
+    if (nextStatus === 'frozen') {
+      if (event.type !== 'compliance_hold' && event.type !== 'dispute_raised') {
+        return failure(
+          rejection(RejectionCode.transitionNotAllowed, [], {
+            status: state.status,
+            event: event.type,
+          }),
+        );
+      }
+      if (!('deadline' in state)) {
+        // Заморозить замороженное нельзя: ребра `frozen → frozen` в таблице нет,
+        // и сюда попасть невозможно. Ветка написана отказом, а не исключением,
+        // чтобы появление такого ребра остановило транш, а не обнулило остаток.
+        return failure(
+          rejection(RejectionCode.transitionNotAllowed, [], {
+            status: state.status,
+            event: event.type,
+          }),
+        );
+      }
+      const remaining = remainingUntil(state.deadline, context.now);
+      const reason: FreezeReason = event.type === 'compliance_hold' ? event.reason : 'dispute';
+      intents.push({ type: 'suspend_deadline', remaining });
+      return ok({
+        state: frozenTrancheState(
+          state.status,
+          remaining,
+          context.now,
+          conditionAct,
+          reason,
+          event.frozenBy,
+        ),
+        intents: Object.freeze(intents),
+      });
+    }
+
+    if (event.type === 'unfreeze') {
+      // Разморозка не переигрывает вход в целевое состояние: повторное
+      // `lock_beneficiary` и уведомление продавцу «средства подтверждены», а тем
+      // более повторное `enqueue_outbound_payout` — это второе исполнение уже
+      // исполненного. Единственное намерение разморозки — восстановление часов.
+      //
+      // Остаток применяется только при возврате в тот же статус. У
+      // `refund_pending` и `release_blocked` часы чужие: срок возврата и норматив
+      // разбора не наследуют неистёкшую часть чужого дедлайна.
+      //
+      // `enteredAt` сбрасывается всегда. Дедлайн и возраст — две разные заботы
+      // (§5): часы денег клиента приостанавливаются и досчитываются, часы
+      // внимания дежурного начинаются заново. Сохранить `enteredAt` значило бы
+      // эскалировать транш в ту же секунду после трёхнедельной заморозки.
+      const span =
+        candidate.resume === 'suspended_from' && 'remaining' in state
+          ? state.remaining
+          : context.deadlinePolicy[nextStatus];
+      const at = plus(context.now, span);
+      return ok({
+        state: nonTerminalTrancheState(nextStatus, deadline(at), context.now, conditionAct),
+        intents: Object.freeze([{ type: 'set_deadline', at } as const]),
+      });
+    }
+
+    const at = plus(context.now, context.deadlinePolicy[nextStatus]);
+    intents.push({ type: 'set_deadline', at });
+    if (!internal) {
+      intents.push(...entryIntents(nextStatus, event, context));
+    }
+    // Переход `paying_out → paying_out` по `payout_result(unknown)` — это то же
+    // состояние: дедлайн пересчитывается, время входа сохраняется, иначе каждый
+    // неответ банка обнулял бы возраст и застрявшая выплата никогда не попадала
+    // бы в эскалацию (STATE-MACHINES.md §5).
+    const enteredAt = internal ? previousEnteredAt : context.now;
     return ok({
       state: nonTerminalTrancheState(nextStatus, deadline(at), enteredAt, conditionAct),
       intents: Object.freeze(intents),

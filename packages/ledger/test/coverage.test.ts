@@ -6,7 +6,10 @@ import {
   accountBalance,
   appendEntry,
   bankNominal,
-  clientAccount,
+  bankOperating,
+  checkLedgerInvariants,
+  clientKey,
+  clientLockedAccount,
   coverage,
   coverageByTranche,
   createJournalEntry,
@@ -21,8 +24,11 @@ import { uncheckedEntry } from './support/unchecked-entry';
 
 const dealA = { dealId: 'A', trancheId: 't1' };
 const dealB = { dealId: 'B', trancheId: 't1' };
-const clientA = clientAccount(dealA.dealId, dealA.trancheId);
-const clientB = clientAccount(dealB.dealId, dealB.trancheId);
+// Владелец счёта — ключ личности (FUNCTIONAL.md §2.1): один клиент, один счёт
+// на все его сделки в любых ролях. Здесь он один и тот же во всех записях.
+const owner = clientKey('c1');
+const clientA = clientLockedAccount(owner, dealA.dealId, dealA.trancheId);
+const clientB = clientLockedAccount(owner, dealB.dealId, dealB.trancheId);
 const feeIncome = { kind: 'fee_income' } as const;
 
 function funded(journal: Journal, id: string, deal: typeof dealA, amount: bigint): Journal {
@@ -35,7 +41,7 @@ function funded(journal: Journal, id: string, deal: typeof dealA, amount: bigint
       memoKey: 'ledger.entry.funds_received',
       postings: [
         debit(bankNominal('USD'), money('USD', amount), deal),
-        credit(clientAccount(deal.dealId, deal.trancheId), money('USD', amount), deal),
+        credit(clientLockedAccount(owner, deal.dealId, deal.trancheId), money('USD', amount), deal),
       ],
     }),
   );
@@ -72,10 +78,13 @@ describe('покрытие клиентских средств', () => {
     expect(isFullyCovered(journal)).toBe(true);
   });
 
-  it('shows the platform residue left on the nominal account after a settlement', () => {
-    let journal = funded(emptyJournal, 'e1', dealA, 100_000n);
-    journal = appendEntry(
-      journal,
+  it('leaves no platform residue on the nominal account after a settlement', () => {
+    // Прежняя редакция теста фиксировала обратное: комиссия признавалась
+    // доходом, оставалась на номинальном счёте превышением средств над
+    // обязательствами и ждала отдельного вывода. Это и был дефект — превышение
+    // портфельная сверка считает покрытием, а забыть вывод ничего не мешало.
+    // Теперь запись без ноги операционного счёта не собирается вовсе.
+    expect(() =>
       createJournalEntry({
         id: 'e2',
         occurredAt: '2026-09-03T12:00:00Z',
@@ -87,15 +96,34 @@ describe('покрытие клиентских средств', () => {
           credit(feeIncome, money('USD', 500n)),
         ],
       }),
+    ).toThrow(LedgerError);
+
+    let journal = funded(emptyJournal, 'e1', dealA, 100_000n);
+    journal = appendEntry(
+      journal,
+      createJournalEntry({
+        id: 'e2',
+        occurredAt: '2026-09-03T12:00:00Z',
+        kind: 'settlement',
+        memoKey: 'ledger.entry.payout',
+        postings: [
+          debit(clientA, money('USD', 100_000n), dealA),
+          credit(bankNominal('USD'), money('USD', 100_000n), dealA),
+          credit(feeIncome, money('USD', 500n)),
+          debit(bankOperating('USD'), money('USD', 500n)),
+        ],
+      }),
     );
     const [usd] = coverage(journal);
-    // Комиссия признана в том же журнале и до вывода на операционный счёт
-    // видна как превышение средств над обязательствами — ровно та величина,
-    // которая обязана обнулиться в тот же банковский день (FUNCTIONAL.md §3.3, шаг 5).
     expect(usd?.obligations.minor).toBe(0n);
-    expect(usd?.custody.minor).toBe(500n);
-    expect(usd?.difference.minor).toBe(500n);
+    // Ни одной копейки клиентских средств и ни одной нашей: счёт пуст.
+    expect(usd?.custody.minor).toBe(0n);
+    expect(usd?.difference.minor).toBe(0n);
     expect(usd?.covered).toBe(true);
+    // Комиссия признана доходом и лежит на операционном счёте, а не на счёте
+    // клиентских средств (красная линия №2).
+    expect(accountBalance(journal, bankOperating('USD'), 'USD').minor).toBe(500n);
+    expect(checkLedgerInvariants(journal)).toEqual([]);
   });
 });
 
@@ -167,9 +195,12 @@ describe('остатки счетов', () => {
       }),
     );
     const violations = negativeClientBalances(journal);
+    // Код счёта изменился вместе с планом счетов (E12-1, FUNCTIONAL.md §3.1):
+    // обязательство под транш теперь несёт и владельца. Само утверждение то же:
+    // отрицательный остаток клиентского счёта обязан быть виден.
     expect(violations.map((item) => item.accountCode)).toEqual([
       'bank:nominal:usd',
-      'client:A:t1',
+      'client:c1:tranche:A:t1',
     ]);
   });
 });

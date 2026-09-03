@@ -53,6 +53,22 @@ export function document(seed: number, issuer: CountryCode = IL): IdentityDocume
 export const BUYER_DOCUMENT = document(1);
 export const OTHER_DOCUMENT = document(2);
 
+/**
+ * Тот же документ, что у покупателя, — то есть **то же лицо**. Отдельная
+ * константа, а не повтор `document(1)` в тестах: смысл кейса «это один человек в
+ * двух ролях», и он должен читаться из имени, а не из совпадения зерна.
+ */
+export const SAME_PERSON_DOCUMENT = document(1);
+
+/**
+ * Другой документ той же страны и типа: ключ личности другой. Пара к
+ * `OTHER_NAMES_SAME_FORM` в кейсах «имена совпали, личности разные».
+ */
+export const SAME_NAMES_OTHER_DOCUMENT = document(3);
+
+/** Регистрационная страна юрлица отличается — ключ отличается заведомо. */
+export const LEGAL_ENTITY_DOCUMENT = document(4, DE);
+
 export function latinName(given: string, family: string): NameObservation {
   return {
     alphabet: 'latin',
@@ -110,6 +126,9 @@ export const WITH_PERSONAL_NUMBER = personalNumberFingerprint(fp(900));
 export function evidence(seed: number, kind: EvidenceRef['kind'] = 'operator_note'): EvidenceRef {
   return { kind, ref: `evidence-${seed}`, observedAt: NOW };
 }
+
+/** Третий набор сигналов: для кейса «одно лицо не глушит связанность третьей стороны». */
+export const ACCOUNT_THIRD = accountFingerprint(fp(12));
 
 export const ACCOUNT_SOURCE = accountFingerprint(fp(10));
 export const ACCOUNT_OTHER = accountFingerprint(fp(11));

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type GuardId,
   type TrancheEvent,
-  BENEFICIARY_COOLDOWN_MS,
+  BENEFICIARY_PRE_RELEASE_BLACKOUT_MS,
   DEFAULT_APPROVAL_POLICY,
   GUARD_IDS,
   evaluateGuard,
@@ -37,16 +37,22 @@ function check(
 
 describe('каждый guard проходит и не проходит', () => {
   it('covers every guard declared by the document', () => {
-    // 12 реализованных из §1.3 плюс два по CORE.md Ф13: акт получателя на входе
-    // в приём средств и приём новой редакции обеими сторонами. В таблице §1.3
-    // строк четырнадцать: `g_seller_is_owner` (сверка собственника на заведении
-    // сделки) и `g_no_stale_break` (незакрытые расхождения сверки) не
-    // реализованы — они относятся к заведению сделки и к сверке, эпики E4 и E7.
-    expect(GUARD_IDS).toHaveLength(14);
+    // 12 реализованных из §1.3 плюс два по CORE.md Ф13 (акт получателя на входе
+    // в приём средств и приём новой редакции обеими сторонами), плюс два,
+    // введённых этим батчем: `g_beneficiary_verified` (E13-2, И13.1 —
+    // доказательство владения счётом отдельно от блокировки реквизитов) и
+    // `g_unfreeze_approvers_distinct` (E9-9, Ф17 — разморозку утверждают двое).
+    // В таблице §1.3 строк четырнадцать: `g_seller_is_owner` (сверка
+    // собственника на заведении сделки) и `g_no_stale_break` (незакрытые
+    // расхождения сверки) не реализованы — они относятся к заведению сделки и к
+    // сверке, эпики E4 и E7.
+    expect(GUARD_IDS).toHaveLength(16);
     expect(GUARD_IDS).not.toContain('g_seller_is_owner');
     expect(GUARD_IDS).not.toContain('g_no_stale_break');
     expect(GUARD_IDS).toContain('g_condition_agreed');
     expect(GUARD_IDS).toContain('g_amendment_accepted_by_both');
+    expect(GUARD_IDS).toContain('g_beneficiary_verified');
+    expect(GUARD_IDS).toContain('g_unfreeze_approvers_distinct');
   });
 
   it('g_condition_agreed', () => {
@@ -207,17 +213,66 @@ describe('каждый guard проходит и не проходит', () => {
 
   it('g_beneficiary_locked: блокировка и 72 часа без изменений', () => {
     expect(check('g_beneficiary_locked', {})).toBe(true);
-    expect(check('g_beneficiary_locked', { beneficiary: { locked: false, lastChangedAt: null } })).toBe(
+    expect(
+      check('g_beneficiary_locked', {
+        beneficiary: { status: 'verified', locked: false, lastChangedAt: null },
+      }),
+    ).toBe(false);
+    const justChanged = instant(NOW - BENEFICIARY_PRE_RELEASE_BLACKOUT_MS + 1);
+    expect(
+      check('g_beneficiary_locked', {
+        beneficiary: { status: 'verified', locked: true, lastChangedAt: justChanged },
+      }),
+    ).toBe(false);
+    const changedLongAgo = instant(NOW - BENEFICIARY_PRE_RELEASE_BLACKOUT_MS);
+    expect(
+      check('g_beneficiary_locked', {
+        beneficiary: { status: 'verified', locked: true, lastChangedAt: changedLongAgo },
+      }),
+    ).toBe(true);
+    // Guard про запертость и запретное окно, а не про владение: реквизиты,
+    // прошедшие только сверку имени, он пропускает — их держит
+    // `g_beneficiary_verified`. Два условия, два guard'а: склеенное правило
+    // невозможно проверить поимённо, как требует §7.
+    expect(
+      check('g_beneficiary_locked', {
+        beneficiary: { status: 'name_consistent', locked: true, lastChangedAt: null },
+      }),
+    ).toBe(true);
+  });
+
+  it('g_beneficiary_verified: совпадение имени — не доказательство владения', () => {
+    expect(check('g_beneficiary_verified', {})).toBe(true);
+    // ROADMAP.md И13.1: `name_consistent` — «но не verified: совпадение имени не
+    // является достаточным основанием ни для чего».
+    for (const status of ['draft', 'name_consistent', 'blocked'] as const) {
+      expect(
+        check('g_beneficiary_verified', {
+          beneficiary: { status, locked: true, lastChangedAt: null },
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it('g_unfreeze_approvers_distinct', () => {
+    const unfreeze: TrancheEvent = {
+      type: 'unfreeze',
+      userIds: ['a', 'b'],
+      resume: 'suspended_from',
+    };
+    expect(check('g_unfreeze_approvers_distinct', {}, unfreeze)).toBe(true);
+    expect(check('g_unfreeze_approvers_distinct', {}, { ...unfreeze, userIds: ['a', 'a'] })).toBe(
       false,
     );
-    const justChanged = instant(NOW - BENEFICIARY_COOLDOWN_MS + 1);
+    // Готовивший операцию утверждающим не считается — форма как у списания.
     expect(
-      check('g_beneficiary_locked', { beneficiary: { locked: true, lastChangedAt: justChanged } }),
+      check(
+        'g_unfreeze_approvers_distinct',
+        { preparedBy: 'a' },
+        { ...unfreeze, userIds: ['a', 'b'] },
+      ),
     ).toBe(false);
-    const changedLongAgo = instant(NOW - BENEFICIARY_COOLDOWN_MS);
-    expect(
-      check('g_beneficiary_locked', { beneficiary: { locked: true, lastChangedAt: changedLongAgo } }),
-    ).toBe(true);
+    expect(check('g_unfreeze_approvers_distinct', {}, fundsReceived)).toBe(false);
   });
 
   it('g_no_active_payout', () => {

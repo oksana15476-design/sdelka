@@ -6,6 +6,7 @@ import {
   type PolicyVersionId,
   decision,
 } from '../decision';
+import { type IdentityDocument, identityKey } from '../identity';
 import { type ReasonKey, REASON_KEYS } from '../keys';
 import {
   type AccountFingerprint,
@@ -22,12 +23,28 @@ import {
  * Заявленное родство исключается из срабатывания: у супругов общий телефон и
  * общий счёт — норма, и без этого исключения детектор ловил бы половину
  * честных сделок вместо номиналов.
+ *
+ * **Одно лицо — не связанность** (`FUNCTIONAL.md` §2.1 «Что это ломает в уже
+ * написанном», `ROADMAP.md` И6.4, крайний случай «клиент участвует в двух разных
+ * сделках в обеих ролях»). Человек, продающий одну квартиру и покупающий другую,
+ * приходит с одного устройства, с одного телефона и с одного счёта — иначе и не
+ * бывает. До режима двух ролей это выглядело как два формально независимых
+ * покупателя с общим кошельком, то есть ровно как схема.
+ *
+ * Признак различения — **ключ личности**, а не имя: имя по правилу пакета не
+ * является достаточным основанием ни для чего, а латинизация необратима.
+ * Поэтому `PartySignals` несёт документ, а не набор отпечатков «похожести».
  */
 export const LINKAGE_SIGNAL_KINDS = ['account', 'device', 'network_address', 'phone'] as const;
 export type LinkageSignalKind = (typeof LINKAGE_SIGNAL_KINDS)[number];
 
 export interface PartySignals {
   readonly partyId: string;
+  /**
+   * Документ стороны. Поле обязательное: сигналы без личности сравнивать нельзя —
+   * получится прежнее поведение, где одно лицо неотличимо от двух номиналов.
+   */
+  readonly identity: IdentityDocument;
   readonly accounts: readonly AccountFingerprint[];
   readonly devices: readonly DeviceFingerprint[];
   readonly networkAddresses: readonly NetworkAddressFingerprint[];
@@ -45,6 +62,12 @@ export interface PartyLink {
   readonly shared: readonly SharedSignal[];
   /** Родство заявлено сторонами и подтверждено документами. */
   readonly declared: boolean;
+  /**
+   * Ключи личности сторон совпали — это одно лицо, а не две связанные стороны.
+   * Сам ключ в отчёт не переносится: он содержит отпечаток номера документа, а в
+   * `PartyLink` сегодня попадают только короткие метки (`fingerprintLabel`).
+   */
+  readonly sameIdentity: boolean;
 }
 
 export interface LinkageFacts {
@@ -94,6 +117,7 @@ export function findPartyLinks(facts: LinkageFacts): readonly PartyLink[] {
           partyIds: Object.freeze([left.partyId, right.partyId]) as readonly [string, string],
           shared: Object.freeze(shared),
           declared: declared.has(pairKey(left.partyId, right.partyId)),
+          sameIdentity: identityKey(left.identity) === identityKey(right.identity),
         }),
       );
     }
@@ -114,7 +138,11 @@ export function assessLinkage(
   now: Instant,
 ): LinkageAssessment {
   const links = findPartyLinks(facts);
-  const undeclared = links.filter((link) => !link.declared);
+  // Совпадение ключа отсекается **до** фильтра заявленного родства: родственником
+  // самому себе быть нельзя, и требовать документ о родстве с собой — абсурд,
+  // который на практике превратился бы в отказ (`FUNCTIONAL.md` §2.1).
+  const distinctPersons = links.filter((link) => !link.sameIdentity);
+  const undeclared = distinctPersons.filter((link) => !link.declared);
   const reasons: ReasonKey[] = [];
   let outcome: DetectorOutcome = 'clear';
   for (const link of undeclared) {
@@ -125,7 +153,10 @@ export function assessLinkage(
       outcome = signal.kind === 'account' ? 'hold' : outcome === 'hold' ? 'hold' : 'review';
     }
   }
-  if (links.length > undeclared.length) reasons.push(REASON_KEYS.linkageDeclaredRelationship);
+  if (links.length > distinctPersons.length) reasons.push(REASON_KEYS.linkageSameIdentity);
+  if (distinctPersons.length > undeclared.length) {
+    reasons.push(REASON_KEYS.linkageDeclaredRelationship);
+  }
   if (reasons.length === 0) reasons.push(REASON_KEYS.linkageNone);
   return Object.freeze({
     ...decision<DetectorOutcome>(outcome, policy, now, reasons, facts.evidence),
