@@ -1,0 +1,66 @@
+/*
+ * Токены оформления. Один источник значений на весь интерфейс.
+ *
+ * Правила, из которых собраны значения:
+ * - контраст текста к фону не ниже 4.5:1, у элементов управления и индикаторов
+ *   не ниже 3:1 (SCREENS.md §7.6);
+ * - статус никогда не передаётся одним цветом: к цвету обязателен текст и форма
+ *   индикатора, поэтому у каждого статуса здесь есть и цвет, и своя фигура;
+ * - шкалы отступов и кегля кратны 4, чтобы блоки собирались без «почти
+ *   одинаковых» промежутков.
+ */
+:root {
+  color-scheme: light;
+
+  --c-bg: #f4f6f8;
+  --c-surface: #ffffff;
+  --c-surface-sunken: #eef1f4;
+  --c-ink: #14202b;
+  --c-ink-muted: #4a5a68;
+  --c-ink-faint: #586878;
+  --c-line: #d3dae0;
+  --c-line-strong: #a9b5bf;
+
+  --c-accent: #0b4f8a;
+  --c-accent-ink: #ffffff;
+  --c-accent-soft: #e6eff7;
+
+  --c-ok: #1c6b45;
+  --c-ok-soft: #e4f2ea;
+  --c-warn: #8a5200;
+  --c-warn-soft: #fbf0dd;
+  --c-danger: #a11d1d;
+  --c-danger-soft: #fbe9e9;
+  --c-info: #1f4f75;
+  --c-info-soft: #e7f0f7;
+  --c-wait: #4a5a68;
+  --c-wait-soft: #eceff2;
+
+  --focus: #0b4f8a;
+
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+
+  --r-1: 4px;
+  --r-2: 8px;
+  --r-3: 14px;
+
+  --t-xs: 0.75rem;
+  --t-sm: 0.875rem;
+  --t-md: 1rem;
+  --t-lg: 1.125rem;
+  --t-xl: 1.375rem;
+  --t-2xl: 1.75rem;
+  --t-3xl: 2.25rem;
+
+  --measure: 68ch;
+  --tap: 44px;
+
+  --font-sans: 'DejaVu Sans', 'Noto Sans', 'Noto Sans Georgian', system-ui, sans-serif;
+  --font-mono: 'DejaVu Sans Mono', ui-monospace, monospace;
+}

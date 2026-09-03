@@ -1,0 +1,1265 @@
+@import './tokens.css';
+
+/*
+ * Вёрстка. Два правила держат три языка:
+ * 1) ни одной фиксированной ширины у элемента с текстом — кнопки, чипы и бэджи
+ *    растут по контенту и переносятся на две строки (грузинский шире русского);
+ * 2) только логические свойства (inline/block), физических нет ни одного —
+ *    это задел под правостороннее письмо.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-family: var(--font-sans);
+  font-size: 100%;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-ink);
+  text-align: start;
+}
+
+h1,
+h2,
+h3 {
+  margin-block: 0;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--t-2xl);
+}
+
+h2 {
+  font-size: var(--t-lg);
+}
+
+h3 {
+  font-size: var(--t-md);
+}
+
+p {
+  margin-block: 0;
+}
+
+ul,
+ol {
+  margin-block: 0;
+  padding-inline-start: 0;
+  list-style: none;
+}
+
+a {
+  color: var(--c-accent);
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r-1);
+}
+
+/* ----------------------------------------------------------------- каркас */
+
+.page {
+  min-block-size: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.appbar {
+  background: var(--c-surface);
+  border-block-end: 1px solid var(--c-line);
+}
+
+.appbar__inner,
+.shell,
+.shell--wide {
+  margin-inline: auto;
+  padding-inline: var(--s-4);
+  inline-size: 100%;
+}
+
+.appbar__inner {
+  max-inline-size: 1180px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: center;
+  justify-content: space-between;
+  padding-block: var(--s-3);
+}
+
+.appbar__brand {
+  font-weight: 700;
+  font-size: var(--t-md);
+  letter-spacing: 0.02em;
+  color: var(--c-ink);
+  text-decoration: none;
+}
+
+.appbar__brand small {
+  display: block;
+  font-weight: 400;
+  font-size: var(--t-xs);
+  color: var(--c-ink-faint);
+  letter-spacing: 0;
+}
+
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+
+.nav__link {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--tap);
+  padding-inline: var(--s-3);
+  padding-block: var(--s-2);
+  border-radius: var(--r-2);
+  color: var(--c-ink-muted);
+  text-decoration: none;
+  font-size: var(--t-sm);
+}
+
+.nav__link:hover {
+  background: var(--c-surface-sunken);
+}
+
+.nav__link[aria-current='page'] {
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-weight: 600;
+}
+
+.langs {
+  display: flex;
+  gap: var(--s-1);
+  align-items: center;
+}
+
+.langs__item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: var(--tap);
+  min-block-size: var(--tap);
+  padding-inline: var(--s-2);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-2);
+  background: var(--c-surface);
+  color: var(--c-ink-muted);
+  text-decoration: none;
+  font-size: var(--t-sm);
+}
+
+.langs__item[aria-current='true'] {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-weight: 700;
+}
+
+.main {
+  flex: 1;
+  padding-block: var(--s-5) var(--s-6);
+}
+
+.shell {
+  max-inline-size: min(100%, 760px);
+}
+
+.shell--wide {
+  max-inline-size: 1180px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.stack--tight {
+  gap: var(--s-2);
+}
+
+.stack--loose {
+  gap: var(--s-5);
+}
+
+.pagehead {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.pagehead__note {
+  color: var(--c-ink-muted);
+  font-size: var(--t-sm);
+  max-inline-size: var(--measure);
+}
+
+/* ------------------------------------------------------------ поверхности */
+
+.card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-3);
+  padding: var(--s-4);
+}
+
+.card__title {
+  font-size: var(--t-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--c-ink-faint);
+  margin-block-end: var(--s-3);
+}
+
+.card--flat {
+  border-radius: var(--r-2);
+  background: var(--c-surface-sunken);
+  border-color: transparent;
+}
+
+.rule {
+  block-size: 1px;
+  background: var(--c-line);
+  border: 0;
+  margin-block: var(--s-3);
+}
+
+/* --------------------------------------------------- индикатор состояния  */
+
+/*
+ * Форма индикатора несёт тот же смысл, что цвет: круг — идёт по плану, ромб —
+ * требуется внимание, квадрат — остановлено, треугольник — предупреждение,
+ * галочка — завершено. Дальтоник различает состояния по фигуре и по тексту.
+ */
+.dot {
+  inline-size: 14px;
+  block-size: 14px;
+  flex: 0 0 auto;
+  display: inline-block;
+  margin-block-start: 5px;
+}
+
+.dot--wait {
+  border-radius: 50%;
+  background: var(--c-wait);
+}
+
+.dot--info {
+  border-radius: 50%;
+  background: var(--c-info);
+}
+
+.dot--ok {
+  background: var(--c-ok);
+  clip-path: polygon(14% 46%, 0 60%, 39% 100%, 100% 22%, 86% 8%, 39% 72%);
+}
+
+.dot--action {
+  background: var(--c-accent);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+.dot--warn {
+  background: var(--c-warn);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+
+.dot--danger {
+  background: var(--c-danger);
+  border-radius: var(--r-1);
+}
+
+/* ------------------------------------------------------------------ бэджи */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding-inline: var(--s-2);
+  padding-block: 2px;
+  border-radius: var(--r-1);
+  border: 1px solid transparent;
+  font-size: var(--t-xs);
+  font-weight: 600;
+  line-height: 1.35;
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+}
+
+.badge .dot {
+  inline-size: 10px;
+  block-size: 10px;
+  margin-block-start: 0;
+}
+
+.badge--wait {
+  background: var(--c-wait-soft);
+  color: var(--c-ink-muted);
+  border-color: var(--c-line);
+}
+
+.badge--info {
+  background: var(--c-info-soft);
+  color: var(--c-info);
+  border-color: #bcd4e6;
+}
+
+.badge--ok {
+  background: var(--c-ok-soft);
+  color: var(--c-ok);
+  border-color: #b6dcc7;
+}
+
+.badge--warn {
+  background: var(--c-warn-soft);
+  color: var(--c-warn);
+  border-color: #e5cfa4;
+}
+
+.badge--danger {
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+  border-color: #e8bcbc;
+}
+
+.badge--action {
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  border-color: #b9d2e8;
+}
+
+/* ---------------------------------------------------------------- кнопки  */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-block-size: var(--tap);
+  padding-inline: var(--s-4);
+  padding-block: var(--s-2);
+  border-radius: var(--r-2);
+  border: 1px solid var(--c-accent);
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+  font: inherit;
+  font-weight: 600;
+  font-size: var(--t-sm);
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  /* Ширина по контенту, перенос на две строки: грузинская метка длиннее. */
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+}
+
+.btn--secondary {
+  background: var(--c-surface);
+  color: var(--c-accent);
+}
+
+.btn--ghost {
+  background: transparent;
+  border-color: var(--c-line-strong);
+  color: var(--c-ink-muted);
+}
+
+/*
+ * Недоступное действие — не `disabled`: скринридер его пропускает, а причина
+ * обязана быть прочитана (SCREENS.md §7.6). Поэтому это блок с текстом причины,
+ * а не серая кнопка.
+ */
+.blocked {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-3);
+  border: 1px dashed var(--c-line-strong);
+  border-radius: var(--r-2);
+  background: var(--c-surface-sunken);
+}
+
+.blocked__label {
+  font-weight: 600;
+  font-size: var(--t-sm);
+  color: var(--c-ink-muted);
+}
+
+.blocked__reason {
+  font-size: var(--t-sm);
+  color: var(--c-ink-muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+/* ---------------------------------------------------- блок «где деньги»  */
+
+.where {
+  border-inline-start: 6px solid var(--c-line-strong);
+}
+
+.where--ok {
+  border-inline-start-color: var(--c-ok);
+}
+
+.where--action {
+  border-inline-start-color: var(--c-accent);
+}
+
+.where--warn {
+  border-inline-start-color: var(--c-warn);
+}
+
+.where--danger {
+  border-inline-start-color: var(--c-danger);
+}
+
+.where--wait {
+  border-inline-start-color: var(--c-line-strong);
+}
+
+.where__head {
+  display: flex;
+  gap: var(--s-3);
+  align-items: flex-start;
+}
+
+.where__title {
+  font-size: var(--t-lg);
+  font-weight: 700;
+}
+
+.where__body {
+  color: var(--c-ink-muted);
+  font-size: var(--t-sm);
+  margin-block-start: var(--s-2);
+  max-inline-size: var(--measure);
+}
+
+.where__amount {
+  margin-block-start: var(--s-3);
+}
+
+/* ------------------------------------------------------------- суммы (C-04) */
+
+.amount {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  /* Сумма не обрезается никогда: колонка растёт, обрезаются соседи. */
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
+/*
+ * Крупная сумма сжимается по ширине экрана, а не обрезается и не переносится.
+ *
+ * Мерой оказался русский, а не грузинский: русская локаль не печатает символ
+ * лари вовсе — вместо «436 231,00 ₾» она даёт «436 231,00 GEL», и на 360 px
+ * это на три знака шире грузинского. Строка с `nowrap` раздвигала колонку
+ * сетки и уводила весь экран за край. Подменять код валюты своим символом
+ * нельзя — это правило локали, а не дефект, — поэтому сжимается кегль.
+ */
+.amount--hero {
+  font-size: clamp(1.5rem, 6.5vw, var(--t-3xl));
+  line-height: 1.15;
+}
+
+.amount--lead {
+  font-size: clamp(1.0625rem, 4.5vw, var(--t-xl));
+}
+
+.amount--muted {
+  font-weight: 600;
+  color: var(--c-ink-muted);
+}
+
+/*
+ * Недоступная сумма приглушается, но не зачёркивается: зачёркнутая сумма денег
+ * читается как «этих денег больше нет», а они есть — просто ими сейчас нельзя
+ * распорядиться. Что именно с ними происходит, говорит текст рядом.
+ */
+.amount--unavailable {
+  color: var(--c-ink-muted);
+}
+
+.amount-label {
+  display: block;
+  font-size: var(--t-xs);
+  font-weight: 400;
+  color: var(--c-ink-faint);
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: normal;
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.row__key {
+  color: var(--c-ink-muted);
+  font-size: var(--t-sm);
+  /* Текстовая ячейка уступает место сумме, а не наоборот. */
+  min-inline-size: 0;
+  flex: 1 1 12ch;
+}
+
+/*
+ * Значение строки уступает место, а не выталкивает страницу.
+ *
+ * Здесь ломался грузинский: адрес объекта — имя собственное, оно не переводится
+ * и на всех трёх языках остаётся грузинским, а `flex: 0 0 auto` не давал ему
+ * перенестись. На 360 px строка уезжала на 43 px за экран. Сумма при этом не
+ * страдает: у неё собственный `white-space: nowrap`, и переноситься ей нечем —
+ * она короче любого адреса.
+ */
+.row__value {
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+.row--total {
+  padding-block-start: var(--s-2);
+  border-block-start: 1px solid var(--c-line);
+  font-weight: 700;
+}
+
+.skeleton {
+  display: inline-block;
+  min-inline-size: 8ch;
+  block-size: 1em;
+  border-radius: var(--r-1);
+  background: linear-gradient(90deg, var(--c-surface-sunken), #dfe4e9, var(--c-surface-sunken));
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* ------------------------------------------------------------ срок (C-03) */
+
+.deadline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.deadline__primary {
+  font-weight: 700;
+  font-size: var(--t-md);
+}
+
+.deadline__secondary,
+.deadline__relative {
+  font-size: var(--t-sm);
+  color: var(--c-ink-muted);
+}
+
+.deadline__consequence {
+  margin-block-start: var(--s-2);
+  padding-block-start: var(--s-2);
+  border-block-start: 1px solid var(--c-line);
+  font-size: var(--t-sm);
+  color: var(--c-ink);
+  max-inline-size: var(--measure);
+}
+
+.deadline--urgent .deadline__primary {
+  color: var(--c-danger);
+}
+
+.deadline--paused .deadline__primary {
+  color: var(--c-warn);
+}
+
+/* ---------------------------------------------------------- лента (C-06) */
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+}
+
+.timeline__step {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: var(--s-3);
+  padding-block: var(--s-2);
+}
+
+.timeline__mark {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+.timeline__line {
+  inline-size: 2px;
+  flex: 1;
+  background: var(--c-line);
+}
+
+.timeline__label {
+  font-size: var(--t-sm);
+}
+
+.timeline__step--current .timeline__label {
+  font-weight: 700;
+}
+
+.timeline__step--future .timeline__label {
+  color: var(--c-ink-faint);
+}
+
+.timeline__meta {
+  font-size: var(--t-xs);
+  color: var(--c-ink-faint);
+}
+
+.timeline__step--branch .timeline__label {
+  color: var(--c-warn);
+}
+
+/* ------------------------------------------------------------- сравнение */
+
+.compare {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-sm);
+}
+
+.compare caption {
+  text-align: start;
+  font-weight: 600;
+  padding-block-end: var(--s-2);
+}
+
+.compare th,
+.compare td {
+  text-align: start;
+  padding-block: var(--s-2);
+  padding-inline-end: var(--s-3);
+  border-block-end: 1px solid var(--c-line);
+  vertical-align: top;
+}
+
+.compare td:last-child,
+.compare th:last-child {
+  padding-inline-end: 0;
+}
+
+.compare__mismatch {
+  color: var(--c-danger);
+  font-weight: 700;
+}
+
+/* --------------------------------------------------------------- баннеры */
+
+.banner {
+  display: flex;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-2);
+  border: 1px solid;
+  align-items: flex-start;
+}
+
+.banner--info {
+  background: var(--c-info-soft);
+  border-color: #bcd4e6;
+}
+
+.banner--warn {
+  background: var(--c-warn-soft);
+  border-color: #e5cfa4;
+}
+
+.banner--critical {
+  background: var(--c-danger-soft);
+  border-color: #e8bcbc;
+}
+
+.banner__title {
+  font-weight: 700;
+  font-size: var(--t-sm);
+}
+
+.banner__body {
+  font-size: var(--t-sm);
+  color: var(--c-ink-muted);
+  max-inline-size: var(--measure);
+}
+
+/* ------------------------------------------------------ блок безопасности */
+
+.security {
+  background: var(--c-surface-sunken);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-3);
+  padding: var(--s-4);
+}
+
+.security__title {
+  font-size: var(--t-sm);
+  font-weight: 700;
+  margin-block-end: var(--s-2);
+}
+
+.security__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  font-size: var(--t-sm);
+  color: var(--c-ink-muted);
+  max-inline-size: var(--measure);
+}
+
+.security__item {
+  display: flex;
+  gap: var(--s-2);
+  align-items: flex-start;
+}
+
+.footer {
+  border-block-start: 1px solid var(--c-line);
+  background: var(--c-surface);
+  padding-block: var(--s-4) var(--s-6);
+}
+
+.footer__inner {
+  margin-inline: auto;
+  max-inline-size: 1180px;
+  padding-inline: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.footer__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  font-size: var(--t-sm);
+}
+
+/* ---------------------------------------------------------- список сделок */
+
+.deal-list {
+  display: grid;
+  gap: var(--s-3);
+}
+
+/*
+ * Список сделок — экран сканирования, а не чтения: строки сравнивают между
+ * собой, а не читают сверху вниз. Поэтому на широком экране карточка
+ * разворачивается в четыре колонки — объект, положение денег, сумма, действие,
+ * — и взгляд идёт по столбцу, а не прыгает по карточкам.
+ */
+.deal-card {
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1fr);
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-3);
+  padding: var(--s-4);
+}
+
+@media (min-width: 860px) {
+  .deal-card {
+    grid-template-columns: minmax(0, 2.4fr) minmax(0, 1.6fr) auto auto;
+    align-items: start;
+    column-gap: var(--s-5);
+  }
+}
+
+.deal-card__main,
+.deal-card__status,
+.deal-card__money {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  min-inline-size: 0;
+}
+
+.deal-card__money {
+  align-items: flex-start;
+}
+
+@media (min-width: 860px) {
+  .deal-card__money {
+    align-items: flex-end;
+  }
+
+  /*
+   * Подпись суммы на широком экране повторялась бы у каждой строки списка —
+   * это шум там, где колонка и так одна на всё. Для скринридера подпись
+   * остаётся: у него колонки нет.
+   */
+  .deal-card__money .amount-label {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+.deal-card__top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.deal-card__title {
+  font-size: var(--t-md);
+  font-weight: 700;
+}
+
+.deal-card__title a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.deal-card__title a:hover {
+  text-decoration: underline;
+}
+
+.deal-card__meta {
+  font-size: var(--t-xs);
+  color: var(--c-ink-faint);
+}
+
+
+
+/* ------------------------------------------------------------ мой счёт  */
+
+.split {
+  display: grid;
+  gap: var(--s-4);
+  /* `minmax(0, …)`, а не `1fr`: иначе колонка растёт до самой длинной суммы. */
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 760px) {
+  .split {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.locked-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding-block: var(--s-3);
+  border-block-end: 1px solid var(--c-line);
+}
+
+.locked-item:last-child {
+  border-block-end: 0;
+  padding-block-end: 0;
+}
+
+.record {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding-block: var(--s-3);
+  border-block-end: 1px solid var(--c-line);
+}
+
+.record__top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.record__label {
+  font-size: var(--t-sm);
+  font-weight: 600;
+}
+
+.record__meta {
+  font-size: var(--t-xs);
+  color: var(--c-ink-faint);
+}
+
+/* ---------------------------------------------------- карточка получателя */
+
+.assurance {
+  border: 2px solid var(--c-ok);
+  border-radius: var(--r-3);
+  background: var(--c-surface);
+  padding: var(--s-4);
+}
+
+.assurance--pending {
+  border-color: var(--c-line-strong);
+}
+
+.assurance--stopped {
+  border-color: var(--c-warn);
+}
+
+.assurance__hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin-block: var(--s-3);
+}
+
+.outcomes {
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 720px) {
+  .outcomes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/*
+ * Оба исхода одинаковы по весу: карточка, показывающая только хороший исход,
+ * читается как реклама (SCREENS.md §4.1).
+ */
+.outcome {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-2);
+  background: var(--c-surface-sunken);
+}
+
+.outcome__title {
+  font-size: var(--t-sm);
+  font-weight: 700;
+}
+
+.outcome__body {
+  font-size: var(--t-sm);
+  color: var(--c-ink-muted);
+}
+
+.ladder {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: stretch;
+}
+
+.ladder__step {
+  flex: 1 1 6rem;
+  padding: var(--s-2);
+  border-radius: var(--r-2);
+  border: 1px solid var(--c-line);
+  background: var(--c-surface);
+  font-size: var(--t-xs);
+  color: var(--c-ink-faint);
+}
+
+.ladder__step--done {
+  border-color: var(--c-ok);
+  background: var(--c-ok-soft);
+  color: var(--c-ok);
+}
+
+.ladder__step--current {
+  border-color: var(--c-ok);
+  background: var(--c-ok);
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.ladder__code {
+  display: block;
+  font-weight: 700;
+  font-size: var(--t-sm);
+}
+
+/* ------------------------------------------------------------- реквизиты */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding-block: var(--s-3);
+  border-block-end: 1px solid var(--c-line);
+}
+
+.field__label {
+  font-size: var(--t-xs);
+  color: var(--c-ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.field__value {
+  font-size: var(--t-md);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.field__value--mono {
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
+.field__hint {
+  font-size: var(--t-sm);
+  color: var(--c-ink-muted);
+  max-inline-size: var(--measure);
+}
+
+.locknote {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  font-size: var(--t-xs);
+  color: var(--c-ink-muted);
+  max-inline-size: var(--measure);
+}
+
+.locknote .dot {
+  inline-size: 10px;
+  block-size: 10px;
+  margin-block-start: 3px;
+}
+
+/* --------------------------------------------------------------- консоль */
+
+.ops-grid {
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1200px) {
+  .ops-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.task {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-3);
+  padding: var(--s-4);
+}
+
+.task--overdue {
+  border-color: var(--c-danger);
+  border-inline-start-width: 6px;
+}
+
+.task__top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.task__title a {
+  color: inherit;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-block-size: var(--tap);
+  padding-inline: var(--s-3);
+  border: 1px solid var(--c-line);
+  border-radius: 999px;
+  background: var(--c-surface);
+  font-size: var(--t-sm);
+  color: var(--c-ink-muted);
+  text-decoration: none;
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+}
+
+.chip[aria-current='true'] {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-weight: 600;
+}
+
+.coverage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+  align-items: baseline;
+}
+
+/*
+ * Консоль на телефоне показывает только то, ради чего руководителя будят ночью:
+ * утверждение выплаты и дежурные метрики. Остальные задачи требуют документов и
+ * второй проверки — на телефоне их не разбирают, и делать вид, что разбирают,
+ * опаснее, чем честно закрыть (`SCREENS.md` §1.3).
+ */
+.desktop-only-note {
+  display: block;
+}
+
+@media (min-width: 768px) {
+  .desktop-only-note {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .task--desktop-only,
+  .wide-only {
+    display: none;
+  }
+}
+
+/*
+ * Сенсорная цель ≥ 44 px у каждой самостоятельной ссылки.
+ *
+ * Исключение делается только для ссылок внутри предложения: там увеличение
+ * цели ломает строку, и WCAG 2.5.5 такие ссылки не считает. Заголовок карточки
+ * сделки, ссылка на сделку в списке движений и ссылки подвала самостоятельны —
+ * им цель обязательна, и на телефоне это половина всех нажатий.
+ */
+.deal-card__title a,
+.footer__links a,
+.locked-item a,
+.record a,
+.rows a,
+.task__title a,
+.breadcrumb a {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--tap);
+}
+
+/* --------------------------------------------------------- прочие мелочи */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-6) var(--s-4);
+  text-align: center;
+  align-items: center;
+  border: 1px dashed var(--c-line-strong);
+  border-radius: var(--r-3);
+  background: var(--c-surface);
+}
+
+.empty--positive {
+  border-color: var(--c-ok);
+  background: var(--c-ok-soft);
+}
+
+.muted {
+  color: var(--c-ink-muted);
+  font-size: var(--t-sm);
+  max-inline-size: var(--measure);
+}
+
+.faint {
+  color: var(--c-ink-faint);
+  font-size: var(--t-xs);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.disclosure > summary {
+  cursor: pointer;
+  min-block-size: var(--tap);
+  display: flex;
+  align-items: center;
+  font-size: var(--t-sm);
+  color: var(--c-accent);
+}
+
+.disclosure > div {
+  padding-block-start: var(--s-2);
+}
+
+.visually-hidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

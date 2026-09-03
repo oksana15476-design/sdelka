@@ -1,0 +1,140 @@
+{
+  "viewer": {
+    "partyId": "party-weiss",
+    "accountKey": "weiss",
+    "displayName": "Mark Weiss",
+    "documentCountry": "DE",
+    "deviceTimeZone": "Europe/Berlin",
+    "verificationLevel": "full",
+    "payoutHolderName": "MARK WEISS",
+    "payoutIbanMasked": "GE•• •••• •••• 4417",
+    "payoutBank": "TBC Bank",
+    "sourceAccountMasked": "DE•• •••• •••• 8821",
+    "sourceBank": "Commerzbank"
+  },
+  "counterparties": {
+    "kikvadze": {
+      "partyId": "party-kikvadze",
+      "accountKey": "kikvadze",
+      "displayName": "ნინო კიკვაძე / Nino Kikvadze"
+    },
+    "beridze": {
+      "partyId": "party-beridze",
+      "accountKey": "beridze",
+      "displayName": "გიორგი ბერიძე / Giorgi Beridze"
+    },
+    "kobalia": {
+      "partyId": "party-kobalia",
+      "accountKey": "kobalia",
+      "displayName": "თამარ კობალია / Tamar Kobalia"
+    },
+    "orbeliani": {
+      "partyId": "party-orbeliani",
+      "accountKey": "orbeliani",
+      "displayName": "Orbeliani Development LLC"
+    }
+  },
+  "properties": {
+    "vazha": {
+      "address": "ვაჟა-ფშაველას გამზირი 76ბ, ბინა 41, თბილისი",
+      "addressLatin": "76b Vazha-Pshavela Ave, apt. 41, Tbilisi",
+      "cadastral": "01.14.05.021.041",
+      "areaContract": "68.4",
+      "areaRegistry": "68.4",
+      "ownerRegistry": "ნინო კიკვაძე / Nino Kikvadze",
+      "ownerContract": "ნინო კიკვაძე / Nino Kikvadze",
+      "extractAt": "2026-08-28T09:12:00.000Z"
+    },
+    "rustaveli": {
+      "address": "რუსთაველის გამზირი 12, ბინა 7, თბილისი",
+      "addressLatin": "12 Rustaveli Ave, apt. 7, Tbilisi",
+      "cadastral": "01.15.02.004.007",
+      "areaContract": "92.0",
+      "areaRegistry": "89.6",
+      "ownerRegistry": "გიორგი ბერიძე / Giorgi Beridze",
+      "ownerContract": "გიორგი ბერიძე / Giorgi Beridze",
+      "extractAt": "2026-08-30T11:40:00.000Z"
+    },
+    "batumi": {
+      "address": "ჭავჭავაძის ქუჩა 31, ბინა 118, ბათუმი",
+      "addressLatin": "31 Chavchavadze St, apt. 118, Batumi",
+      "cadastral": "05.32.11.108.118",
+      "areaContract": "54.2",
+      "areaRegistry": "54.2",
+      "ownerRegistry": "თამარ კობალია / Tamar Kobalia",
+      "ownerContract": "თამარ კობალია / Tamar Kobalia",
+      "extractAt": "2026-09-01T08:05:00.000Z"
+    },
+    "saburtalo": {
+      "address": "კოსტავას ქუჩა 8, ბინა 25, თბილისი",
+      "addressLatin": "8 Kostava St, apt. 25, Tbilisi",
+      "cadastral": "01.10.14.002.025",
+      "areaContract": "71.5",
+      "areaRegistry": "71.5",
+      "ownerRegistry": "Mark Weiss",
+      "ownerContract": "Mark Weiss",
+      "extractAt": "2026-08-29T14:20:00.000Z"
+    },
+    "mtatsminda": {
+      "address": "მთაწმინდის ქუჩა 5, ბინა 12, თბილისი",
+      "addressLatin": "5 Mtatsminda St, apt. 12, Tbilisi",
+      "cadastral": "01.15.06.011.012",
+      "areaContract": "83.7",
+      "areaRegistry": "83.7",
+      "ownerRegistry": "ნინო კიკვაძე / Nino Kikvadze",
+      "ownerContract": "ნინო კიკვაძე / Nino Kikvadze",
+      "extractAt": "2026-08-27T10:15:00.000Z"
+    },
+    "chugureti": {
+      "address": "მარჯანიშვილის ქუჩა 14, ბინა 3, თბილისი",
+      "addressLatin": "14 Marjanishvili St, apt. 3, Tbilisi",
+      "cadastral": "01.17.03.045.003",
+      "areaContract": "47.9",
+      "areaRegistry": "47.9",
+      "ownerRegistry": "გიორგი ბერიძე / Giorgi Beridze",
+      "ownerContract": "გიორგი ბერიძე / Giorgi Beridze",
+      "extractAt": "2026-08-26T13:00:00.000Z"
+    },
+    "gldani": {
+      "address": "ხიზანიშვილის ქუჩა 40, ბინა 88, თბილისი",
+      "addressLatin": "40 Khizanishvili St, apt. 88, Tbilisi",
+      "cadastral": "01.11.09.077.088",
+      "areaContract": "62.3",
+      "areaRegistry": "62.3",
+      "ownerRegistry": "თამარ კობალია / Tamar Kobalia",
+      "ownerContract": "თამარ კობალია / Tamar Kobalia",
+      "extractAt": "2026-08-31T09:40:00.000Z"
+    },
+    "gonio": {
+      "address": "აღმაშენებლის ქუჩა 2, ბინა 51, გონიო",
+      "addressLatin": "2 Aghmashenebeli St, apt. 51, Gonio",
+      "cadastral": "05.36.02.019.051",
+      "areaContract": "39.5",
+      "areaRegistry": "39.5",
+      "ownerRegistry": "თამარ კობალია / Tamar Kobalia",
+      "ownerContract": "თამარ კობალია / Tamar Kobalia",
+      "extractAt": "2026-09-02T07:30:00.000Z"
+    },
+    "vera": {
+      "address": "კიაჩელის ქუჩა 9, ბინა 4, თბილისი",
+      "addressLatin": "9 Kiacheli St, apt. 4, Tbilisi",
+      "cadastral": "01.15.01.008.004",
+      "areaContract": "58.1",
+      "areaRegistry": "58.1",
+      "ownerRegistry": "ნინო კიკვაძე / Nino Kikvadze",
+      "ownerContract": "ნინო კიკვაძე / Nino Kikvadze",
+      "extractAt": "2026-08-25T16:20:00.000Z"
+    }
+  },
+  "bank": {
+    "custodian": "Bank of Georgia",
+    "payinReference": "SD-7K42-2026",
+    "payinIban": "GE29 BG00 0000 0119 4711 00"
+  },
+  "operators": {
+    "one": "op-1",
+    "two": "op-2",
+    "approverOne": "approver-1",
+    "approverTwo": "approver-2"
+  }
+}
