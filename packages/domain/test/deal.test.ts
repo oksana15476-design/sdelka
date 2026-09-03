@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type ConditionAct,
   type DealContext,
   type DealEvent,
   type DealState,
@@ -11,9 +12,14 @@ import {
   initialDealState,
   reduceDeal,
 } from '../src/index';
+import { CONDITION_ACT, NOW } from './support/facts';
 
-function context(trancheStatuses: readonly TrancheStatus[] = [], preparedBy: string | null = null): DealContext {
-  return { dealId: 'deal-1', facts: { trancheStatuses, preparedBy } };
+function context(
+  trancheStatuses: readonly TrancheStatus[] = [],
+  preparedBy: string | null = null,
+  conditionAct: ConditionAct | null = CONDITION_ACT,
+): DealContext {
+  return { dealId: 'deal-1', now: NOW, facts: { trancheStatuses, preparedBy, conditionAct } };
 }
 
 function step(state: DealState, event: DealEvent, ctx: DealContext = context()): DealState {

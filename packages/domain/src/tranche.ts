@@ -1,4 +1,5 @@
 import type { CurrencyCode, Money } from '@sdelka/money';
+import { type ConditionAct, conditionActsEqual } from './condition-act';
 import { type GuardId, type GuardInput, type TrancheFacts, evaluateGuard } from './guards';
 import { payoutIdempotencyKey } from './ids';
 import {
@@ -12,7 +13,15 @@ import {
 } from './instant';
 import type { Intent, LedgerTemplate } from './intents';
 import { RELEASE_CONDITIONS } from './release-condition';
-import { type Rejection, type Result, RejectionCode, failure, ok, rejection } from './result';
+import {
+  type Rejection,
+  type Result,
+  DomainError,
+  RejectionCode,
+  failure,
+  ok,
+  rejection,
+} from './result';
 import type { PayoutOutcome, TrancheEvent, TrancheEventType } from './tranche-events';
 
 /** Состояния транша — STATE-MACHINES.md §1.1. */
@@ -53,12 +62,19 @@ export function isTerminalTrancheStatus(status: TrancheStatus): status is Termin
  * эскалация, он не двигается. Повторный `payout_result(unknown)` отодвигает
  * дедлайн, и если бы возраст считался по дедлайну, застрявшая выплата выглядела
  * бы вечно свежей и никогда не попадала в эскалацию.
+ *
+ * `conditionAct` — акт получателя, под которым транш принял деньги (CORE.md
+ * Ф13). Он лежит **в состоянии**, а не только в фактах: факты приходят снаружи
+ * на каждый вызов, и без записанной в состоянии привязки условие у транша с
+ * деньгами можно было бы подменить, просто передав другой акт.
  */
 export type TrancheState =
   | {
       readonly status: NonTerminalTrancheStatus;
       readonly deadline: Deadline;
       readonly enteredAt: Instant;
+      /** `null` допустим только в `pending`: до выдачи инструкций денег нет. */
+      readonly conditionAct: ConditionAct | null;
     }
   | { readonly status: TerminalTrancheStatus };
 
@@ -66,8 +82,15 @@ export function nonTerminalTrancheState(
   status: NonTerminalTrancheStatus,
   at: Deadline,
   enteredAt: Instant,
+  conditionAct: ConditionAct | null,
 ): TrancheState {
-  return Object.freeze({ status, deadline: at, enteredAt });
+  if (status !== 'pending' && conditionAct === null) {
+    // Состояние после `pending` без акта собрать нельзя: приём средств
+    // открывается только актом получателя (CORE.md Ф13). Это ошибка сборки
+    // состояния, а не отказ автомата, поэтому исключение, а не Rejection.
+    throw new DomainError(RejectionCode.conditionActMissing, status);
+  }
+  return Object.freeze({ status, deadline: at, enteredAt, conditionAct });
 }
 
 export function terminalTrancheState(status: TerminalTrancheStatus): TrancheState {
@@ -201,7 +224,10 @@ const EVIDENCE_GUARDS: readonly GuardId[] = [
  * в состояние, не защищает состояние (§1.4, §4).
  */
 export const TRANCHE_TRANSITIONS: readonly TrancheTransition[] = Object.freeze([
-  transition('pending', 'instructions_issued', 'collecting'),
+  // Ф13: приём средств открывается только актом получателя об условии. Без
+  // guard'а деньги принимались бы раньше, чем условие определено, и у
+  // отложенного платежа не было бы основания.
+  transition('pending', 'instructions_issued', 'collecting', ['g_condition_agreed']),
 
   transition('collecting', 'funds_received', 'collected', ['g_amount_sufficient', 'g_payer_matches']),
   // Платёж третьего лица: деньги не зачисляются на сделку, разбор комплаенсом.
@@ -403,6 +429,50 @@ export function reduceTranche(
     }
   }
 
+  const previousEnteredAt: Instant = 'enteredAt' in state ? state.enteredAt : context.now;
+  const input: GuardInput = { facts: context.facts, event, now: context.now };
+  const boundAct = boundConditionAct(state);
+
+  // Изменение условия — не переход, а перепривязка акта, поэтому оно разбирается
+  // до таблицы переходов: состояние, дедлайн и время входа остаются теми же.
+  // После внесения средств это единственный путь изменить условие, и он требует
+  // новой редакции, принятой обеими сторонами (CORE.md Ф13, E11-4).
+  if (event.type === 'condition_act_amended' && 'deadline' in state) {
+    const amendmentGuards: readonly GuardId[] = [
+      'g_condition_agreed',
+      'g_amendment_accepted_by_both',
+    ];
+    const failed = amendmentGuards.filter((guard) => !evaluateGuard(guard, input));
+    if (failed.length > 0) {
+      return failure(rejection(RejectionCode.guardFailed, failed, { status: state.status }));
+    }
+    return ok({
+      state: nonTerminalTrancheState(state.status, state.deadline, state.enteredAt, event.act),
+      intents: Object.freeze([]),
+    });
+  }
+
+  // Подмена акта у транша, где деньги уже приняты, невозможна: акт, записанный
+  // в состоянии, обязан совпадать с актом в фактах. Иначе условие
+  // переопределяется молча — тем, что приложение передало другой акт.
+  //
+  // Отказ распространяется на все события, включая `deadline_reached`. Это
+  // намеренно: расхождение означает, что данные о транше несогласованы, а
+  // двигать по ним деньги — включая возврат — хуже, чем остановиться. Отказ
+  // виден, потому что фоновая задача по дедлайну будет падать на нём, а не
+  // тихо удерживать средства.
+  if (boundAct !== null) {
+    const current = context.facts.conditionAct;
+    if (current === null || !conditionActsEqual(boundAct, current)) {
+      return failure(
+        rejection(RejectionCode.conditionActSubstituted, [], {
+          status: state.status,
+          event: event.type,
+        }),
+      );
+    }
+  }
+
   const outcome = eventOutcome(event);
   const candidates = TRANCHE_TRANSITIONS.filter(
     (item) =>
@@ -417,8 +487,6 @@ export function reduceTranche(
     );
   }
 
-  const previousEnteredAt: Instant = 'enteredAt' in state ? state.enteredAt : context.now;
-  const input: GuardInput = { facts: context.facts, event, now: context.now };
   let firstFailure: readonly GuardId[] = [];
   for (const candidate of candidates) {
     const failed = matches(candidate, input);
@@ -440,8 +508,12 @@ export function reduceTranche(
     // неответ банка обнулял бы возраст и застрявшая выплата никогда не попадала
     // бы в эскалацию (STATE-MACHINES.md §5).
     const enteredAt = nextStatus === state.status ? previousEnteredAt : context.now;
+    // Акт привязывается к траншу на выходе из `pending` — в тот момент, когда
+    // открывается приём средств, и ровно тот, который прошёл `g_condition_agreed`.
+    // Дальше он переносится без изменений: сменить его может только амендмент.
+    const conditionAct = boundAct ?? context.facts.conditionAct;
     return ok({
-      state: nonTerminalTrancheState(nextStatus, deadline(at), enteredAt),
+      state: nonTerminalTrancheState(nextStatus, deadline(at), enteredAt, conditionAct),
       intents: Object.freeze(intents),
     });
   }
@@ -455,5 +527,10 @@ export function reduceTranche(
 }
 
 export function initialTrancheState(now: Instant, policy: DeadlinePolicy): TrancheState {
-  return nonTerminalTrancheState('pending', deadline(plus(now, policy.pending)), now);
+  return nonTerminalTrancheState('pending', deadline(plus(now, policy.pending)), now, null);
+}
+
+/** Акт, под которым транш принял деньги. `null` — денег ещё не принимали. */
+export function boundConditionAct(state: TrancheState): ConditionAct | null {
+  return 'conditionAct' in state ? state.conditionAct : null;
 }

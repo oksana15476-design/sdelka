@@ -6,6 +6,7 @@ import {
   compare,
   convertAtRate,
 } from '@sdelka/money';
+import { type ConditionAct, isConditionActValid } from './condition-act';
 import { type Instant, HOUR } from './instant';
 import type { TrancheEvent } from './tranche-events';
 
@@ -27,10 +28,18 @@ export const GUARD_IDS = [
   'g_no_active_payout',
   'g_coverage_ok',
   'g_source_account_known',
+  /**
+   * Акт получателя об условии совершён — CORE.md Ф13. Стоит на **входе в приём
+   * средств**: без него деньги принимаются раньше, чем получатель определил
+   * обстоятельство, и у отложенного платежа нет основания.
+   */
+  'g_condition_agreed',
   /** введено кодом: §1.4 «release_blocked → release_pending on approval_added ∧ расхождение снято» */
   'g_mismatch_resolved',
   /** введено кодом: §1.4 «write_off_approved(два разных пользователя)» */
   'g_write_off_approvers_distinct',
+  /** введено кодом (E11-4): новую редакцию условия приняли обе стороны */
+  'g_amendment_accepted_by_both',
 ] as const;
 
 export type GuardId = (typeof GUARD_IDS)[number];
@@ -110,6 +119,17 @@ export interface TrancheFacts {
   readonly collectedAmount: Money<CurrencyCode> | null;
   /** Ключ плательщика-покупателя, с которым сверяется отправитель платежа. */
   readonly buyerPayerKey: string;
+  /**
+   * Ключ стороны-покупателя. Это не то же, что `buyerPayerKey`: тот сверяется с
+   * именем отправителя платежа, а этот отвечает на вопрос «кто из сторон
+   * принял редакцию условия» (Ф13, E11-4).
+   */
+  readonly buyerPartyId: string;
+  /**
+   * Акт получателя об условии — порождающий акт (CORE.md Ф13). `null` означает,
+   * что акта нет, и приём средств не открывается: отказ закрытый.
+   */
+  readonly conditionAct: ConditionAct | null;
   readonly evidenceBundleId: string | null;
   readonly statementFields: StatementFields;
   readonly registryOwnerIsBuyer: boolean;
@@ -142,21 +162,15 @@ export interface GuardInput {
 /**
  * Ступень по сумме, уже приведённой к валюте порогов.
  *
- * `boundaryBelongsToNextTier` — та самая «более строгая ступень» из §4.3.1. Для
- * суммы в валюте порогов граница включительная, как и была. Для пересчитанной
- * суммы граница отдаётся верхней ступени: пересчёт неточен, и на границе должно
- * получаться больше подписей, а не меньше.
+ * Сравнение одно для всех сумм — и для изначально выраженных в лари, и для
+ * пересчитанных (FUNCTIONAL.md §4.3.1). Округление вверх применяется только при
+ * пересчёте суммы, а не при выборе ступени: иначе 30 000 лари и 12 000 долларов
+ * по курсу 2,50 — равные до копейки суммы — требуют разного числа подписей, и
+ * эту асимметрию невозможно объяснить оператору.
  */
-function approvalsForTier(
-  policy: ApprovalPolicy,
-  minor: bigint,
-  boundaryBelongsToNextTier: boolean,
-): number | null {
+function approvalsForTier(policy: ApprovalPolicy, minor: bigint): number | null {
   for (const tier of policy.tiers) {
-    if (tier.upToMinor === null) {
-      return tier.requiredApprovals;
-    }
-    if (boundaryBelongsToNextTier ? minor < tier.upToMinor : minor <= tier.upToMinor) {
+    if (tier.upToMinor === null || minor <= tier.upToMinor) {
       return tier.requiredApprovals;
     }
   }
@@ -167,7 +181,9 @@ function approvalsForTier(
  * Сколько утверждений нужно на сумму — FUNCTIONAL.md §3.5 и §4.3.1.
  *
  * Пороги заданы в лари. Сумма в другой валюте пересчитывается по официальному
- * курсу на дату создания транша и округляется вверх — к более строгой ступени.
+ * курсу на дату создания транша с округлением вверх до минорной единицы — это
+ * защита от погрешности курса, а не выбор более строгой ступени. Ступень дальше
+ * выбирается тем же сравнением, что и для суммы, изначально выраженной в лари.
  *
  * `null` означает «утверждений не набрать» и всегда читается как отказ:
  * сумма выше потолка пилота, курса на дату нет, курс не той пары или не на дату
@@ -183,7 +199,7 @@ export function requiredApprovals(
   createdOn: IsoDate,
 ): number | null {
   if (amount.currency === policy.currency) {
-    return approvalsForTier(policy, amount.minor, false);
+    return approvalsForTier(policy, amount.minor);
   }
   if (officialRate === null) {
     return null;
@@ -200,7 +216,7 @@ export function requiredApprovals(
     return null;
   }
   const converted = convertAtRate(amount, policy.currency, officialRate.rate, 'ceil');
-  return approvalsForTier(policy, converted.minor, true);
+  return approvalsForTier(policy, converted.minor);
 }
 
 function distinctApprovers(facts: TrancheFacts): number {
@@ -211,6 +227,18 @@ function distinctApprovers(facts: TrancheFacts): number {
     }
   }
   return approvers.size;
+}
+
+/**
+ * Акт, о котором идёт речь в этой проверке: у события изменения условия — новая
+ * редакция из события, во всех остальных случаях — акт из фактов транша.
+ * Одна проверка пригодности на оба случая: правило «акт обязан быть годным»
+ * не должно существовать в двух редакциях.
+ */
+function effectiveConditionAct(input: GuardInput): ConditionAct | null {
+  return input.event.type === 'condition_act_amended'
+    ? input.event.act
+    : input.facts.conditionAct;
 }
 
 export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> = Object.freeze({
@@ -262,6 +290,17 @@ export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> =
   g_no_active_payout: ({ facts }) => facts.activePayouts === 0,
   g_coverage_ok: ({ facts }) => facts.coverageOk,
   g_source_account_known: ({ facts }) => facts.sourceAccountKnown,
+  g_condition_agreed: (input) => isConditionActValid(effectiveConditionAct(input), input.now),
+  g_amendment_accepted_by_both: ({ facts, event }) => {
+    if (event.type !== 'condition_act_amended') return false;
+    // «Обе стороны» — это покупатель и получатель, а не два любых подписанта:
+    // иначе условие переопределяется в одностороннем порядке двумя учётными
+    // записями одной стороны (CORE.md Ф13).
+    const accepted = new Set(event.acceptedBy);
+    const recipient = event.act.recipientPartyId;
+    if (recipient === facts.buyerPartyId) return false;
+    return accepted.has(facts.buyerPartyId) && accepted.has(recipient);
+  },
   g_mismatch_resolved: ({ facts }) => facts.mismatchResolved,
   g_write_off_approvers_distinct: ({ facts, event }) => {
     if (event.type !== 'write_off_approved') return false;

@@ -1,5 +1,6 @@
 import { type CurrencyCode, type IsoDate, type Money, isoDate, money } from '@sdelka/money';
 import {
+  type ConditionAct,
   type DeadlinePolicy,
   type Instant,
   type TrancheContext,
@@ -15,6 +16,20 @@ export const DEAL_ID = 'deal-1';
 export const TRANCHE_ID = 'tranche-1';
 
 export const AMOUNT: Money<CurrencyCode> = money('GEL', 1_000_000n);
+
+export const BUYER_PARTY_ID = 'party-buyer-1';
+export const RECIPIENT_PARTY_ID = 'party-seller-1';
+
+/**
+ * Акт получателя об условии (CORE.md Ф13). Совершён до NOW: акт, датированный
+ * будущим, не принимается.
+ */
+export const CONDITION_ACT: ConditionAct = Object.freeze({
+  recipientPartyId: RECIPIENT_PARTY_ID,
+  agreedAt: instant(Date.UTC(2026, 8, 3, 9, 0, 0)),
+  conditionTextVersion: 'condition.registration_transfer.v1',
+  conditionType: 'registration_transfer',
+});
 
 /** Дата создания транша: к ней привязан курс пересчёта порогов (§4.3.1). */
 export const CREATED_ON: IsoDate = isoDate('2026-09-03');
@@ -33,6 +48,8 @@ export function facts(overrides: Partial<TrancheFacts> = {}): TrancheFacts {
     requiredAmount: AMOUNT,
     collectedAmount: AMOUNT,
     buyerPayerKey: 'buyer-1',
+    buyerPartyId: BUYER_PARTY_ID,
+    conditionAct: CONDITION_ACT,
     evidenceBundleId: 'evidence-1',
     statementFields: MATCHING_STATEMENT,
     registryOwnerIsBuyer: true,

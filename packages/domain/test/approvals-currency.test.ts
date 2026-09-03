@@ -42,19 +42,34 @@ describe('пороги утверждений в валюте, отличной 
     expect(approvals(money('USD', 24_000_000n), official)).toBeNull();
   });
 
-  it('rounds a boundary amount up to the stricter tier', () => {
-    // 12 000 USD по 2,50 — ровно 30 000 ₾, граница нулевой ступени. Пересчёт
-    // неточен, поэтому на границе получается больше подписей, а не меньше:
-    // в лари та же сумма дала бы ноль утверждений, в долларах — одно.
-    const atBoundary = money('USD', 1_200_000n);
-    expect(approvals(atBoundary, official)).toBe(1);
+  it('treats a boundary amount exactly as the same amount in lari', () => {
+    // 12 000 USD по 2,50 — ровно 30 000 ₾, граница нулевой ступени. Две суммы,
+    // равные до копейки, обязаны требовать одного числа подписей: асимметрия
+    // здесь читалась бы как ошибка системы и однажды была бы «починена» в
+    // неверную сторону (FUNCTIONAL.md §4.3.1).
+    expect(approvals(money('USD', 1_200_000n), official)).toBe(0);
     expect(approvals(money('GEL', 3_000_000n), null)).toBe(0);
+    // На тетри выше границы — уже следующая ступень, тоже в обеих валютах.
+    expect(approvals(money('GEL', 3_000_001n), null)).toBe(1);
+    expect(approvals(money('USD', 1_200_001n), official)).toBe(1);
+  });
+
+  it('rounds the converted amount up to the minor unit, and only that', () => {
+    // 1 200 000,4 тетри после пересчёта — это 1 200 001 тетри, а не 1 200 000:
+    // округление вверх защищает от погрешности курса. Дальше сравнение обычное.
+    const rate: OfficialRateAtCreation = {
+      ...official,
+      rate: rationalFromDecimalString('2.5000001'),
+    };
+    // 12 000 USD × 2,5000001 = 30 000,0012 ₾ → 3 000 001 тетри (вверх) → ступень 1.
+    expect(approvals(money('USD', 1_200_000n), rate)).toBe(1);
   });
 
   it('uses the official rate even where the client rate would land a tier lower', () => {
     // 11 240 USD: по клиентскому курсу 2,6686875 — 29 996,05 ₾ (нулевая
     // ступень), по официальному 2,70 — 30 348 ₾ (первая). Клиентский курс
     // содержит наш спред, то есть мы влияли бы на собственный контрольный порог.
+    // Ступень здесь меняет курс, а не направление округления ступени.
     const amount = money('USD', 1_124_000n);
     const officialRate: OfficialRateAtCreation = {
       ...official,

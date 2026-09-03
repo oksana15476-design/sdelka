@@ -18,6 +18,15 @@ importers:
         specifier: 2.1.9
         version: 2.1.9(@types/node@22.10.2)
 
+  packages/compliance:
+    dependencies:
+      '@sdelka/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@sdelka/money':
+        specifier: workspace:*
+        version: link:../money
+
   packages/domain:
     dependencies:
       '@sdelka/money':

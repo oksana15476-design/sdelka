@@ -3,15 +3,18 @@ import { describe, expect, it } from 'vitest';
 import {
   LedgerError,
   LedgerErrorCode,
+  appendEntry,
   bankNominal,
   bankOperating,
   clientAccount,
   createJournalEntry,
   credit,
   debit,
+  emptyJournal,
   fundsOwnership,
   isClientCustodyAccount,
   isClientObligationAccount,
+  isEveryTrancheCovered,
 } from '../src/index';
 
 const deal = { dealId: 'd1', trancheId: 't1' };
@@ -164,6 +167,32 @@ describe('красная линия №1: средства одной сделк
       ],
     });
     expect(entry.postings).toHaveLength(3);
+  });
+
+  /**
+   * Известная и осознанно оставленная дыра. Запись ниже переносит обеспечение
+   * с транша d1 на транш d2, не трогая ни одного обязательства: по форме она
+   * неотличима от законного вывода комиссии на операционный счёт, где кредит
+   * кастодиана тоже стоит без дебета обязательства. При построении записи её не
+   * поймать — ловит пофайловое обеспечение (`coverageByTranche`), но уже после
+   * факта. Закрывается вместе со сверкой в E7; до тех пор тест держит дыру
+   * видимой, чтобы её не сочли невозможной.
+   */
+  it('does not catch a custody re-attribution between tranches — known gap, closed in E7', () => {
+    const entry = createJournalEntry({
+      id: 'x6',
+      occurredAt: '2026-09-03T10:00:00Z',
+      kind: 'settlement',
+      memoKey: 'ledger.entry.custody_reattribution',
+      postings: [
+        debit(bankNominal('GEL'), money('GEL', 1_000n), other),
+        credit(bankNominal('GEL'), money('GEL', 1_000n), deal),
+      ],
+    });
+    expect(entry.postings).toHaveLength(2);
+    // Отчётность видит то, чего не увидело построение записи.
+    const journal = appendEntry(emptyJournal, entry);
+    expect(isEveryTrancheCovered(journal)).toBe(false);
   });
 
   it('allows returning an unidentified incoming payment', () => {

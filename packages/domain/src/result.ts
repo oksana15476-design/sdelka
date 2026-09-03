@@ -18,6 +18,10 @@ export const RejectionCode = {
   terminalState: 'domain.state.terminal',
   releaseConditionRequiresConfirmation: 'domain.release_condition.requires_confirmation',
   releaseConditionUnknown: 'domain.release_condition.unknown',
+  /** Акт получателя об условии подменён у транша, где деньги уже приняты (Ф13). */
+  conditionActSubstituted: 'domain.condition_act.substituted',
+  /** Нетерминальное состояние после `pending` собрано без акта (Ф13). */
+  conditionActMissing: 'domain.condition_act.missing',
   invalidInstant: 'domain.instant.invalid',
   invalidUuid: 'domain.uuid.invalid',
 } as const;

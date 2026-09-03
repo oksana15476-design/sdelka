@@ -1,4 +1,5 @@
 export * from './command-journal';
+export * from './condition-act';
 export * from './deal';
 export * from './guards';
 export * from './ids';

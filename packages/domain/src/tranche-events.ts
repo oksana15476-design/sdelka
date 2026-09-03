@@ -1,4 +1,5 @@
 import type { CurrencyCode, Money } from '@sdelka/money';
+import type { ConditionAct } from './condition-act';
 import type { ReleaseConditionType } from './release-condition';
 
 export type PayoutOutcome = 'settled' | 'rejected' | 'unknown';
@@ -41,6 +42,17 @@ export type TrancheEvent =
   | { readonly type: 'reconciliation_resolved'; readonly outcome: ReconciliationOutcome }
   | { readonly type: 'deadline_reached' }
   | { readonly type: 'refund_requested'; readonly reason: string }
-  | { readonly type: 'write_off_approved'; readonly userIds: readonly string[] };
+  | { readonly type: 'write_off_approved'; readonly userIds: readonly string[] }
+  /**
+   * введено кодом (E11-4, CORE.md Ф13): изменение условия после внесения
+   * средств возможно только новым актом **обеих сторон**. Событие не двигает
+   * состояние — оно перепривязывает акт, под которым транш принял деньги.
+   */
+  | {
+      readonly type: 'condition_act_amended';
+      readonly act: ConditionAct;
+      /** Ключи сторон, принявших новую редакцию: покупатель и получатель. */
+      readonly acceptedBy: readonly string[];
+    };
 
 export type TrancheEventType = TrancheEvent['type'];

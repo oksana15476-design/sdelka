@@ -23,7 +23,13 @@ import {
   isTerminalTrancheStatus,
   reduceTranche,
 } from '../src/index';
-import { CREATED_ON, MATCHING_STATEMENT, NOW } from './support/facts';
+import {
+  BUYER_PARTY_ID,
+  CONDITION_ACT,
+  CREATED_ON,
+  MATCHING_STATEMENT,
+  NOW,
+} from './support/facts';
 import { projectIntents } from './support/ledger-projection';
 
 /**
@@ -200,6 +206,8 @@ describe('свойства на случайных последовательн�
           requiredAmount: required,
           collectedAmount: collected,
           buyerPayerKey: 'buyer-1',
+          buyerPartyId: BUYER_PARTY_ID,
+          conditionAct: CONDITION_ACT,
           evidenceBundleId: random() < 0.9 ? 'evidence-1' : null,
           statementFields: MATCHING_STATEMENT,
           registryOwnerIsBuyer: true,

@@ -1,3 +1,5 @@
+import { type ConditionAct, isConditionActValid } from './condition-act';
+import type { Instant } from './instant';
 import type { Intent } from './intents';
 import { RELEASE_CONDITIONS } from './release-condition';
 import { type Rejection, type Result, RejectionCode, failure, ok, rejection } from './result';
@@ -60,6 +62,14 @@ export type DealEvent =
 export type DealEventType = DealEvent['type'];
 
 export const DEAL_GUARD_IDS = [
+  /**
+   * Акт получателя об условии совершён — CORE.md Ф13. Стоит на `ready →
+   * funding`: сделка не открывает приём средств, пока получатель не определил
+   * обстоятельство. Тот же guard стоит на `pending → collecting` у транша —
+   * деньги приходят по траншу, а состояние сделки двигается первым поступлением,
+   * и закрыть нужно оба входа.
+   */
+  'g_condition_agreed',
   'g_all_tranches_reserved',
   'g_all_tranches_paid_out',
   'g_all_tranches_refunded',
@@ -73,16 +83,21 @@ export interface DealFacts {
   readonly trancheStatuses: readonly TrancheStatus[];
   /** Учётная запись, готовившая заморозку: разморозка невозможна ею же. */
   readonly preparedBy: string | null;
+  /** Акт получателя об условии (CORE.md Ф13). `null` — приём средств закрыт. */
+  readonly conditionAct: ConditionAct | null;
 }
 
 export interface DealContext {
   readonly dealId: string;
   readonly facts: DealFacts;
+  /** Нужен для проверки акта: акт, датированный будущим, не принимается. */
+  readonly now: Instant;
 }
 
 const DEAL_GUARDS: Readonly<
-  Record<DealGuardId, (facts: DealFacts, event: DealEvent) => boolean>
+  Record<DealGuardId, (facts: DealFacts, event: DealEvent, now: Instant) => boolean>
 > = Object.freeze({
+  g_condition_agreed: (facts, _event, now) => isConditionActValid(facts.conditionAct, now),
   g_all_tranches_reserved: (facts) =>
     facts.trancheStatuses.length > 0 &&
     facts.trancheStatuses.every((status) => status === 'reserved'),
@@ -143,7 +158,7 @@ export const DEAL_TRANSITIONS: readonly DealTransition[] = Object.freeze([
   transition('draft', 'parties_check_started', 'parties_pending'),
   transition('parties_pending', 'parties_verified', 'property_pending'),
   transition('property_pending', 'property_verified', 'ready'),
-  transition('ready', 'funds_received', 'funding'),
+  transition('ready', 'funds_received', 'funding', ['g_condition_agreed']),
   transition('funding', 'tranches_reserved', 'funded', ['g_all_tranches_reserved']),
   transition('funding', 'deadline_reached', 'unwinding'),
   transition('funding', 'revocation_requested', 'unwinding'),
@@ -215,7 +230,7 @@ export function reduceDeal(
   let firstFailure: readonly DealGuardId[] = [];
   for (const candidate of candidates) {
     const failed = candidate.guards.filter(
-      (guard) => !DEAL_GUARDS[guard](context.facts, event),
+      (guard) => !DEAL_GUARDS[guard](context.facts, event, context.now),
     );
     if (failed.length > 0) {
       if (firstFailure.length === 0) firstFailure = failed;

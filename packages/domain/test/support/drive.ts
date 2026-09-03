@@ -12,7 +12,7 @@ import {
   plus,
   reduceTranche,
 } from '../../src/index';
-import { NOW } from './facts';
+import { CONDITION_ACT, NOW } from './facts';
 
 /**
  * Состояние на заданном статусе. Дедлайн и время входа обязательны по типу —
@@ -26,6 +26,8 @@ export function stateAt(
     status,
     deadline(plus(NOW, DEFAULT_DEADLINE_POLICY[status])),
     enteredAt,
+    // Акт есть у всего, что вышло из `pending`: до него деньги не принимаются.
+    status === 'pending' ? null : CONDITION_ACT,
   );
 }
 

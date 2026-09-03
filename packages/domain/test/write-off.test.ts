@@ -2,12 +2,13 @@ import {
   type Journal,
   accountBalance,
   bankNominal,
+  bankOperating,
   clientAccount,
   emptyJournal,
   isEveryTrancheCovered,
   isFullyCovered,
   negativeClientBalances,
-  writeoffExpense,
+  unclaimedLiability,
 } from '@sdelka/ledger';
 import { rationalFromDecimalString } from '@sdelka/money';
 import { describe, expect, it } from 'vitest';
@@ -25,8 +26,8 @@ const fundsReceived: TrancheEvent = {
   reference: 'ref-1',
 };
 
-describe('списание транша доходит до проводки (FUNCTIONAL.md §3.1)', () => {
-  it('closes the client obligation against the platform expense and keeps coverage', () => {
+describe('невостребованные средства доходят до проводки (FUNCTIONAL.md §3.1)', () => {
+  it('closes the obligation, empties the nominal account and books the debt', () => {
     const ctx = context();
     let journal: Journal = emptyJournal;
     let state: TrancheState = stateAt('collecting');
@@ -47,13 +48,12 @@ describe('списание транша доходит до проводки (FU
     expect(state.status).toBe('written_off');
     // Обязательство перед клиентом закрыто...
     expect(accountBalance(journal, client, 'GEL').minor).toBe(0n);
-    // ...за счёт платформы, а не других клиентов: номинальный счёт не тронут.
-    expect(accountBalance(journal, bankNominal('GEL'), 'GEL').minor).toBe(AMOUNT.minor);
-    // Остаток `writeoff:expense` кредитовый, то есть по знаку это не расход:
-    // деньги по траншу собраны и остались на номинальном счёте, а обязательство
-    // снято. §3.1 называет счёт расходным и описывает списание как расход
-    // платформы — на собранных средствах это не сходится. Вынесено владельцу.
-    expect(accountBalance(journal, writeoffExpense, 'GEL').minor).toBe(-AMOUNT.minor);
+    // ...и деньги ушли с номинального счёта: на нём не остаётся остатка без
+    // признанного клиентского обязательства (случай Б, §3.1).
+    expect(accountBalance(journal, bankNominal('GEL'), 'GEL').minor).toBe(0n);
+    expect(accountBalance(journal, bankOperating('GEL'), 'GEL').minor).toBe(AMOUNT.minor);
+    // Доходом они не стали: это долг, просто не против живого транша.
+    expect(accountBalance(journal, unclaimedLiability, 'GEL').minor).toBe(AMOUNT.minor);
     expect(isFullyCovered(journal)).toBe(true);
     expect(isEveryTrancheCovered(journal)).toBe(true);
     expect(negativeClientBalances(journal)).toEqual([]);

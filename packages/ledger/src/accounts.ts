@@ -13,7 +13,8 @@ export type Account =
   | { readonly kind: 'subscription_income' }
   | { readonly kind: 'psp_fee_expense' }
   | { readonly kind: 'oracle_cost_expense' }
-  | { readonly kind: 'writeoff_expense' }
+  | { readonly kind: 'shortfall_expense' }
+  | { readonly kind: 'unclaimed_liability' }
   | { readonly kind: 'fx_accounting_diff' };
 
 export type AccountKind = Account['kind'];
@@ -37,7 +38,13 @@ const ACCOUNT_TYPE: Readonly<Record<AccountKind, AccountType>> = {
   subscription_income: 'income',
   psp_fee_expense: 'expense',
   oracle_cost_expense: 'expense',
-  writeoff_expense: 'expense',
+  // Случай А из §3.1: недостача, покрытая платформой. Признаётся в момент
+  // поступления, состоянием транша не является.
+  shortfall_expense: 'expense',
+  // Случай Б: невостребованные средства. Обязательство, а не доход. Признать
+  // их доходом было бы удобно и, возможно, незаконно — порядок обращения
+  // с ними помечен в §3.1 как [открыто], до ответа юриста это долг.
+  unclaimed_liability: 'liability',
   // FUNCTIONAL.md §3.1 помечает учётную курсовую разницу как «расход/доход»:
   // она бывает обеих знаков. Тип счёта в плане один, поэтому знак несёт
   // направление проводки, а не отдельный счёт: кредитовый остаток на этом
@@ -59,8 +66,14 @@ const FUNDS_OWNERSHIP: Readonly<Record<AccountKind, FundsOwnership>> = {
   subscription_income: 'platform',
   psp_fee_expense: 'platform',
   oracle_cost_expense: 'platform',
-  // Списание идёт за счёт платформы, а не других клиентов (FUNCTIONAL.md §3.1).
-  writeoff_expense: 'platform',
+  // Недостачу платформа покрывает своими деньгами — это её расход.
+  shortfall_expense: 'platform',
+  // Невостребованные средства — по-прежнему чужие деньги, поэтому 'client'.
+  // В отношение покрытия (номинальный счёт против обязательств по траншам)
+  // они при этом не входят: они лежат на операционном счёте, а не на
+  // номинальном. Обеспеченность этого долга операционным остатком отдельным
+  // отношением здесь не проверяется — см. отчёт по батчу.
+  unclaimed_liability: 'client',
   // Учётная курсовая разница — средства платформы. Это не наш спред: спред и
   // разница разведены типами в money (FUNCTIONAL.md §4.5, CORE.md Ф5).
   fx_accounting_diff: 'platform',
@@ -124,8 +137,10 @@ export function accountCode(account: Account): string {
       return 'psp:fee:expense';
     case 'oracle_cost_expense':
       return 'oracle:cost:expense';
-    case 'writeoff_expense':
-      return 'writeoff:expense';
+    case 'shortfall_expense':
+      return 'shortfall:expense';
+    case 'unclaimed_liability':
+      return 'unclaimed:liability';
     case 'fx_accounting_diff':
       return 'fx:accounting:diff';
   }
@@ -145,5 +160,6 @@ export const clientAccount = (dealId: string, trancheId: string): Account => ({
   dealId,
   trancheId,
 });
-export const writeoffExpense: Account = Object.freeze({ kind: 'writeoff_expense' });
+export const shortfallExpense: Account = Object.freeze({ kind: 'shortfall_expense' });
+export const unclaimedLiability: Account = Object.freeze({ kind: 'unclaimed_liability' });
 export const fxAccountingDiff: Account = Object.freeze({ kind: 'fx_accounting_diff' });

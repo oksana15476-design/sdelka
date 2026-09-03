@@ -9,7 +9,15 @@ import {
   evaluateGuard,
   instant,
 } from '../src/index';
-import { AMOUNT, MATCHING_STATEMENT, NOW, facts } from './support/facts';
+import {
+  AMOUNT,
+  BUYER_PARTY_ID,
+  CONDITION_ACT,
+  MATCHING_STATEMENT,
+  NOW,
+  RECIPIENT_PARTY_ID,
+  facts,
+} from './support/facts';
 
 const fundsReceived: TrancheEvent = {
   type: 'funds_received',
@@ -29,7 +37,63 @@ function check(
 
 describe('каждый guard проходит и не проходит', () => {
   it('covers every guard declared by the document', () => {
-    expect(GUARD_IDS).toHaveLength(12);
+    // 12 реализованных из §1.3 плюс два по CORE.md Ф13: акт получателя на входе
+    // в приём средств и приём новой редакции обеими сторонами. В таблице §1.3
+    // строк четырнадцать: `g_seller_is_owner` (сверка собственника на заведении
+    // сделки) и `g_no_stale_break` (незакрытые расхождения сверки) не
+    // реализованы — они относятся к заведению сделки и к сверке, эпики E4 и E7.
+    expect(GUARD_IDS).toHaveLength(14);
+    expect(GUARD_IDS).not.toContain('g_seller_is_owner');
+    expect(GUARD_IDS).not.toContain('g_no_stale_break');
+    expect(GUARD_IDS).toContain('g_condition_agreed');
+    expect(GUARD_IDS).toContain('g_amendment_accepted_by_both');
+  });
+
+  it('g_condition_agreed', () => {
+    expect(check('g_condition_agreed', {})).toBe(true);
+    // Акта нет — приём средств не открывается (Ф13).
+    expect(check('g_condition_agreed', { conditionAct: null })).toBe(false);
+    // Тип из перечня, но помеченный в §8 как [открыто], основанием не является.
+    expect(
+      check('g_condition_agreed', {
+        conditionAct: { ...CONDITION_ACT, conditionType: 'registration_preliminary' },
+      }),
+    ).toBe(false);
+    // Акт без получателя и без редакции текста — не акт.
+    expect(
+      check('g_condition_agreed', { conditionAct: { ...CONDITION_ACT, recipientPartyId: '' } }),
+    ).toBe(false);
+    expect(
+      check('g_condition_agreed', { conditionAct: { ...CONDITION_ACT, conditionTextVersion: '' } }),
+    ).toBe(false);
+    // Акт, датированный будущим, не принимается.
+    expect(
+      check('g_condition_agreed', {
+        conditionAct: { ...CONDITION_ACT, agreedAt: instant(NOW + 1) },
+      }),
+    ).toBe(false);
+  });
+
+  it('g_amendment_accepted_by_both', () => {
+    const amended: TrancheEvent = {
+      type: 'condition_act_amended',
+      act: { ...CONDITION_ACT, conditionTextVersion: 'condition.registration_transfer.v2' },
+      acceptedBy: [BUYER_PARTY_ID, RECIPIENT_PARTY_ID],
+    };
+    expect(check('g_amendment_accepted_by_both', {}, amended)).toBe(true);
+    // Одна сторона — это не «обе»: условие переопределялось бы односторонне.
+    expect(
+      check('g_amendment_accepted_by_both', {}, { ...amended, acceptedBy: [RECIPIENT_PARTY_ID] }),
+    ).toBe(false);
+    expect(
+      check(
+        'g_amendment_accepted_by_both',
+        {},
+        { ...amended, acceptedBy: [BUYER_PARTY_ID, BUYER_PARTY_ID] },
+      ),
+    ).toBe(false);
+    // На другом событии guard не выполняется: он про приём новой редакции.
+    expect(check('g_amendment_accepted_by_both', {})).toBe(false);
   });
 
   it('g_amount_sufficient', () => {

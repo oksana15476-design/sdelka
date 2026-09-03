@@ -1,0 +1,129 @@
+import type { Instant } from '@sdelka/domain';
+import type { CurrencyCode, Money } from '@sdelka/money';
+import { type DetectorOutcome, type PolicyVersionId, outcomeSeverity } from './decision';
+import type { QueuePolicy } from './policy';
+
+/**
+ * Очередь разбора комплаенса (`BACKLOG.md` E6-7, `STATE-MACHINES.md` §5).
+ *
+ * **Возраст задачи считается от момента постановки, а не от дедлайна.** Это то же
+ * правило, что в §5: повторный неответ банка двигает дедлайн, и по дедлайну
+ * застрявшая задача выглядит вечно свежей, никогда не попадая в эскалацию.
+ * Поэтому у задачи две отметки: `enteredAt` — не двигается и определяет возраст,
+ * `deadlineAt` — двигается и в приоритете не участвует вовсе.
+ */
+export const REVIEW_TASK_KINDS = [
+  'sanctions_possible_match',
+  'sanctions_unavailable',
+  'payer_hold',
+  'payer_exception',
+  'price_mismatch',
+  'structuring',
+  'linkage',
+  'flipping',
+  'beneficiary_change',
+  'source_of_funds',
+] as const;
+export type ReviewTaskKind = (typeof REVIEW_TASK_KINDS)[number];
+
+export interface ReviewTask {
+  readonly taskId: string;
+  readonly kind: ReviewTaskKind;
+  readonly dealId: string;
+  readonly trancheId: string | null;
+  readonly partyId: string | null;
+  /**
+   * Сумма для ранжирования, пересчитанная в валюту политики по **официальному**
+   * курсу на дату создания задачи (`FUNCTIONAL.md` §4.3.1). Пересчёт делает
+   * вызывающий: курс — внешний факт, в чистом пакете его нет.
+   */
+  readonly rankAmount: Money<CurrencyCode> | null;
+  /** Момент постановки в очередь. Не двигается. */
+  readonly enteredAt: Instant;
+  /** Дедлайн операции. Двигается; в приоритете не участвует. */
+  readonly deadlineAt: Instant | null;
+  readonly severity: DetectorOutcome;
+  readonly assigneeId: string | null;
+  readonly policyVersionId: PolicyVersionId;
+}
+
+export function taskAgeMs(task: ReviewTask, now: Instant): number {
+  return Math.max(0, now - task.enteredAt);
+}
+
+/**
+ * Уровень эскалации по возрасту. Ноль — норматив не превышен; дальше по одному
+ * уровню на каждый пройденный порог из политики.
+ */
+export function escalationLevel(task: ReviewTask, now: Instant, policy: QueuePolicy): number {
+  const age = taskAgeMs(task, now);
+  let level = 0;
+  for (const threshold of policy.escalationAfter) {
+    if (age >= threshold) level += 1;
+  }
+  return level;
+}
+
+export interface RankedTask {
+  readonly task: ReviewTask;
+  readonly ageMs: number;
+  readonly escalation: number;
+  /** Сумма ранжирования в минорных единицах валюты политики. `null` — не пересчитана. */
+  readonly rankMinor: bigint | null;
+}
+
+/**
+ * Порядок разбора: сначала эскалация, затем сумма, затем возраст, затем
+ * идентификатор для устойчивости.
+ *
+ * Эскалация впереди суммы намеренно: иначе мелкая задача не поднимется никогда и
+ * очередь получит голодание — а `release_blocked` выходит только действием
+ * человека и другого выхода у неё нет.
+ */
+export function prioritize(
+  tasks: readonly ReviewTask[],
+  policy: QueuePolicy,
+  now: Instant,
+): readonly RankedTask[] {
+  const ranked: RankedTask[] = tasks.map((task) => ({
+    task,
+    ageMs: taskAgeMs(task, now),
+    escalation: escalationLevel(task, now, policy),
+    rankMinor:
+      task.rankAmount !== null && task.rankAmount.currency === policy.rankCurrency
+        ? task.rankAmount.minor
+        : null,
+  }));
+
+  return Object.freeze(
+    ranked.sort((left, right) => {
+      if (left.escalation !== right.escalation) return right.escalation - left.escalation;
+      const severity = outcomeSeverity(right.task.severity) - outcomeSeverity(left.task.severity);
+      if (severity !== 0) return severity;
+      const leftRank = left.rankMinor ?? 0n;
+      const rightRank = right.rankMinor ?? 0n;
+      if (leftRank !== rightRank) return rightRank > leftRank ? 1 : -1;
+      if (left.ageMs !== right.ageMs) return right.ageMs - left.ageMs;
+      return left.task.taskId < right.task.taskId ? -1 : left.task.taskId > right.task.taskId ? 1 : 0;
+    }),
+  );
+}
+
+/** Метрика дежурного дашборда: возраст самой старой задачи. */
+export function oldestTaskAgeMs(tasks: readonly ReviewTask[], now: Instant): number | null {
+  let oldest: number | null = null;
+  for (const task of tasks) {
+    const age = taskAgeMs(task, now);
+    if (oldest === null || age > oldest) oldest = age;
+  }
+  return oldest;
+}
+
+/** Задачи, перешагнувшие норматив: то, о чём алертит дежурный дашборд. */
+export function escalatedTasks(
+  tasks: readonly ReviewTask[],
+  policy: QueuePolicy,
+  now: Instant,
+): readonly ReviewTask[] {
+  return Object.freeze(tasks.filter((task) => escalationLevel(task, now, policy) > 0));
+}

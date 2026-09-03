@@ -2,11 +2,12 @@ import {
   type Journal,
   appendEntry,
   bankNominal,
+  bankOperating,
   clientAccount,
   createJournalEntry,
   credit,
   debit,
-  writeoffExpense,
+  unclaimedLiability,
 } from '@sdelka/ledger';
 import { type Rational, split } from '@sdelka/money';
 import type { Intent } from '../../src/index';
@@ -92,29 +93,26 @@ export function projectIntents(
         );
         break;
       case 'write_off':
-        // Списание идёт за счёт платформы, а не других клиентов: обязательство
-        // перед клиентом закрывается счётом `writeoff:expense`, номинальный счёт
-        // не трогается (FUNCTIONAL.md §3.1). Проводка «дебет обязательства,
-        // кредит номинального счёта» — та самая, что закрывала бы дыру по одной
-        // сделке деньгами другой, и она отвергается при построении записи.
+        // Случай Б из FUNCTIONAL.md §3.1: невостребованные средства. Это и есть
+        // терминальное `written_off`. Обязательство дебетуется, деньги уходят с
+        // номинального счёта — на нём не остаётся остатка без признанного
+        // обязательства, — и превращаются не в доход, а в другой долг:
+        // `unclaimed:liability` на операционном счёте.
         //
-        // Направление здесь обратно буквальному тексту §3.1 («дебет
-        // writeoff:expense, кредит client:{deal}:{tranche}»): в этом плане
-        // счетов клиентское обязательство — пассив, и кредит его увеличивает,
-        // то есть буквальная проводка не гасила бы обязательство, а удваивала
-        // его и роняла покрытие по траншу. Демонстрация — в
-        // `packages/ledger/test/write-off.test.ts`. Направление вынесено
-        // владельцу как расхождение документа с планом счетов.
+        // Случай А (недостача при зачислении) состоянием транша не является и
+        // здесь не проецируется: он живёт в проводке поступления.
         result = appendEntry(
           result,
           createJournalEntry({
             id: nextId(),
             occurredAt: '2026-09-04T12:00:00Z',
             kind: 'settlement',
-            memoKey: 'ledger.entry.write_off',
+            memoKey: 'ledger.entry.unclaimed',
             postings: [
               debit(client, intent.amount, attribution),
-              credit(writeoffExpense, intent.amount),
+              credit(custody, intent.amount, attribution),
+              debit(bankOperating(intent.amount.currency), intent.amount),
+              credit(unclaimedLiability, intent.amount),
             ],
           }),
         );
