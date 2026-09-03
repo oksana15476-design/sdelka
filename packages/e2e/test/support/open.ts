@@ -40,6 +40,7 @@ import {
   cleanScreening,
   conditionAct,
   evidenceRef,
+  partyRef,
 } from './fixtures';
 
 /**
@@ -125,7 +126,7 @@ export async function openDeal(options: OpenOptions): Promise<OpenedDeal> {
 
   let world = createDeal(options.world ?? emptyWorld({ now: NOW, chainId: 'sdelka-audit' }), {
     dealId: options.dealId,
-    conditionAct: conditionAct(options.seller.partyId),
+    conditionAct: conditionAct(partyRef(options.seller)),
     preparedBy: 'operator-1',
   });
 
@@ -160,12 +161,10 @@ export async function openDeal(options: OpenOptions): Promise<OpenedDeal> {
   world = createTranche(world, {
     dealId: options.dealId,
     trancheId: options.trancheId,
-    payer: buyerKey,
-    recipient: sellerKey,
+    buyer: partyRef(options.buyer),
     buyerPayerKey: payerKeyForDomain(options.buyer.document),
-    buyerPartyId: options.buyer.partyId,
     requiredAmount: amount,
-    conditionAct: conditionAct(options.seller.partyId),
+    conditionAct: conditionAct(partyRef(options.seller)),
     createdOn: CREATED_ON,
     deductions: options.deductions ?? PLATFORM_FEE,
     beneficiary: options.beneficiary ?? beneficiaryFor(options.seller, 500),
@@ -177,7 +176,7 @@ export async function openDeal(options: OpenOptions): Promise<OpenedDeal> {
     world,
     options.dealId,
     options.trancheId,
-    conditionAct(options.seller.partyId),
+    conditionAct(partyRef(options.seller)),
     CONDITION_ACT_SOURCE,
     POLICY_VERSION,
   );

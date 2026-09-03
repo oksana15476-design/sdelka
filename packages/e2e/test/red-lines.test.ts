@@ -18,12 +18,14 @@ import {
   trancheSettlement,
 } from '@sdelka/ledger';
 import type { ClientKey, JournalEntry } from '@sdelka/ledger';
-import { reduceTranche } from '@sdelka/domain';
+import { type Intent, reduceTranche } from '@sdelka/domain';
 import {
   applyTrancheEvent,
   approve,
   contextFor,
   coverageOk,
+  payerOf,
+  recipientOf,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
@@ -39,6 +41,34 @@ import {
   TWO_ROLE,
 } from './support/fixtures';
 import { toPayingOut, toReleasePending, toReserved } from './support/paths';
+
+/**
+ * Подлинное намерение расчёта, снятое с автомата.
+ *
+ * Единственный способ получить `DealPartiesAttestation` за пределами домена:
+ * значение этого типа невозможно построить кодом, и учёт его тоже не выдаёт.
+ * Редьюсер вызывается вхолостую — мир при этом не меняется, — и намерение
+ * достаётся из результата перехода.
+ */
+function settlementIntentOf(
+  world: Parameters<typeof contextFor>[0],
+  trancheId: string,
+): Extract<Intent, { type: 'post_settlement_entry' }> {
+  const runtime = trancheOf(world, trancheId);
+  const result = reduceTranche(
+    runtime.state,
+    { type: 'payout_result', outcome: 'settled' },
+    contextFor(world, runtime),
+  );
+  if (!result.ok) {
+    throw new Error(`e2e.test.settlement_unreachable:${result.error.code}`);
+  }
+  const intent = result.value.intents.find((item) => item.type === 'post_settlement_entry');
+  if (intent === undefined || intent.type !== 'post_settlement_entry') {
+    throw new Error('e2e.test.settlement_intent_missing');
+  }
+  return intent;
+}
 
 const SETTLED = trancheOptions(POLICY_VERSION, { payoutResponse: BANK_RESPONSE_SOURCE });
 
@@ -184,30 +214,70 @@ describe('красные линии в сквозном прогоне', () => {
       }),
     ).toThrow('ledger.entry.client_owner_mismatch');
 
-    // --- Дверь 3: объявление есть, но оно про другую сделку ---
-    // Объявление не индульгенция: постройка сверяется с ним целиком, и файл
-    // сделки А в записи, объявленной по сделке Б, посторонний.
+    // --- Объявление, которое приложение не может выписать себе само ---
+    //
+    // ⚠ Раньше на этом месте объявление собиралось прямо здесь, вызовом
+    // `trancheSettlement(...)` с любыми сторонами: тест показывал, что запись с
+    // объявлением про чужую сделку отвергается, но само объявление изготавливал
+    // тот же, кто строил проводки. Сегодня четвёртый аргумент обязателен, и
+    // построить его нечем: у `DealPartiesAttestation` ambient-ключ. Взять
+    // подтверждение можно только одним способом — получить его от автомата
+    // вместе с намерением расчёта.
+    const genuine = settlementIntentOf(world, TRANCHE_A);
+    expect(genuine.dealId).toBe(DEAL_A);
+    expect(genuine.recipientClientKey).toBe(a.sellerKey);
+
+    // --- Дверь 3: подтверждение с сделки А предъявляется по сделке Б ---
+    expect(() =>
+      trancheSettlement(
+        { dealId: DEAL_B, trancheId: TRANCHE_B },
+        b.buyerKey,
+        b.sellerKey,
+        genuine.attestation,
+      ),
+    ).toThrow('ledger.settlement.attestation_mismatch');
+
+    // --- Дверь 3а: подтверждение подлинное, а получателя подменили ---
+    // Именно эта подмена и была прежней дырой: получатель приезжал в проводку
+    // свободным параметром приложения. Теперь он назван в подтверждении, и
+    // подстановка постороннего ломает сверку, а не проходит молча.
+    expect(() =>
+      trancheSettlement(
+        { dealId: DEAL_A, trancheId: TRANCHE_A },
+        a.buyerKey,
+        b.buyerKey,
+        genuine.attestation,
+      ),
+    ).toThrow('ledger.settlement.attestation_mismatch');
+
+    // --- Дверь 3б: объявление подлинное, но постройка ему не соответствует ---
+    // Объявление не индульгенция: каждая проводка сверяется с ним, и свободная
+    // часть постороннего лица в записи расчёта по сделке А — посторонний счёт.
+    const settlesA = trancheSettlement(
+      { dealId: DEAL_A, trancheId: TRANCHE_A },
+      a.buyerKey,
+      a.sellerKey,
+      genuine.attestation,
+    );
     expect(() =>
       createJournalEntry({
         id: 'cross-declared',
         occurredAt,
         kind: 'settlement',
         memoKey: 'ledger.entry.illegal',
-        settles: trancheSettlement(
-          { dealId: DEAL_B, trancheId: TRANCHE_B },
-          b.buyerKey,
-          a.sellerKey,
-        ),
+        settles: settlesA,
         postings: [
           debit(lockedA, amount, { dealId: DEAL_A, trancheId: TRANCHE_A }),
-          credit(clientFreeAccount(a.sellerKey), amount, { clientKey: a.sellerKey }),
+          credit(clientFreeAccount(b.buyerKey), amount, { clientKey: b.buyerKey }),
         ],
       }),
     ).toThrow('ledger.entry.settlement_shape_mismatch');
 
-    // --- Дверь 4: обязательство уводится в непознанные ---
+    // --- Дверь 4: обязательство уводится в пул-вход ---
     // Первый шаг двухзаписной отмывки: обязательство по траншу А гасится в пул
     // без владельца, вторая запись опознаёт деньги на постороннее лицо.
+    // Условие запрета — объявленное направление пула, а не имя счёта, поэтому
+    // та же атака через `unclaimed:liability` разбирается в отдельном сценарии.
     expect(() =>
       createJournalEntry({
         id: 'into-suspense',
@@ -219,7 +289,7 @@ describe('красные линии в сквозном прогоне', () => {
           credit({ kind: 'suspense_unidentified' }, amount),
         ],
       }),
-    ).toThrow('ledger.entry.obligation_into_suspense');
+    ).toThrow('ledger.entry.obligation_into_intake_pool');
 
     // --- Законный путь: сделка А рассчитывается и файл Б не шелохнулся ---
     world = applyTrancheEvent(
@@ -255,8 +325,8 @@ describe('красные линии в сквозном прогоне', () => {
       declared += 1;
       expect(entry.settles).not.toBeNull();
       expect(entry.settles?.deal).toEqual({ dealId: DEAL_A, trancheId: TRANCHE_A });
-      expect(entry.settles?.payer).toBe(runtimeA.payer);
-      expect(entry.settles?.recipient).toBe(runtimeA.recipient);
+      expect(entry.settles?.payer).toBe(payerOf(runtimeA));
+      expect(entry.settles?.recipient).toBe(recipientOf(runtimeA));
       expect(entry.settles?.recipient).toBe(a.sellerKey);
     }
     // Такая запись в прогоне ровно одна — расчёт по сделке А.

@@ -33,6 +33,7 @@ import {
   trancheSettlement,
   unlockToClientAccount,
 } from '../src/index';
+import { attestDealParties } from './support/deal-parties';
 
 // Ключ личности переводится в ключ счёта в compliance: здесь он непрозрачный.
 const buyer = clientKey('c1');
@@ -260,7 +261,7 @@ describe('расчёт по сделке в пользу получателя (�
       journal,
       settleTrancheToClientAccount(
         at('p3', 10),
-        trancheSettlement(dealA, buyer, seller),
+        trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller)),
         money('GEL', 100_000n),
         money('GEL', 500n),
       ),
@@ -297,7 +298,7 @@ describe('одна личность, несколько ролей (И12.1, FUNC
       journal,
       settleTrancheToClientAccount(
         at('m3', 10),
-        trancheSettlement(dealA, buyer, person),
+        trancheSettlement(dealA, buyer, person, attestDealParties(dealA, buyer, person)),
         money('GEL', 300_000n),
       ),
     );

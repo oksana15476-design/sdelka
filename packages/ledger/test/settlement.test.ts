@@ -30,6 +30,7 @@ import {
   shouldStopAcceptingDeals,
   trancheSettlement,
 } from '../src/index';
+import { attestDealParties } from './support/deal-parties';
 import { uncheckedEntry } from './support/unchecked-entry';
 
 const buyer = clientKey('c1');
@@ -70,7 +71,7 @@ describe('красная линия №2: комиссия не остаётся
       journal,
       settleTrancheToClientAccount(
         at('s1', 10),
-        trancheSettlement(dealA, buyer, seller),
+        trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller)),
         money('GEL', 100_000n),
         money('GEL', 500n),
       ),
@@ -99,7 +100,7 @@ describe('красная линия №2: комиссия не остаётся
       journal,
       settleTrancheToClientAccount(
         at('s2', 10),
-        trancheSettlement(dealA, buyer, seller),
+        trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller)),
         money('GEL', 100_000n),
         money('GEL', 0n),
       ),
@@ -174,7 +175,7 @@ describe('красная линия №1: получатель расчёта с
   it('keeps the declaration in the entry, so the claim is a fact of the journal', () => {
     const entry = settleTrancheToClientAccount(
       at('r2', 10),
-      trancheSettlement(dealA, buyer, seller),
+      trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller)),
       money('GEL', 100_000n),
       money('GEL', 500n),
     );
@@ -190,13 +191,49 @@ describe('красная линия №1: получатель расчёта с
     // — отказ при заведении, а не задача оператору. Возврат самому себе — не
     // расчёт: у него своя запись.
     expectCode(
-      () => trancheSettlement(dealA, buyer, buyer),
+      () => trancheSettlement(dealA, buyer, buyer, attestDealParties(dealA, buyer, buyer)),
       LedgerErrorCode.settlementSelfDealing,
     );
   });
 
+  it('refuses a declaration the domain did not attest for these very parties', () => {
+    // Вторая половина дефекта: прежде объявление изготавливал тот же
+    // вызывающий, который строил проводки, — самосертификация. Теперь связь
+    // «получатель ↔ сделка» приходит извне обязательным аргументом, которого
+    // учёту нечем подделать, и подтверждение с чужой сделки или на чужое лицо
+    // к этому расчёту не подходит.
+    expectCode(
+      () =>
+        trancheSettlement(dealA, buyer, stranger, attestDealParties(dealA, buyer, seller)),
+      LedgerErrorCode.settlementAttestationMismatch,
+    );
+    expectCode(
+      () => trancheSettlement(dealA, buyer, seller, attestDealParties(dealB, buyer, seller)),
+      LedgerErrorCode.settlementAttestationMismatch,
+    );
+    expectCode(
+      () =>
+        trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, stranger, seller)),
+      LedgerErrorCode.settlementAttestationMismatch,
+    );
+    // Красная линия №5: выплата невозможна без ссылки на пакет доказательств.
+    expectCode(
+      () =>
+        trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller, '')),
+      LedgerErrorCode.settlementAttestationMismatch,
+    );
+    // Ссылка остаётся в журнале вместе с объявлением.
+    const settles = trancheSettlement(
+      dealA,
+      buyer,
+      seller,
+      attestDealParties(dealA, buyer, seller, 'pack-42'),
+    );
+    expect(settles.evidenceRef).toBe('pack-42');
+  });
+
   it('refuses a declaration that the postings do not match', () => {
-    const settles = trancheSettlement(dealA, buyer, seller);
+    const settles = trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller));
     // Посторонний счёт клиента в записи расчёта: деньги сделки A уходят лицу,
     // которого объявление не называет.
     expectCode(
@@ -280,7 +317,7 @@ describe('красная линия №1: получатель расчёта с
       kind: 'correction',
       correctsEntryId: 'r2',
       memoKey: 'ledger.entry.tranche_settlement_reversed',
-      settles: trancheSettlement(dealA, buyer, seller),
+      settles: trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller)),
       postings: [
         debit(clientFreeAccount(seller), money('GEL', 100_000n), { clientKey: seller }),
         credit(clientLockedAccount(buyer, dealA.dealId, dealA.trancheId), money('GEL', 100_000n), dealA),
@@ -300,7 +337,7 @@ describe('красная линия №1: получатель расчёта с
       journal,
       settleTrancheToClientAccount(
         at('r9', 10),
-        trancheSettlement(dealA, buyer, seller),
+        trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller)),
         money('GEL', 100_000n),
       ),
     );
@@ -332,7 +369,7 @@ describe('двухзаписная отмывка через непознанн�
             credit(suspense, money('GEL', 100_000n)),
           ],
         }),
-      LedgerErrorCode.entryObligationIntoSuspense,
+      LedgerErrorCode.entryObligationIntoIntakePool,
     );
   });
 

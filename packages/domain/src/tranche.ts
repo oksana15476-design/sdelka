@@ -1,3 +1,16 @@
+/**
+ * Тип, и только тип. Импорт стирается компиляцией: рантаймовой зависимости
+ * домена от учёта нет и после этого не появляется.
+ *
+ * Зависимость по типу — сознательный разворот прежнего решения («домен не
+ * зависит от `@sdelka/ledger`, брендирование ключа — забота учёта»). Прежнее
+ * решение стоило красной линии №1: пока подтверждение сторон изготавливалось
+ * не здесь, его изготавливал тот же вызывающий, который строил проводки, то
+ * есть оно ничего не подтверждало. Учёт знать состав сторон не может — стороны
+ * живут здесь; значит и приведение типа обязано стоять здесь, в одном месте.
+ * Направление зависимости при этом не разворачивается: учёт домена не знает.
+ */
+import type { DealPartiesAttestation } from '@sdelka/ledger';
 import type { CurrencyCode, Money } from '@sdelka/money';
 import { type ConditionAct, conditionActsEqual } from './condition-act';
 import type { FreezeReason, UnfreezeTarget } from './freeze';
@@ -312,15 +325,24 @@ export interface TrancheContext {
   readonly now: Instant;
   readonly dealId: string;
   readonly trancheId: string;
-  /**
-   * Владелец обязательства по траншу — ключ личности плательщика. Нужен
-   * проводкам: после E12-1 счёт клиента адресуется владельцем, а не парой
-   * «сделка + транш» (FUNCTIONAL.md §3.1). Домен ключ не разбирает и не хранит
-   * — только передаёт в намерение.
-   */
-  readonly payerClientKey: string;
   readonly facts: TrancheFacts;
   readonly deadlinePolicy: DeadlinePolicy;
+}
+
+/**
+ * Ключ счёта плательщика. Отдельного поля контекста у него больше нет:
+ * плательщик по траншу — это покупатель, а покупатель уже назван в фактах
+ * одним значением вместе со своим счётом (`TrancheFacts.buyer`).
+ *
+ * Раньше полей было два — `TrancheContext.payerClientKey` и
+ * `TrancheFacts.buyerPartyId`, — и ни одна проверка их не сопоставляла:
+ * приложение могло назвать стороной одного человека, а дебетовать счёт
+ * другого. Это тот же дефект, что свободный получатель, только на стороне
+ * плательщика, и закрывается он тем же приёмом — не сверкой, а отсутствием
+ * второго места, откуда взять ответ.
+ */
+function payerAccountKey(context: TrancheContext): string {
+  return context.facts.buyer.accountKey;
 }
 
 export interface TrancheTransition {
@@ -366,6 +388,20 @@ const EVIDENCE_GUARDS: readonly GuardId[] = [
 ];
 
 /**
+ * Guard'ы пути выплаты: доказательства плюс наличие собранных средств.
+ *
+ * `g_funds_collected` стоит рядом с ними на **каждой** двери пути, а не в
+ * начале, по той же причине, что и они: путь
+ * `collecting → release_blocked → release_pending → paying_out` в `collected`
+ * не заходит вовсе. Платёж третьего лица уводится в блокировку, оттуда
+ * выходит утверждением оператора, и транш, за которым нет ни лари, доходил до
+ * `paid_out`. Проводки при этом не возникало — сумма берётся из собранных
+ * средств, и без них намерение просто не порождалось, — так что в учёте не
+ * оставалось даже следа.
+ */
+const RELEASE_PATH_GUARDS: readonly GuardId[] = [...EVIDENCE_GUARDS, 'g_funds_collected'];
+
+/**
  * Таблица переходов — STATE-MACHINES.md §1.4.
  *
  * Guard'ы доказательств продублированы на `release_pending → paying_out`
@@ -393,14 +429,14 @@ export const TRANCHE_TRANSITIONS: readonly TrancheTransition[] = Object.freeze([
   transition('collected', 'deadline_reached', 'refund_pending'),
   transition('collected', 'revocation_requested', 'refund_pending'),
 
-  transition('reserved', 'condition_established', 'release_pending', EVIDENCE_GUARDS),
+  transition('reserved', 'condition_established', 'release_pending', RELEASE_PATH_GUARDS),
   transition('reserved', 'mismatch_detected', 'release_blocked'),
   transition('reserved', 'reserve_expired', 'collected'),
   transition('reserved', 'condition_failed', 'refund_pending'),
   transition('reserved', 'revocation_requested', 'refund_pending'),
 
   transition('release_pending', 'release_authorized', 'paying_out', [
-    ...EVIDENCE_GUARDS,
+    ...RELEASE_PATH_GUARDS,
     'g_approvals_sufficient',
     'g_no_active_payout',
     'g_coverage_ok',
@@ -414,13 +450,41 @@ export const TRANCHE_TRANSITIONS: readonly TrancheTransition[] = Object.freeze([
     'g_write_off_approvers_distinct',
   ]),
 
-  transition('paying_out', 'payout_result', 'paid_out', [], [], 'settled'),
+  /**
+   * ⚠ `g_evidence_present` стоит и здесь — на третьем входе, — по той же
+   * причине, по которой продублирован на двух предыдущих: guard, стоящий
+   * только на одном входе, не защищает состояние (§1.4, §4).
+   *
+   * Раньше на этом ребре guard'ов не было вовсе, и это была дыра не только
+   * теоретическая. Именно здесь пишется запись расчёта, и именно она несёт
+   * ссылку на пакет доказательств (`evidenceRef` в `settles`, красная линия
+   * №5). Факты приходят снаружи на каждый вызов: транш, дошедший до
+   * `paying_out` с доказательствами, мог получить `payout_result(settled)` уже
+   * без них — и расчёт записался бы со ссылкой в никуда. Отказ оставляет транш
+   * в `paying_out`, то есть в состоянии, из которого выход идёт через сверку
+   * человеком, — это и есть безопасная сторона (§2.2).
+   */
+  transition(
+    'paying_out',
+    'payout_result',
+    'paid_out',
+    ['g_evidence_present', 'g_funds_collected'],
+    [],
+    'settled',
+  ),
   transition('paying_out', 'payout_result', 'release_blocked', [], [], 'rejected'),
   // «Неизвестно» оставляет транш здесь: повтор запрещён без сверки (§2.2).
   transition('paying_out', 'payout_result', 'paying_out', [], [], 'unknown'),
   // Событие сверки есть в §1.2, но отсутствует в таблице §1.4. Без него
   // обещание §5 «выход гарантирован не позднее следующего дня» не выполняется.
-  transition('paying_out', 'reconciliation_resolved', 'paid_out', [], [], 'settled'),
+  transition(
+    'paying_out',
+    'reconciliation_resolved',
+    'paid_out',
+    ['g_evidence_present', 'g_funds_collected'],
+    [],
+    'settled',
+  ),
   transition('paying_out', 'reconciliation_resolved', 'release_blocked', [], [], 'rejected'),
 
   transition('refund_pending', 'refund_initiated', 'refunding', ['g_source_account_known']),
@@ -499,10 +563,49 @@ function exitIntents(from: TrancheStatus, to: TrancheStatus): readonly Intent[] 
   return [];
 }
 
+/**
+ * **Единственное место во всём домене, где изготавливается подтверждение
+ * сторон.** Функция не экспортируется — ни из модуля, ни тем более из пакета:
+ * подтверждение, которое можно выписать снаружи, не подтверждает ничего.
+ *
+ * Приведение типа здесь неизбежно и намеренно. `DealPartiesAttestation`
+ * устроен учётом так, что построить его кодом нельзя (ambient-ключ, значения
+ * которого не существует), и единственный способ получить значение — привести
+ * тип ровно там, где живёт знание о составе сторон. В `src/` учёта такого
+ * приведения нет ни одного; здесь оно одно, и на это стоит тест.
+ *
+ * Ни один аргумент не приходит от вызывающего свободным параметром:
+ *
+ * - сделка и транш — из контекста, того же, по которому собирается вся запись;
+ * - плательщик — покупатель из фактов, чья запертая часть и дебетуется;
+ * - получатель — **из акта об условии, записанного в состоянии транша**.
+ *   Не из фактов: факты приходят снаружи на каждый вызов, а акт в состоянии
+ *   привязан на выходе из `pending` и меняется только амендментом обеих
+ *   сторон. Это и есть требуемая связь «получатель ↔ сделка»: получателем
+ *   расчёта не может оказаться никто, кроме того, кто определил условие
+ *   (ст. 27(2), CORE.md Ф13);
+ * - ссылка на доказательства — `evidenceBundleId`, тот же, под которым
+ *   выпущено поручение (красная линия №5).
+ */
+function trancheSettlementAttestation(
+  context: TrancheContext,
+  act: ConditionAct,
+  evidenceRef: string,
+): DealPartiesAttestation {
+  return {
+    dealId: context.dealId,
+    trancheId: context.trancheId,
+    payer: payerAccountKey(context),
+    recipient: act.recipient.accountKey,
+    evidenceRef,
+  } as unknown as DealPartiesAttestation;
+}
+
 function entryIntents(
   to: TrancheStatus,
   event: TrancheEvent,
   context: TrancheContext,
+  act: ConditionAct | null,
 ): readonly Intent[] {
   const amount = moneyForTemplate(event, context.facts);
   const ledger = (template: LedgerTemplate): readonly Intent[] =>
@@ -514,7 +617,7 @@ function entryIntents(
             template,
             dealId: context.dealId,
             trancheId: context.trancheId,
-            clientKey: context.payerClientKey,
+            clientKey: payerAccountKey(context),
             amount,
           },
         ];
@@ -555,16 +658,69 @@ function entryIntents(
             },
           ];
     }
-    case 'paid_out':
+    case 'paid_out': {
+      const evidenceRef = context.facts.evidenceBundleId;
+      if (act === null || evidenceRef === null || evidenceRef.length === 0 || amount === null) {
+        // Сюда не попасть: акт привязан у всего, что вышло из `pending`, а
+        // `g_evidence_present` стоит на обоих рёбрах пути выплаты. Ветка
+        // написана исключением, а не пустым списком, потому что деньги к этой
+        // секунде уже ушли из банка: «не записали расчёт» — хуже, чем
+        // «остановились в `paying_out` и разбираем руками». Пустой список
+        // молча оставил бы номинальный счёт с чужими деньгами и без
+        // обязательства (красные линии №1 и №5).
+        throw new DomainError(RejectionCode.conditionActMissing, 'paid_out');
+      }
       return [
         // Выплата и комиссия — в одном журнале (красная линия №2, §1.5).
-        ...ledger('payout_with_fee'),
+        // Получатель здесь не параметр: он взят из акта, и подтверждение для
+        // учёта собрано тут же, из состояния транша.
+        {
+          type: 'post_settlement_entry',
+          dealId: context.dealId,
+          trancheId: context.trancheId,
+          payerClientKey: payerAccountKey(context),
+          recipientClientKey: act.recipient.accountKey,
+          amount,
+          attestation: trancheSettlementAttestation(context, act, evidenceRef),
+        },
         { type: 'notify', audience: 'both', messageKey: 'tranche.paid_out.both' },
         { type: 'close_tranche' },
       ];
+    }
     case 'refunded':
       return [
-        ...ledger('refund'),
+        /**
+         * Возврат — **две записи, а не одна** (§3.1, по образцу списания):
+         *
+         * 1. `refund_unlock` — отвязка от транша: обязательство по траншу
+         *    гасится, деньги возвращаются в свободную часть счёта покупателя,
+         *    отзывными (красная линия №7). Деньги при этом никуда не уходили —
+         *    они на номинальном счёте, просто больше не заперты.
+         * 2. `refund_external` — уход с номинального счёта на счёт-источник, на
+         *    имя плательщика (красная линия №9, инвариант 20). Это внешний
+         *    межбанковский перевод, а не внутреннее движение.
+         *
+         * Раньше шаблон был один, и каждая проекция выбирала, какой из двух
+         * моментов он значит: домен записывал отвязку, приложение — внешний
+         * вывод. Тест на свойствах гонял при этом не ту модель, которой
+         * пользуется приложение, — то есть возврат не проверялся ни в одной из
+         * двух форм целиком.
+         *
+         * **Почему обе записи в терминальном состоянии, а не по разным
+         * переходам.** Отвязка просится в `refunding` («возврат отправлен»), но
+         * из `refunding` есть ребро в `release_blocked` по отказу банка, а
+         * оттуда — обратно в `refund_pending` и снова в `refunding`. Отвязка,
+         * стоящая на нетерминальном входе, повторилась бы на каждой попытке и
+         * увела бы запертую часть в минус; терминальное состояние по
+         * построению входится один раз. Идемпотентность здесь взята
+         * структурой, а не проверкой «уже отвязывали».
+         *
+         * И это честнее по существу: до подтверждения банка неизвестно, ушли
+         * ли деньги. Отвергнутый возврат не оставляет в журнале ни одной
+         * записи — потому что не произошло ничего.
+         */
+        ...ledger('refund_unlock'),
+        ...ledger('refund_external'),
         { type: 'notify', audience: 'buyer', messageKey: 'tranche.refunded.buyer' },
         { type: 'close_tranche' },
       ];
@@ -751,17 +907,21 @@ export function reduceTranche(
      * не менялось, значит, ни выхода из него, ни входа в него не было. Дедлайн
      * пересчитывается — он и есть смысл этого события.
      */
-    const internal = nextStatus === state.status;
-    const intents: Intent[] = internal ? [] : [...exitIntents(state.status, nextStatus)];
-    if (isTerminalTrancheStatus(nextStatus)) {
-      intents.push(...entryIntents(nextStatus, event, context));
-      return ok({ state: terminalTrancheState(nextStatus), intents: Object.freeze(intents) });
-    }
-
     // Акт привязывается к траншу на выходе из `pending` — в тот момент, когда
     // открывается приём средств, и ровно тот, который прошёл `g_condition_agreed`.
     // Дальше он переносится без изменений: сменить его может только амендмент.
+    //
+    // Считается до разбора терминальных состояний, а не после: расчёт берёт
+    // получателя **из акта**, и в терминальном `paid_out` акт нужен так же,
+    // как в нетерминальных — там он нужен для состояния, здесь для денег.
     const conditionAct = boundAct ?? context.facts.conditionAct;
+
+    const internal = nextStatus === state.status;
+    const intents: Intent[] = internal ? [] : [...exitIntents(state.status, nextStatus)];
+    if (isTerminalTrancheStatus(nextStatus)) {
+      intents.push(...entryIntents(nextStatus, event, context, conditionAct));
+      return ok({ state: terminalTrancheState(nextStatus), intents: Object.freeze(intents) });
+    }
 
     if (nextStatus === 'frozen') {
       if (event.type !== 'compliance_hold' && event.type !== 'dispute_raised') {
@@ -827,7 +987,7 @@ export function reduceTranche(
     const at = plus(context.now, context.deadlinePolicy[nextStatus]);
     intents.push({ type: 'set_deadline', at });
     if (!internal) {
-      intents.push(...entryIntents(nextStatus, event, context));
+      intents.push(...entryIntents(nextStatus, event, context, conditionAct));
     }
     // Переход `paying_out → paying_out` по `payout_result(unknown)` — это то же
     // состояние: дедлайн пересчитывается, время входа сохраняется, иначе каждый

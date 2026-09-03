@@ -3,15 +3,19 @@ import {
   type Account,
   type ClientKey,
   accountCode,
+  accountType,
   assertAccountIdentifier,
   bankOperating,
   clientAccountOwner,
   clientFreeAccount,
+  clientFundsFile,
   clientLockedAccount,
+  fundsOwnership,
   isClientCustodyAccount,
   isClientFundsAccount,
   isClientObligationAccount,
   isPlatformIncomeAccount,
+  poolDirection,
 } from './accounts';
 import { LedgerError, LedgerErrorCode } from './errors';
 
@@ -39,6 +43,23 @@ export function isClientRef(ref: FundsRef): ref is ClientRef {
   return 'clientKey' in ref;
 }
 
+/**
+ * Файл счёта клиентского обязательства с владельцем в коде: транш, если счёт
+ * несёт транш, иначе сам клиент. `null` — у счёта владельца нет (пул).
+ *
+ * Читается **из значения**, а не из перечня видов счетов. Прежде эта развилка
+ * была выписана по именам (`kind === 'client_locked' ? … : kind === 'client_free' ? …`)
+ * в трёх местах сразу, и счёт, заведённый мимо всех трёх, тихо попадал бы в
+ * корзину «вне файлов» — то есть исчезал бы из пофайловой сверки.
+ */
+export function clientAccountFile(account: Account): FundsRef | null {
+  const owner = clientAccountOwner(account);
+  if (owner === null) return null;
+  return 'dealId' in account && 'trancheId' in account
+    ? { dealId: account.dealId, trancheId: account.trancheId }
+    : { clientKey: owner };
+}
+
 export interface Posting {
   readonly account: Account;
   readonly direction: Direction;
@@ -64,18 +85,27 @@ export type JournalEntryKind = 'settlement' | 'correction';
  * чего это лицо законно запирало их под свою сделку Б.
  *
  * Ledger не знает и не может знать состав участников сделки: участники живут в
- * домене. Поэтому проверяемое здесь — не «Y действительно продавец по А» (этого
- * из журнала не следует), а то, что **утверждение об этом присутствует в самой
- * записи и постройка ему соответствует**:
+ * домене. Первая редакция сделала из этого вывод «значит, проверяемо только то,
+ * что утверждение присутствует в записи» — и остановилась на самосертификации:
+ * объявление изготавливал тот же вызывающий, который строил проводки, поэтому
+ * расчёт по-прежнему собирался для любого постороннего лица, просто теперь
+ * громко. Нарушение стало видимым для аудита, но не невозможным.
+ *
+ * Правильный вывод другой: связь «получатель ↔ сделка» обязана **прийти
+ * снаружи** обязательным аргументом (`DealPartiesAttestation`), которого учёту
+ * нечем подделать. Тогда защита состоит из четырёх частей:
  *
  * 1. движение обязательства между разными владельцами вообще невозможно без
  *    этого объявления (`assertClientOwnerMoveOnlySettles`);
- * 2. объявление называет сделку, транш, плательщика и получателя одним
+ * 2. объявление собирается только из подтверждения домена, выданного на **эту**
+ *    сделку, **этого** плательщика и **этого** получателя, со ссылкой на пакет
+ *    доказательств (красная линия №5);
+ * 3. объявление называет сделку, транш, плательщика и получателя одним
  *    значением, и каждая проводка записи сверяется с ним: в расчёте не может
  *    участвовать ни один посторонний счёт клиента;
- * 3. объявление остаётся в журнале (`JournalEntry.settles`) — то есть претензия
- *    «Y получатель по сделке A» становится проверяемым фактом записи для аудита
- *    и сверки, а не молчаливым следствием формы проводок.
+ * 4. объявление остаётся в журнале (`JournalEntry.settles`) вместе со ссылкой
+ *    на доказательства — претензия «Y получатель по сделке A» становится
+ *    проверяемым фактом записи для аудита и сверки.
  *
  * Значение брендированное: структурный литерал на его место подставить нельзя,
  * идентификаторы валидируются теми же правилами, что и код счёта.
@@ -86,13 +116,60 @@ export interface TrancheSettlement {
   readonly payer: ClientKey;
   /** Получатель расчёта. Свободную часть его счёта — и ничью больше — кредитует запись. */
   readonly recipient: ClientKey;
+  /** Ссылка на пакет доказательств, под которым домен подтвердил стороны. */
+  readonly evidenceRef: string;
   readonly __trancheSettlement: unique symbol;
+}
+
+/**
+ * Ambient-символ: значения у него нет ни в рантайме, ни в типах учёта, поэтому
+ * объект с этим ключом **невозможно построить кодом** — ни здесь, ни где-либо
+ * ещё. Единственный способ получить `DealPartiesAttestation` — приведение типа,
+ * и приведение это обязано стоять там, где знание о сторонах сделки живёт.
+ */
+declare const attestedByDomain: unique symbol;
+
+/**
+ * Подтверждение домена: перечисленные лица — стороны этого транша, и деньги
+ * идут от плательщика получателю.
+ *
+ * **Зачем это здесь.** Прежняя редакция считала достаточным, что запись *несёт*
+ * объявление получателя. Это самосертификация: объявление изготавливал тот же
+ * вызывающий, который строил проводки, поэтому `settleTrancheToClientAccount`
+ * собиралась для любого постороннего Z, а Z потом законно запирал полученное
+ * под свою сделку Б. Нарушение стало видимым для аудита, но не невозможным.
+ *
+ * Учёт не знает и не может знать состав участников сделки — участники живут в
+ * домене. Значит связь обязана **прийти снаружи** обязательным аргументом,
+ * которого учёту нечем подделать: в `src/` нет ни одного значения этого типа и
+ * ни одного приведения к нему, а построить объект с ambient-ключом нельзя.
+ * Учёт проверяет ровно то, что может: подтверждение выдано на **эту** сделку,
+ * **этого** плательщика и **этого** получателя, и несёт ссылку на пакет
+ * доказательств (красная линия №5). Подтверждение от другой сделки или на
+ * другое лицо к этому расчёту не подходит.
+ *
+ * Что обязан передавать домен, см. `docs`-отчёт по батчу: значение выдаётся
+ * автоматом сделки в момент, когда транш переходит в расчёт, и только для той
+ * пары сторон, которая записана в сделке.
+ */
+export interface DealPartiesAttestation {
+  readonly dealId: string;
+  readonly trancheId: string;
+  readonly payer: ClientKey;
+  readonly recipient: ClientKey;
+  /**
+   * Пакет доказательств, под которым домен подтвердил стороны и наступление
+   * условия расчёта. Красная линия №5: выплата невозможна без ссылки на него.
+   */
+  readonly evidenceRef: string;
+  readonly [attestedByDomain]: true;
 }
 
 export function trancheSettlement(
   deal: TrancheRef,
   payer: ClientKey,
   recipient: ClientKey,
+  attestation: DealPartiesAttestation,
 ): TrancheSettlement {
   assertAccountIdentifier(deal.dealId, 'dealId');
   assertAccountIdentifier(deal.trancheId, 'trancheId');
@@ -108,10 +185,32 @@ export function trancheSettlement(
       clientKey: payer,
     });
   }
+  // Подтверждение с чужой сделки, чужого плательщика или чужого получателя —
+  // не подтверждение этого расчёта. Без этой сверки одно выданное доменом
+  // значение открывало бы расчёт кому угодно и по чему угодно.
+  if (
+    attestation.dealId !== deal.dealId ||
+    attestation.trancheId !== deal.trancheId ||
+    attestation.payer !== payer ||
+    attestation.recipient !== recipient ||
+    attestation.evidenceRef.length === 0
+  ) {
+    throw new LedgerError(LedgerErrorCode.settlementAttestationMismatch, {
+      dealId: deal.dealId,
+      trancheId: deal.trancheId,
+      payer,
+      recipient,
+      attestedDealId: attestation.dealId,
+      attestedTrancheId: attestation.trancheId,
+      attestedPayer: attestation.payer,
+      attestedRecipient: attestation.recipient,
+    });
+  }
   return Object.freeze({
     deal: Object.freeze({ dealId: deal.dealId, trancheId: deal.trancheId }),
     payer,
     recipient,
+    evidenceRef: attestation.evidenceRef,
   }) as unknown as TrancheSettlement;
 }
 
@@ -173,38 +272,55 @@ function assertAttribution(postings: readonly Posting[]): void {
   // по номинальному счёту обязана нести отнесение, иначе пофайловая сверка
   // (CORE.md Ф10) не построится — теперь по любому из двух файлов: транш или
   // клиент.
-  const hasSuspense = postings.some((posting) => posting.account.kind === 'suspense_unidentified');
+  // «Рядом с непознанным поступлением» — свойство пула-входа, а не имени счёта:
+  // любой будущий пул со `pool: 'intake'` получает то же послабление сам.
+  const hasIntakePool = postings.some((posting) => poolDirection(posting.account) === 'intake');
   for (const posting of postings) {
     const account = posting.account;
     const attribution = posting.attribution;
-    if (account.kind === 'client_locked') {
+    const scope = clientFundsFile(account);
+    if (scope === null) continue;
+
+    if (scope === 'owner_in_code') {
+      // Файл такого счёта уже записан в его коде, поэтому отнесение проводки
+      // либо отсутствует, либо обязано совпасть с ним. Разойтись им нельзя:
+      // обеспечение считалось бы по чужому файлу, и красная линия №1 потеряла
+      // бы опору в отнесении.
       if (attribution === null) continue;
-      if (isClientRef(attribution)) {
-        // Запертые деньги живут в файле транша, а не в файле владельца: иначе
-        // обеспечение транша считалось бы по чужому файлу и красная линия №1
-        // перестала бы иметь опору в отнесении.
-        throw new LedgerError(LedgerErrorCode.postingClientAttributionMismatch, {
-          account: accountCode(account),
-          clientKey: attribution.clientKey,
-        });
-      }
-      if (
-        attribution.dealId !== account.dealId ||
-        attribution.trancheId !== account.trancheId
-      ) {
-        throw new LedgerError(LedgerErrorCode.postingAttributionMismatch, {
-          account: accountCode(account),
-          dealId: attribution.dealId,
-          trancheId: attribution.trancheId,
-        });
+      const file = clientAccountFile(account);
+      const asText = (ref: FundsRef): string =>
+        isClientRef(ref) ? ref.clientKey : `${ref.dealId}:${ref.trancheId}`;
+      const matches =
+        file !== null &&
+        (isClientRef(file)
+          ? isClientRef(attribution) && attribution.clientKey === file.clientKey
+          : !isClientRef(attribution) &&
+            attribution.dealId === file.dealId &&
+            attribution.trancheId === file.trancheId);
+      if (!matches) {
+        // Два разных отнесения к траншу — расхождение файла транша; всё
+        // остальное — расхождение файла клиента. Коды разные, потому что
+        // разбирать их дежурному приходится по-разному.
+        const bothTranches = file !== null && !isClientRef(file) && !isClientRef(attribution);
+        throw new LedgerError(
+          bothTranches
+            ? LedgerErrorCode.postingAttributionMismatch
+            : LedgerErrorCode.postingClientAttributionMismatch,
+          {
+            account: accountCode(account),
+            attribution: asText(attribution),
+            file: file === null ? '' : asText(file),
+          },
+        );
       }
       continue;
     }
-    if (account.kind === 'client_free') {
-      if (attribution === null) continue;
-      // Свободная часть — файл владельца. Отнесение к траншу здесь означало бы,
-      // что деньги одновременно свободны и заперты.
-      if (!isClientRef(attribution) || attribution.clientKey !== account.clientKey) {
+
+    if (scope === 'pooled') {
+      // У пула файла нет по объявлению — это его определение. Отнесение на
+      // пуловой проводке означало бы, что деньги одновременно и в файле, и вне
+      // файлов, и пофайловая сверка считала бы их дважды.
+      if (attribution !== null) {
         throw new LedgerError(LedgerErrorCode.postingClientAttributionMismatch, {
           account: accountCode(account),
           attribution: isClientRef(attribution)
@@ -214,7 +330,10 @@ function assertAttribution(postings: readonly Posting[]): void {
       }
       continue;
     }
-    if (isClientCustodyAccount(account) && attribution === null && !hasSuspense) {
+
+    // Счёт, объявивший «файл приносит отнесение», без отнесения файла не имеет:
+    // пофайловая сверка (CORE.md Ф10) по такой проводке не построится.
+    if (attribution === null && !hasIntakePool) {
       throw new LedgerError(LedgerErrorCode.postingCustodyWithoutAttribution, {
         account: accountCode(account),
       });
@@ -284,14 +403,9 @@ function assertNoClientCrossSubsidy(postings: readonly Posting[]): void {
   const settledObligations = new Set<string>();
   for (const posting of postings) {
     if (posting.direction === 'debit' && isClientObligationAccount(posting.account)) {
-      const account = posting.account;
-      const ref: FundsRef | null =
-        account.kind === 'client_locked'
-          ? { dealId: account.dealId, trancheId: account.trancheId }
-          : account.kind === 'client_free'
-            ? { clientKey: account.clientKey }
-            : null;
-      settledObligations.add(fundsSourceKey(posting.amount.currency, ref));
+      settledObligations.add(
+        fundsSourceKey(posting.amount.currency, clientAccountFile(posting.account)),
+      );
     }
   }
   if (settledObligations.size === 0) {
@@ -518,8 +632,17 @@ function assertPlatformIncomeSweptToOperating(postings: readonly Posting[]): voi
     if (posting.direction === 'credit' && isPlatformIncomeAccount(posting.account)) {
       income.set(currency, (income.get(currency) ?? 0n) + posting.amount.minor);
     }
-    if (posting.direction === 'debit' && posting.account.kind === 'bank_operating') {
-      swept.set(currency, (swept.get(currency) ?? 0n) + posting.amount.minor);
+    if (posting.account.kind === 'bank_operating') {
+      // **Чистое движение, а не валовый дебет.** Прежняя редакция складывала
+      // только дебеты операционного счёта, и запись, где комиссия «выведена»
+      // дебетом 300 и тут же возвращена кредитом 300, собиралась: на
+      // операционном счёте ноль, комиссия осталась на номинальном, а проверка
+      // рапортовала о выводе. Утверждение в комментарии было ложным.
+      swept.set(
+        currency,
+        (swept.get(currency) ?? 0n) +
+          (posting.direction === 'debit' ? posting.amount.minor : -posting.amount.minor),
+      );
     }
   }
   for (const [currency, recognised] of income) {
@@ -536,38 +659,37 @@ function assertPlatformIncomeSweptToOperating(postings: readonly Posting[]): voi
 }
 
 /**
- * Обязательство перед клиентом не уходит обратно в непознанные.
+ * Обязательство перед известным клиентом не уходит обратно в пул-вход.
  *
- * `suspense:unidentified` — вход в учёт, а не выход из него: у поступления ещё
- * нет владельца (FUNCTIONAL.md §3.3, шаг 1), и опознание одностороннее
- * (`identifySuspense`). Обратное движение — «дебет обязательства перед
- * клиентом, кредит непознанных» — переводит деньги в пул без владельца и без
- * файла, и это ровно первый шаг двухзаписной отмывки: обязательство по траншу
- * А гасится в непознанные, а вторая запись опознаёт их на постороннее лицо.
+ * Пул-вход (`pool: 'intake'`, сегодня — `suspense:unidentified`) — это вход в
+ * учёт, а не выход из него: у поступления ещё нет владельца (FUNCTIONAL.md
+ * §3.3, шаг 1), и опознание одностороннее. Обратное движение — «дебет
+ * обязательства перед клиентом, кредит пула» — переводит деньги в пул без
+ * владельца и без файла, и это ровно первый шаг двухзаписной отмывки:
+ * обязательство по траншу А гасится в пул, а вторая запись опознаёт его на
+ * постороннее лицо.
  *
- * Ни портфельное покрытие, ни пофайловое такую пару не видели: у непознанных
- * файла нет вовсе, а опустевший файл транша оказывался в профиците, который до
- * `InvariantCode.custodySurplus` считался покрытием.
+ * **Правило больше не знает имени счёта.** Прежняя редакция сравнивала
+ * `kind === 'suspense_unidentified'`, поэтому та же самая атака прошла через
+ * `unclaimed:liability`, которого в сравнении не было. Теперь условие — это
+ * объявленное направление пула, и любой будущий пул-вход попадает под запрет
+ * в момент своего объявления, без правки этой функции.
  *
  * Исправление ошибочного опознания — законный случай (не тот плательщик), и оно
  * остаётся возможным записью типа `correction`: у неё есть ссылка на
  * исправляемую запись, то есть след (красная линия №11).
- *
- * Проверка стоит последней: формы, которые ловят красные линии №1 и №2, обязаны
- * называться своими кодами, а не этим.
  */
-function assertNoObligationIntoSuspense(
+function assertNoOwnedObligationIntoIntakePool(
   kind: JournalEntryKind,
   postings: readonly Posting[],
 ): void {
   if (kind === 'correction') {
     return;
   }
-  const intoSuspense = postings.some(
-    (posting) =>
-      posting.direction === 'credit' && posting.account.kind === 'suspense_unidentified',
+  const intoPool = postings.some(
+    (posting) => posting.direction === 'credit' && poolDirection(posting.account) === 'intake',
   );
-  if (!intoSuspense) {
+  if (!intoPool) {
     return;
   }
   const drained = postings.find(
@@ -577,9 +699,161 @@ function assertNoObligationIntoSuspense(
       clientAccountOwner(posting.account) !== null,
   );
   if (drained !== undefined) {
-    throw new LedgerError(LedgerErrorCode.entryObligationIntoSuspense, {
+    throw new LedgerError(LedgerErrorCode.entryObligationIntoIntakePool, {
       account: accountCode(drained.account),
     });
+  }
+}
+
+/**
+ * Из пула-выхода деньги обратно к клиенту не выходят.
+ *
+ * `unclaimed:liability` — терминальный пул: сюда обязательство закрывается,
+ * когда клиент не найден, возврат невозможен и сделка мертва (§3.1, случай Б).
+ * Обратный ход — «дебет пула, кредит обязательства перед клиентом» — это
+ * выдача невостребованных средств лицу, и учёт не может проверить, тому ли:
+ * §3.1 прямо помечает порядок обращения с невостребованными средствами как
+ * **[открыто]**, вопрос юристу.
+ *
+ * Без этого запрета законное списание превращается в отмывочный конвейер:
+ * запись 1 списывает обязательство перед X в пул по всем правилам, запись 2
+ * выдаёт содержимое пула постороннему Z, и обе записи по отдельности выглядят
+ * безупречно — файлы сходятся, обеспечение на месте.
+ *
+ * Когда порядок будет установлен, у выдачи появится своё объявление —
+ * подтверждение домена о том, кто и на каком основании заявил права, — по
+ * образцу `DealPartiesAttestation`. До тех пор форма не выразима записью типа
+ * `settlement`, а ошибочное списание отменяется `correction` со ссылкой.
+ */
+function assertNoPayoutFromTerminalPool(
+  kind: JournalEntryKind,
+  postings: readonly Posting[],
+): void {
+  if (kind === 'correction') {
+    return;
+  }
+  const drained = postings.find(
+    (posting) =>
+      posting.direction === 'debit' &&
+      isClientObligationAccount(posting.account) &&
+      poolDirection(posting.account) === 'terminal',
+  );
+  if (drained !== undefined) {
+    throw new LedgerError(LedgerErrorCode.entryTerminalPoolPayout, {
+      account: accountCode(drained.account),
+    });
+  }
+}
+
+/**
+ * Файл клиентских средств не наращивает обеспечение за чужой счёт.
+ *
+ * Это красная линия №1, высказанная **без единого имени счёта**. Файл — либо
+ * транш, либо клиент вне сделки, либо «вне файлов» (пулы). Для каждого файла в
+ * записи считается прирост обеспечения: сколько в него пришло клиентских
+ * активов минус сколько в нём прибавилось обязательств. Прирост означает, что
+ * файл стал обеспечен лучше, чем был, — и у такого прироста есть ровно один
+ * законный источник: **собственные деньги платформы, ушедшие с её собственного
+ * счёта в этой же записи** (довнесение недостачи, §3.1, случай А, момент 2).
+ *
+ * Всё остальное — перелив: обеспечение одного файла выросло за счёт другого,
+ * или обязательство исчезло, а деньги остались. Обе известные атаки ломаются
+ * именно здесь:
+ *
+ * - `Дт client:X:tranche:A / Кт <пул> / Кт bank:nominal(файл A) / Дт bank:nominal(файл Z)` —
+ *   файл Z прирос на всю сумму, платформа не потратила ничего;
+ * - `Дт <пул> / Кт client:Z:free` — обязательство пула исчезло, деньги пула не
+ *   двинулись: прирост «вне файлов» на всю сумму.
+ *
+ * **Исправления не исключены.** Соблазн был: у `correction` есть ссылка на
+ * исправляемую запись, и все прочие запреты её пропускают. Но именно поэтому
+ * она мгновенно становится обходным путём — обе атаки выше проходят целиком,
+ * если пометить их записи исправлениями. Поэтому правило действует и здесь, а
+ * законному исправлению даётся ровно одна поблажка: **отменённое признание
+ * расхода платформы тоже считается финансированием**. Исправление отматывает
+ * назад уже записанное обещание доплатить (§3.1, случай А), и прирост файла в
+ * нём — не прирост, а снятие прежней недостачи. В обычной записи такой
+ * поблажки нет: там кредит расхода означал бы, что обязательство перед
+ * клиентом погашено «за счёт уменьшения нашего убытка», то есть отобрано.
+ *
+ * Ограничения названы честно. Проверка смотрит одну запись, поэтому:
+ *
+ * - перелив, размазанный по двум записям через **реальный** операционный счёт
+ *   платформы, ею не ловится: платформа вправе двигать свои деньги, и такой
+ *   маршрут обязан оставить след на настоящем банковском счёте, где его найдёт
+ *   сверка с выпиской;
+ * - исправление, в котором прирост чужого файла подпёрт встречным кредитом
+ *   расхода платформы, формально пройдёт — ценой признанного убытка и ссылки
+ *   на конкретную исправляемую запись. Полностью закрывается только сверкой
+ *   исправления с исправляемой записью, а это знание журнала, которого у
+ *   конструктора записи нет; см. отчёт по батчу.
+ */
+function assertNoUnfundedClientFileGain(
+  kind: JournalEntryKind,
+  postings: readonly Posting[],
+): void {
+  const custody = new Map<string, bigint>();
+  const obligations = new Map<string, bigint>();
+  const files = new Set<string>();
+  const platformFunding = new Map<CurrencyCode, bigint>();
+
+  const bump = (target: Map<string, bigint>, key: string, value: bigint): void => {
+    files.add(key);
+    target.set(key, (target.get(key) ?? 0n) + value);
+  };
+
+  for (const posting of postings) {
+    const account = posting.account;
+    const currency = posting.amount.currency;
+    const scope = clientFundsFile(account);
+    if (scope === null) {
+      // Реальные деньги платформы, ушедшие с её собственного счёта. Признание
+      // расхода сюда не входит: обещание доплатить — не перевод (§3.1). В
+      // исправлении к ним добавляется снятое признание расхода — см. выше.
+      const isPlatformAsset =
+        accountType(account) === 'asset' && fundsOwnership(account) === 'platform';
+      const isReversedExpense = kind === 'correction' && accountType(account) === 'expense';
+      if (isPlatformAsset || isReversedExpense) {
+        platformFunding.set(
+          currency,
+          (platformFunding.get(currency) ?? 0n) +
+            (posting.direction === 'credit' ? posting.amount.minor : -posting.amount.minor),
+        );
+      }
+      continue;
+    }
+    // Файл: из кода счёта, из отнесения, либо «вне файлов» у пулов.
+    const ref: FundsRef | null =
+      scope === 'owner_in_code'
+        ? clientAccountFile(account)
+        : scope === 'in_attribution'
+          ? posting.attribution
+          : null;
+    const key = fundsSourceKey(currency, ref);
+    const signed = posting.direction === 'debit' ? posting.amount.minor : -posting.amount.minor;
+    if (accountType(account) === 'asset') {
+      bump(custody, key, signed);
+    } else {
+      bump(obligations, key, -signed);
+    }
+  }
+
+  const gained = new Map<CurrencyCode, bigint>();
+  for (const key of files) {
+    const gain = (custody.get(key) ?? 0n) - (obligations.get(key) ?? 0n);
+    if (gain <= 0n) continue;
+    const currency = key.slice(0, key.indexOf('|')) as CurrencyCode;
+    gained.set(currency, (gained.get(currency) ?? 0n) + gain);
+  }
+  for (const [currency, gain] of gained) {
+    const funded = platformFunding.get(currency) ?? 0n;
+    if (gain > funded) {
+      throw new LedgerError(LedgerErrorCode.entryClientFileGainUnfunded, {
+        currency,
+        gained: gain.toString(),
+        funded: funded.toString(),
+      });
+    }
   }
 }
 
@@ -606,7 +880,9 @@ export function createJournalEntry(input: JournalEntryInput): JournalEntry {
   assertFeeNeverLandsOnClientFunds(input.kind, input.postings);
   assertPlatformIncomeSweptToOperating(input.postings);
   assertNoClientCrossSubsidy(input.postings);
-  assertNoObligationIntoSuspense(input.kind, input.postings);
+  assertNoOwnedObligationIntoIntakePool(input.kind, input.postings);
+  assertNoPayoutFromTerminalPool(input.kind, input.postings);
+  assertNoUnfundedClientFileGain(input.kind, input.postings);
   if (input.kind === 'correction' && input.correctsEntryId === undefined) {
     throw new LedgerError(LedgerErrorCode.entryCorrectionWithoutReference, { id: input.id });
   }

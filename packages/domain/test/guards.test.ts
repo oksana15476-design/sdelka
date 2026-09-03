@@ -11,6 +11,7 @@ import {
 } from '../src/index';
 import {
   AMOUNT,
+  BUYER,
   BUYER_PARTY_ID,
   CONDITION_ACT,
   MATCHING_STATEMENT,
@@ -46,13 +47,31 @@ describe('каждый guard проходит и не проходит', () => {
     // собственника на заведении сделки) и `g_no_stale_break` (незакрытые
     // расхождения сверки) не реализованы — они относятся к заведению сделки и к
     // сверке, эпики E4 и E7.
-    expect(GUARD_IDS).toHaveLength(16);
+    //
+    // Семнадцатый — `g_funds_collected`: под траншем есть собранные средства.
+    // В §1.3 его нет, потому что документ считает его само собой разумеющимся,
+    // а путь через `release_blocked` в `collected` не заходит вовсе — и транш
+    // без единого лари за ним доходил до `paid_out`, не оставляя в учёте даже
+    // записи.
+    expect(GUARD_IDS).toHaveLength(17);
     expect(GUARD_IDS).not.toContain('g_seller_is_owner');
     expect(GUARD_IDS).not.toContain('g_no_stale_break');
     expect(GUARD_IDS).toContain('g_condition_agreed');
     expect(GUARD_IDS).toContain('g_amendment_accepted_by_both');
     expect(GUARD_IDS).toContain('g_beneficiary_verified');
     expect(GUARD_IDS).toContain('g_unfreeze_approvers_distinct');
+    expect(GUARD_IDS).toContain('g_funds_collected');
+  });
+
+  it('g_funds_collected', () => {
+    expect(check('g_funds_collected', {})).toBe(true);
+    // Денег под траншем нет вовсе — путь через `release_blocked`.
+    expect(check('g_funds_collected', { collectedAmount: null })).toBe(false);
+    // Ноль — это не «собрано»: проводки на ноль журнал не принимает, и расчёту
+    // нечего двигать.
+    expect(check('g_funds_collected', { collectedAmount: money('GEL', 0n) })).toBe(false);
+    // Другая валюта — не «мало», а «не те деньги»: отказ закрытый.
+    expect(check('g_funds_collected', { collectedAmount: money('USD', 9_999_999n) })).toBe(false);
   });
 
   it('g_condition_agreed', () => {
@@ -65,12 +84,39 @@ describe('каждый guard проходит и не проходит', () => {
         conditionAct: { ...CONDITION_ACT, conditionType: 'registration_preliminary' },
       }),
     ).toBe(false);
-    // Акт без получателя и без редакции текста — не акт.
+    // Акт без получателя и без редакции текста — не акт. Получатель проверяется
+    // обеими половинами: акт, назвавший сторону без счёта, — это акт, из
+    // которого получателя расчёта не восстановить, а расчёт собирается из него.
     expect(
-      check('g_condition_agreed', { conditionAct: { ...CONDITION_ACT, recipientPartyId: '' } }),
+      check('g_condition_agreed', {
+        conditionAct: { ...CONDITION_ACT, recipient: { partyId: '', accountKey: 'ge.x' } },
+      }),
+    ).toBe(false);
+    expect(
+      check('g_condition_agreed', {
+        conditionAct: {
+          ...CONDITION_ACT,
+          recipient: { partyId: RECIPIENT_PARTY_ID, accountKey: '' },
+        },
+      }),
     ).toBe(false);
     expect(
       check('g_condition_agreed', { conditionAct: { ...CONDITION_ACT, conditionTextVersion: '' } }),
+    ).toBe(false);
+    // Получатель, назначивший условие сам себе, будучи покупателем: одно лицо
+    // по обе стороны сделки (§2.1) и условие, зависящее от воли одной стороны
+    // (красная линия №6). Отказ **до денег**, а не при расчёте: раньше эта
+    // сверка стояла только на изменении условия, то есть завести таким его
+    // изначально было можно.
+    expect(check('g_condition_agreed', { conditionAct: { ...CONDITION_ACT, recipient: BUYER } }))
+      .toBe(false);
+    expect(
+      check('g_condition_agreed', {
+        conditionAct: {
+          ...CONDITION_ACT,
+          recipient: { partyId: RECIPIENT_PARTY_ID, accountKey: BUYER.accountKey },
+        },
+      }),
     ).toBe(false);
     // Акт, датированный будущим, не принимается.
     expect(

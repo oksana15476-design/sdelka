@@ -17,13 +17,16 @@ import {
   bankNominal,
   bankOperating,
   clientFreeAccount,
+  clientKey,
   clientLockedAccount,
   createJournalEntry,
   credit,
   debit,
   settleTrancheToClientAccount,
   trancheSettlement,
+  transitWriteoff,
   unclaimedLiability,
+  unlockToClientAccount,
 } from '@sdelka/ledger';
 import type { Intent, LedgerTemplate } from '@sdelka/domain';
 
@@ -49,20 +52,37 @@ export type CreditRoute =
    */
   | 'already_on_client_account';
 
+/**
+ * Всё, чего нет в намерении.
+ *
+ * ⚠ Здесь больше нет ни плательщика, ни получателя, и это главное изменение
+ * слоя. Раньше оба приезжали сюда параметрами приложения: намерение несло
+ * только сумму, а кому именно кредитуется расчёт, решал вызывающий — то есть
+ * связи «получатель ↔ сделка» не существовало вовсе, и деньги покупателя
+ * законно оседали у произвольного лица (красная линия №1). Сегодня стороны
+ * приходят в самом намерении: плательщик — в `clientKey`, а получатель — в
+ * отдельном намерении расчёта вместе с подтверждением домена, которого
+ * приложению нечем подделать.
+ *
+ * Осталось ровно то, чего домен не знает: сколько удерживает платформа (§4.3,
+ * считает `@sdelka/money`) и куда деньги уже попали к моменту события.
+ */
 export interface ProjectionContext {
   readonly meta: EntryMeta;
-  readonly deal: TrancheRef;
-  /** Владелец обязательства по траншу: он же плательщик. */
-  readonly payer: ClientKey;
-  /**
-   * Получатель расчёта. В намерении `post_journal_entry` его **нет**: интент
-   * несёт только `clientKey` плательщика. Приложение достаёт получателя из
-   * своего состояния (отчёт, расхождение 3).
-   */
-  readonly recipient: ClientKey;
-  /** Удержания платформы. В намерении их тоже нет — считаются здесь, из `@sdelka/money`. */
+  /** Удержания платформы. В намерении их нет — считаются здесь, из `@sdelka/money`. */
   readonly deductions: readonly Deduction[];
   readonly route: CreditRoute;
+  /**
+   * Сколько сейчас заперто в файле транша — читается из журнала приложением.
+   *
+   * Нужно ровно одному шаблону: отвязке при возврате. Запирание средств под
+   * транш — шаг приложения, у автомата намерения на него нет (отчёт,
+   * расхождение 2), поэтому и обратный шаг автомат порождает вслепую: он не
+   * знает, запирались ли деньги вообще. Транш, у которого деньги так и остались
+   * в свободной части счёта покупателя, отвязывать нечем — и такая отвязка
+   * увела бы запертую часть в минус.
+   */
+  readonly lockedForTranche: Money<CurrencyCode>;
 }
 
 export type ProjectedIntent =
@@ -218,9 +238,16 @@ export function refundToSourceAccount(
 }
 
 /**
- * Списание невостребованных средств (случай Б, `FUNCTIONAL.md` §3.1).
- * Обязательство остаётся долгом (`unclaimed_liability`), деньги уходят с
- * номинального счёта на операционный.
+ * Списание невостребованных средств, **момент 1** (случай Б, `FUNCTIONAL.md`
+ * §3.1): обязательство по траншу закрывается, деньги уходят с номинального
+ * счёта в транзит и становятся долгом невостребованных.
+ *
+ * ⚠ Прежняя редакция собирала списание **одной** записью прямо на операционный
+ * счёт — то есть утверждала, что межбанковский перевод уже дошёл. §3.1 говорит
+ * прямо противоположное: счета в разных банках, автоматических переводов между
+ * ними нет, перевод занимает день-два, и всё это время долг перед
+ * невостребованными обязан стоять против транзитного актива, а не против
+ * операционного остатка, которого ещё нет. Промежуток обязан быть виден.
  *
  * ⚠ Конструктора списания в `entries.ts` нет. Отчёт, расхождение 5.
  */
@@ -236,9 +263,32 @@ export function writeOffUnclaimed(
     memoKey: 'ledger.entry.written_off',
     postings: [
       debit(clientLockedAccount(owner, deal.dealId, deal.trancheId), amount, deal),
-      credit(unclaimedLiability, amount),
       credit(bankNominal(amount.currency), amount, deal),
+      debit(transitWriteoff, amount),
+      credit(unclaimedLiability, amount),
+    ],
+  });
+}
+
+/**
+ * Списание, **момент 2**: деньги дошли на операционный счёт, транзит закрыт.
+ *
+ * Это не переход транша: транш терминален с момента 1, а приход подтверждает
+ * банковская выписка. Поэтому у момента нет намерения в домене и нет шаблона в
+ * `LedgerTemplate` — его инициирует приложение по выписке. Остаток на транзите
+ * старше двух банковских дней — расхождение для сверки, а не норма (§3.1).
+ */
+export function writeOffTransitArrived(
+  meta: EntryMeta,
+  amount: Money<CurrencyCode>,
+): JournalEntry {
+  return createJournalEntry({
+    ...meta,
+    kind: 'settlement',
+    memoKey: 'ledger.entry.write_off_transit_arrived',
+    postings: [
       debit(bankOperating(amount.currency), amount),
+      credit(transitWriteoff, amount),
     ],
   });
 }
@@ -246,14 +296,18 @@ export function writeOffUnclaimed(
 /**
  * Проекция намерения `post_journal_entry`.
  *
- * Шаблонов у домена четыре, конструкторов в словаре учёта шесть, и пересекаются
- * они на одном — расчёте по траншу. Остальное собрано выше вручную.
+ * Плательщик приезжает **в самом намерении** (`clientKey`), а не параметром
+ * приложения: домен адресует счёт клиента владельцем, и подставить сюда чужой
+ * ключ приложению больше нечем. Расчёт здесь не разбирается вовсе — у него
+ * отдельное намерение и отдельная проекция ниже.
  */
 export function projectLedgerIntent(
   intent: Extract<Intent, { type: 'post_journal_entry' }>,
   context: ProjectionContext,
 ): ProjectedIntent {
   const amount = intent.amount;
+  const owner = clientKey(intent.clientKey);
+  const deal: TrancheRef = { dealId: intent.dealId, trancheId: intent.trancheId };
   switch (intent.template) {
     case 'funds_received':
       if (context.route === 'already_on_client_account') {
@@ -266,38 +320,89 @@ export function projectLedgerIntent(
           reasonKey: 'e2e.ledger.funds_already_credited',
         };
       }
-      return { kind: 'entry', entry: creditIncomingPayment(context.meta, context.payer, amount) };
-    case 'payout_with_fee': {
-      const fee = feeOf(amount, context.deductions);
-      // Расчёт — одна запись, включающая вывод комиссии на операционный счёт:
-      // отдельного шага вывода больше нет, и «забыть» его невозможно
-      // (красная линия №2, `ledger/src/entry.ts`,
-      // `assertPlatformIncomeSweptToOperating`). Раньше приложение выводило
-      // комиссию вручную вторым движением; теперь такое движение создало бы
-      // недостачу по файлу транша, который расчёт уже опустошил.
-      //
-      // Объявление расчёта называет сделку, транш, плательщика и получателя
-      // одним значением и **остаётся в записи**: претензия «получатель — по
-      // этой сделке» стала фактом журнала, а не следствием формы проводок
-      // (красная линия №1).
+      return { kind: 'entry', entry: creditIncomingPayment(context.meta, owner, amount) };
+    /**
+     * Возврат, момент 1: отвязка от транша. Деньги никуда не уходили — они на
+     * номинальном счёте и снова отзывные (красная линия №7). Конструктор берётся
+     * из словаря учёта: у отвязки он есть, и второй реализации той же записи в
+     * приложении быть не должно.
+     *
+     * Пустой файл транша — не ошибка, а второй законный случай: деньги дошли до
+     * возврата, ни разу не покинув свободную часть счёта покупателя (возврат из
+     * `collecting`, из `collected` до резерва, после отката резерва). Отвязывать
+     * тогда нечего, и подавленное намерение видно тесту в `world.suppressed`, а
+     * не проваливается молча.
+     *
+     * Нулём проверяется именно ноль, а не «меньше суммы»: частичный остаток в
+     * файле — это расхождение, и его обязана поймать запись, а не спрятать
+     * проекция.
+     */
+    case 'refund_unlock':
+      if (context.lockedForTranche.minor === 0n) {
+        return {
+          kind: 'no_entry',
+          template: intent.template,
+          reasonKey: 'e2e.ledger.tranche_file_empty',
+        };
+      }
       return {
         kind: 'entry',
-        entry: settleTrancheToClientAccount(
-          context.meta,
-          trancheSettlement(context.deal, context.payer, context.recipient),
-          amount,
-          fee,
-        ),
+        entry: unlockToClientAccount(context.meta, owner, deal, amount),
       };
-    }
-    case 'refund':
-      return { kind: 'entry', entry: refundToSourceAccount(context.meta, context.payer, amount) };
+    /** Возврат, момент 2: уход с номинального счёта на счёт-источник (И12.2). */
+    case 'refund_external':
+      return { kind: 'entry', entry: refundToSourceAccount(context.meta, owner, amount) };
+    /**
+     * Списание такой поблажки не получает намеренно: невостребованными могут
+     * стать только деньги, которые в файле транша есть. Транш, до которого
+     * деньги не дошли, намерения не порождает вовсе — суммы у него нет
+     * (`moneyForTemplate` вернёт `null`), — поэтому пустой файл здесь означает
+     * расхождение, и оно обязано упасть записью, а не быть подавленным.
+     */
     case 'write_off':
-      return {
-        kind: 'entry',
-        entry: writeOffUnclaimed(context.meta, context.payer, context.deal, amount),
-      };
+      return { kind: 'entry', entry: writeOffUnclaimed(context.meta, owner, deal, amount) };
   }
+}
+
+/**
+ * Проекция намерения `post_settlement_entry`.
+ *
+ * ⚠ Изготавливать здесь нечего, и в этом весь смысл. Подтверждение сторон
+ * приходит **внутри намерения**: его выдал автомат транша в момент расчёта, для
+ * той пары, которую записал акт об условии, со ссылкой на пакет доказательств.
+ * Приложение может только передать его дальше — построить своё оно не может
+ * (у `DealPartiesAttestation` ambient-ключ, значения которого не существует),
+ * а подставить другого получателя не может, потому что учёт сверит его с
+ * подтверждением и ответит `settlementAttestationMismatch`.
+ *
+ * Отсюда и следствие: собрать проводку расчёта, не пройдя через автомат
+ * транша, приложению нечем. «Просто выплатить» не существует как операция
+ * (красная линия №5) — не потому, что запрещено, а потому, что нечем.
+ */
+export function projectSettlementIntent(
+  intent: Extract<Intent, { type: 'post_settlement_entry' }>,
+  context: ProjectionContext,
+): ProjectedIntent {
+  const amount = intent.amount;
+  const fee = feeOf(amount, context.deductions);
+  // Расчёт — одна запись, включающая вывод комиссии на операционный счёт:
+  // отдельного шага вывода больше нет, и «забыть» его невозможно
+  // (красная линия №2, `ledger/src/entry.ts`,
+  // `assertPlatformIncomeSweptToOperating`).
+  return {
+    kind: 'entry',
+    entry: settleTrancheToClientAccount(
+      context.meta,
+      trancheSettlement(
+        { dealId: intent.dealId, trancheId: intent.trancheId },
+        clientKey(intent.payerClientKey),
+        clientKey(intent.recipientClientKey),
+        intent.attestation,
+      ),
+      amount,
+      fee,
+    ),
+  };
 }
 
 /** Ноль в валюте: удобство для сборки фикстур, а не бизнес-правило. */

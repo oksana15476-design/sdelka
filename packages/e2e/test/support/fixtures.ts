@@ -25,13 +25,14 @@ import {
 import {
   type ConditionAct,
   type Instant,
+  type PartyRef,
   type PayoutOutcome,
   type ReconciliationOutcome,
   type StatementFields,
   instant,
 } from '@sdelka/domain';
 import { type CurrencyCode, type Deduction, type IsoDate, type Money, isoDate, money, rational } from '@sdelka/money';
-import type { BankOutcome, BankPort, RegistryExtract, RegistryPort } from '../../src/index';
+import { type BankOutcome, type BankPort, type RegistryExtract, type RegistryPort, toClientKey } from '../../src/index';
 
 /**
  * Фикстуры сквозного контура.
@@ -174,9 +175,20 @@ export const SCREENING_SOURCE = rawSource(6, 'screening_response', 'screening.pr
 
 export const CREATED_ON: IsoDate = isoDate('2026-09-03');
 
-export function conditionAct(recipientPartyId: string = SELLER.partyId): ConditionAct {
+/**
+ * Сторона сделки одним значением: ключ участия и ключ её счёта в учёте.
+ *
+ * Порознь их взять неоткуда — в этом и смысл `PartyRef` (`FUNCTIONAL.md` §2.1).
+ * Фикстура собирает обе половины из одного профиля, поэтому «назвать стороной
+ * одного, а счёт взять у другого» здесь невыразимо так же, как в домене.
+ */
+export function partyRef(party: PartyProfile): PartyRef {
+  return { partyId: party.partyId, accountKey: toClientKey(party.document) };
+}
+
+export function conditionAct(recipient: PartyRef = partyRef(SELLER)): ConditionAct {
   return {
-    recipientPartyId,
+    recipient,
     agreedAt: instant(Date.UTC(2026, 8, 3, 9, 0, 0)),
     conditionTextVersion: 'condition.registration_transfer.v1',
     conditionType: 'registration_transfer',
@@ -252,6 +264,35 @@ export function registryWithoutOwnerChange(): RegistryPort {
       observedAt: NOW,
     }),
   };
+}
+
+/**
+ * Выписка пришла, собственник — покупатель, но в реестре обнаружено
+ * обременение, которого стороны не объявляли.
+ *
+ * Самый неприятный из отказов по выписке: четыре поля из пяти сошлись, переход
+ * права состоялся, а вещь оказалась обременённой. `g_fields_match` проверяет
+ * все пять **поимённо**, а не счётчиком совпадений, ровно ради этого случая.
+ */
+export function registryWithEncumbrance(): RegistryPort {
+  return {
+    paidExtract: () => ({
+      statementFields: { ...ALL_FIELDS_MATCH, noUnexpectedEncumbrances: false },
+      ownerIsBuyer: true,
+      ownerDocumentNumber: 'matched',
+      rawSource: REGISTRY_EXTRACT_SOURCE,
+      observedAt: NOW,
+    }),
+  };
+}
+
+/** Выписка из порта или отказ сборки: `null` здесь — дефект фикстуры, не сценарий. */
+export function extractOf(port: RegistryPort, cadastralRef: string): RegistryExtract {
+  const extract = port.paidExtract(cadastralRef);
+  if (extract === null) {
+    throw new Error('e2e.fixture.extract_missing');
+  }
+  return extract;
 }
 
 export interface BankScript {

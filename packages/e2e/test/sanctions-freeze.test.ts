@@ -203,4 +203,73 @@ describe('санкционная заморозка', () => {
     expect(BANK_RESPONSE_SOURCE.sourceKind).toBe('payment_provider_response');
     expect(SELLER.partyId).toBe('party-seller');
   });
+  /**
+   * Разморозка — вторая операция «четырёх глаз» после списания, и правило у неё
+   * то же: два разных человека, ни один из которых не готовил операцию и не
+   * замораживал транш.
+   *
+   * ⚠ Проверка распалась на две половины, и это видно снаружи. Сверка с автором
+   * заморозки живёт в редьюсере (автор лежит в состоянии, а `GuardInput`
+   * состояния не видит), а «двое и они разные» — в guard'е. Первая половина
+   * закрыта сценарием выше; здесь закрыта вторая, и потому все попытки ниже
+   * подписаны кем угодно, только не замораживавшим: иначе они разбились бы о
+   * первую половину, и guard остался бы непроверенным.
+   */
+  it('не выпускает транш из заморозки по одной учётной записи', async () => {
+    const DEAL_SOLO = 'deal-unfreeze-solo';
+    const TRANCHE_SOLO = 'tranche-unfreeze-solo';
+
+    const path = await toReserved({ dealId: DEAL_SOLO, trancheId: TRANCHE_SOLO });
+    // Спор сторон — то же основание заморозки, что и комплаенс, и та же дверь
+    // наружу (`CORE.md` Ф17).
+    let world = applyTrancheEvent(
+      path.world,
+      TRANCHE_SOLO,
+      { type: 'dispute_raised', frozenBy: 'analyst-1' },
+      OPTIONS,
+    ).world;
+    expect(trancheStatusOf(world, TRANCHE_SOLO)).toBe('frozen');
+    const entriesBefore = world.journal.entries.length;
+
+    // --- Одна учётная запись ---
+    expect([
+      ...rejectTrancheEvent(world, TRANCHE_SOLO, {
+        type: 'unfreeze',
+        userIds: ['analyst-2'],
+        resume: 'suspended_from',
+      }).failedGuards,
+    ]).toEqual(['g_unfreeze_approvers_distinct']);
+
+    // --- Один человек дважды ---
+    expect([
+      ...rejectTrancheEvent(world, TRANCHE_SOLO, {
+        type: 'unfreeze',
+        userIds: ['analyst-2', 'analyst-2'],
+        resume: 'suspended_from',
+      }).failedGuards,
+    ]).toEqual(['g_unfreeze_approvers_distinct']);
+
+    // --- Вторым подписантом подставлен тот, кто готовил операцию ---
+    expect(trancheOf(world, TRANCHE_SOLO).facts.preparedBy).toBe('operator-1');
+    expect([
+      ...rejectTrancheEvent(world, TRANCHE_SOLO, {
+        type: 'unfreeze',
+        userIds: ['operator-1', 'analyst-2'],
+        resume: 'suspended_from',
+      }).failedGuards,
+    ]).toEqual(['g_unfreeze_approvers_distinct']);
+
+    // Транш всё это время заморожен, и ни одной проводки не появилось.
+    expect(trancheStatusOf(world, TRANCHE_SOLO)).toBe('frozen');
+    expect(world.journal.entries).toHaveLength(entriesBefore);
+
+    // --- Двое разных, ни один не замораживал: транш возвращается ---
+    world = applyTrancheEvent(
+      world,
+      TRANCHE_SOLO,
+      { type: 'unfreeze', userIds: ['analyst-2', 'analyst-3'], resume: 'suspended_from' },
+      OPTIONS,
+    ).world;
+    expect(trancheStatusOf(world, TRANCHE_SOLO)).toBe('reserved');
+  });
 });

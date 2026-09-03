@@ -30,7 +30,14 @@ import {
   CREATED_ON,
   MATCHING_STATEMENT,
   NOW,
+  RECIPIENT_PARTY_ID,
 } from './support/facts';
+import {
+  type ExpectedBalances,
+  balanceBreaks,
+  expectedBalances,
+  mergeExpected,
+} from './support/conservation';
 import { projectIntents } from './support/ledger-projection';
 
 /**
@@ -195,6 +202,7 @@ function assertLedgerInvariants(journal: Journal): void {
 describe('свойства на случайных последовательностях событий', () => {
   it('keeps client funds coverage at or above one and client balances non-negative', () => {
     let journal = emptyJournal;
+    let expected: ExpectedBalances = { totals: new Map() };
     const terminals = new Map<string, number>();
     for (let run = 0; run < 300; run += 1) {
       const random = makeRandom(run + 1);
@@ -206,6 +214,7 @@ describe('свойства на случайных последовательн�
       // журнале — по завершении прогона: общий журнал ловит ровно то, ради чего
       // он общий, — финансирование одной сделки средствами другой.
       let runJournal = emptyJournal;
+      let runExpected: ExpectedBalances = { totals: new Map() };
       let state: TrancheState = initialTrancheState(NOW, DEFAULT_DEADLINE_POLICY);
 
       for (let step = 0; step < 24 && !isTerminalTrancheStatus(state.status); step += 1) {
@@ -213,8 +222,15 @@ describe('свойства на случайных последовательн�
           requiredAmount: required,
           collectedAmount: collected,
           buyerPayerKey: 'buyer-1',
-          buyerPartyId: BUYER_PARTY_ID,
-          conditionAct: CONDITION_ACT,
+          // Покупатель и его счёт — одно значение: назвать стороной одного, а
+          // дебетовать счёт другого больше нечем (§2.1).
+          buyer: { partyId: BUYER_PARTY_ID, accountKey: `client-${run}` },
+          // Получатель расчёта берётся **из акта**, а не из параметра проекции:
+          // деньги идут тому, кто определил условие (ст. 27(2)).
+          conditionAct: {
+            ...CONDITION_ACT,
+            recipient: { partyId: RECIPIENT_PARTY_ID, accountKey: `seller-${run}` },
+          },
           evidenceBundleId: random() < 0.9 ? 'evidence-1' : null,
           statementFields: MATCHING_STATEMENT,
           registryOwnerIsBuyer: true,
@@ -237,7 +253,6 @@ describe('свойства на случайных последовательн�
           now: NOW,
           dealId,
           trancheId,
-          payerClientKey: `client-${run}`,
           facts,
           deadlinePolicy: DEFAULT_DEADLINE_POLICY,
         };
@@ -247,20 +262,22 @@ describe('свойства на случайных последовательн�
         if (!result.ok) {
           continue;
         }
-        runJournal = projectIntents(runJournal, result.value.intents, {
-          feeRate: FEE_RATE,
-          // Получатель расчёта — не плательщик: `trancheSettlement` отвергает
-          // одну личность на обеих сторонах сделки (FUNCTIONAL.md §2.1).
-          recipientClientKey: `seller-${run}`,
-        });
+        runJournal = projectIntents(runJournal, result.value.intents, { feeRate: FEE_RATE });
+        // Внешний счёт: что автомат велел двигать и куда. Считается по потоку
+        // намерений, о форме записей ничего не зная, — иначе исчезновение
+        // обязательства не поймать (см. `support/conservation.ts`).
+        runExpected = mergeExpected(runExpected, expectedBalances(result.value.intents, FEE_RATE));
         if (result.value.state.status === 'collected' && event.type === 'funds_received') {
           collected = event.amount as Money<'GEL'>;
         }
         state = result.value.state;
         assertLedgerInvariants(runJournal);
+        expect(balanceBreaks(runJournal, runExpected)).toEqual([]);
       }
       journal = appendEntries(journal, runJournal.entries);
+      expected = mergeExpected(expected, runExpected);
       assertLedgerInvariants(journal);
+      expect(balanceBreaks(journal, expected)).toEqual([]);
       if (isTerminalTrancheStatus(state.status)) {
         terminals.set(state.status, (terminals.get(state.status) ?? 0) + 1);
       }

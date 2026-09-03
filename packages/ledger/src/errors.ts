@@ -9,8 +9,11 @@ export const LedgerErrorCode = {
   entryClientOwnerMismatch: 'ledger.entry.client_owner_mismatch',
   entryPlatformIncomeNotSwept: 'ledger.entry.platform_income_not_swept',
   entrySettlementShapeMismatch: 'ledger.entry.settlement_shape_mismatch',
-  entryObligationIntoSuspense: 'ledger.entry.obligation_into_suspense',
+  entryObligationIntoIntakePool: 'ledger.entry.obligation_into_intake_pool',
+  entryTerminalPoolPayout: 'ledger.entry.terminal_pool_payout',
+  entryClientFileGainUnfunded: 'ledger.entry.client_file_gain_unfunded',
   settlementSelfDealing: 'ledger.settlement.self_dealing',
+  settlementAttestationMismatch: 'ledger.settlement.attestation_mismatch',
   entryNonPositiveExcess: 'ledger.entry.non_positive_excess',
   entryCorrectionWithoutReference: 'ledger.entry.correction_without_reference',
   entrySettlementWithReference: 'ledger.entry.settlement_with_reference',
@@ -19,6 +22,7 @@ export const LedgerErrorCode = {
   postingAttributionMismatch: 'ledger.posting.attribution_mismatch',
   postingClientAttributionMismatch: 'ledger.posting.client_attribution_mismatch',
   journalDuplicateEntryId: 'ledger.journal.duplicate_entry_id',
+  journalCorrectionTargetMissing: 'ledger.journal.correction_target_missing',
 } as const;
 
 export type LedgerErrorCode = (typeof LedgerErrorCode)[keyof typeof LedgerErrorCode];

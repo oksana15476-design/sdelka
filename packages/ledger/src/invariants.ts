@@ -4,6 +4,7 @@ import {
   coverageByFundsSource,
   coverageByTranche,
   negativeClientBalances,
+  unclaimedCoverage,
 } from './balance';
 import { balanceByCurrency } from './entry';
 import type { Journal } from './journal';
@@ -40,6 +41,19 @@ export const InvariantCode = {
    * а у непознанного поступления файла нет вовсе.
    */
   custodySurplus: 'ledger.invariant.custody_surplus',
+  /**
+   * Невостребованные средства без обеспечения — вторая проверка покрытия,
+   * которую требует §3.1: деньги, признанные чужими, ушли с номинального счёта,
+   * и если операционного остатка вместе с транзитом на них не хватает, за ними
+   * не стоит уже ничего.
+   *
+   * Приём новых сделок этим не останавливается: красная линия №3 говорит про
+   * покрытие клиентских средств на номинальном счёте, а порядок обращения с
+   * невостребованными помечен в §3.1 как **[открыто]**. Расхождение обязано
+   * быть видимым — решение о стоп-кране принимает владелец вместе с ответом
+   * юриста.
+   */
+  unclaimedUncovered: 'ledger.invariant.unclaimed_uncovered',
 } as const;
 
 export type InvariantCode = (typeof InvariantCode)[keyof typeof InvariantCode];
@@ -82,6 +96,17 @@ export function checkLedgerInvariants(journal: Journal): readonly InvariantViola
         code: InvariantCode.coverageBelowOne,
         currency: item.currency,
         subject: 'portfolio',
+        amountMinor: item.difference.minor,
+      });
+    }
+  }
+
+  for (const item of unclaimedCoverage(journal)) {
+    if (!item.covered) {
+      violations.push({
+        code: InvariantCode.unclaimedUncovered,
+        currency: item.currency,
+        subject: 'unclaimed',
         amountMinor: item.difference.minor,
       });
     }

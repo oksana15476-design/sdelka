@@ -9,6 +9,7 @@ import {
   type PayoutState,
   type TrancheFacts,
   type TrancheState,
+  boundConditionAct,
   isTerminalTrancheStatus,
   violatesSingleActivePayout,
 } from '@sdelka/domain';
@@ -16,6 +17,7 @@ import {
   type ClientKey,
   type Journal,
   balanceByCurrency,
+  clientKey,
   checkLedgerInvariants,
   isEveryFundsSourceCovered,
   isEveryTrancheCovered,
@@ -43,9 +45,6 @@ export interface TrancheRuntime {
   readonly trancheId: string;
   readonly state: TrancheState;
   readonly facts: TrancheFacts;
-  /** Владелец обязательства по траншу — плательщик. Ключ счёта, не ключ личности. */
-  readonly payer: ClientKey;
-  readonly recipient: ClientKey;
   readonly deductions: readonly Deduction[];
   readonly payouts: readonly PayoutState[];
   readonly beneficiary: BeneficiaryState;
@@ -233,6 +232,41 @@ export function dealOf(world: World, dealId: string): DealRuntime {
     throw new Error(`e2e.unknown_deal:${dealId}`);
   }
   return runtime;
+}
+
+/**
+ * Плательщик по траншу — ключ счёта покупателя.
+ *
+ * Отдельного поля у него больше нет. Раньше приложение хранило `payer` рядом с
+ * фактами и подставляло его в проводки, а сторону сделки называл `buyerPartyId`
+ * в фактах: два ответа на один вопрос в двух местах, ни разу не сверенные
+ * между собой. Теперь ответ один — `TrancheFacts.buyer`, где обе половины
+ * личности лежат в одном значении (`PartyRef`, `FUNCTIONAL.md` §2.1), и взять
+ * половину неоткуда.
+ */
+export function payerOf(runtime: TrancheRuntime): ClientKey {
+  return clientKey(runtime.facts.buyer.accountKey);
+}
+
+/**
+ * Получатель расчёта — **из акта об условии**, и ниоткуда больше.
+ *
+ * Свободного параметра `TrancheSpec.recipient` не существует: акт получателя
+ * (ст. 27(2), `CORE.md` Ф13) называет того, кто определил обстоятельство, и
+ * деньги идут ему. Акт берётся сначала из состояния транша — он привязан на
+ * выходе из `pending` и меняется только амендментом обеих сторон, — и лишь для
+ * `pending`, где привязки ещё нет, из фактов.
+ *
+ * Приложение эту функцию в проводки не подставляет: получателя расчёта в учёт
+ * приносит намерение `post_settlement_entry` вместе с подтверждением домена.
+ * Здесь она нужна отчётности и тестам, которым надо назвать ожидаемое лицо.
+ */
+export function recipientOf(runtime: TrancheRuntime): ClientKey {
+  const act = boundConditionAct(runtime.state) ?? runtime.facts.conditionAct;
+  if (act === null) {
+    throw new Error(`e2e.tranche.condition_act_missing:${runtime.trancheId}`);
+  }
+  return clientKey(act.recipient.accountKey);
 }
 
 export function withTranche(world: World, runtime: TrancheRuntime): ReadonlyMap<string, TrancheRuntime> {

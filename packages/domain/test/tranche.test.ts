@@ -76,8 +76,11 @@ describe('транш: основной путь', () => {
     });
 
     const paidOut = accept(stateAt('paying_out'), { type: 'payout_result', outcome: 'settled' }, ctx);
+    // Расчёт — **своё** намерение, а не шаблон общей проводки: только у него
+    // есть получатель и подтверждение сторон, и только он переносит
+    // обязательство от одного лица к другому (красная линия №1).
     expect(paidOut.intents.map((intent) => intent.type)).toEqual([
-      'post_journal_entry',
+      'post_settlement_entry',
       'notify',
       'close_tranche',
     ]);

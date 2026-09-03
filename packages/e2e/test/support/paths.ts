@@ -11,7 +11,8 @@ import {
   receiveExternalPayment,
   trancheOptions,
 } from '../../src/index';
-import { BUYER, DEAL_AMOUNT, POLICY_VERSION, SELLER, registryWithTransfer } from './fixtures';
+import type { CurrencyCode, Money } from '@sdelka/money';
+import { BUYER, DEAL_AMOUNT, POLICY_VERSION, SELLER, extractOf, registryWithTransfer } from './fixtures';
 import { openDeal } from './open';
 
 const OPTIONS = trancheOptions(POLICY_VERSION);
@@ -37,28 +38,32 @@ export interface PathOptions {
    * `condition_established` останавливается (`g_beneficiary_verified`).
    */
   readonly beneficiary?: BeneficiaryState;
+  /** Сумма транша. По умолчанию 200 000 ₾ — вторая ступень утверждений. */
+  readonly amount?: Money<CurrencyCode>;
   readonly world?: World;
 }
 
 export async function toCollected(options: PathOptions): Promise<Advanced> {
   const buyer = options.buyer ?? BUYER;
   const seller = options.seller ?? SELLER;
+  const amount = options.amount ?? DEAL_AMOUNT;
   const opened = await openDeal({
     dealId: options.dealId,
     trancheId: options.trancheId,
     buyer,
     seller,
+    amount,
     ...(options.beneficiary === undefined ? {} : { beneficiary: options.beneficiary }),
     ...(options.world === undefined ? {} : { world: options.world }),
   });
   let world = applyTrancheEvent(opened.world, options.trancheId, { type: 'instructions_issued' }, OPTIONS).world;
-  world = receiveExternalPayment(world, opened.buyerKey, DEAL_AMOUNT);
+  world = receiveExternalPayment(world, opened.buyerKey, amount);
   world = applyTrancheEvent(
     world,
     options.trancheId,
     {
       type: 'funds_received',
-      amount: DEAL_AMOUNT,
+      amount,
       sender: payerKeyForDomain(buyer.document),
       reference: `payment-${options.trancheId}`,
     },
@@ -71,7 +76,7 @@ export async function toCollected(options: PathOptions): Promise<Advanced> {
 export async function toReserved(options: PathOptions): Promise<Advanced> {
   const collected = await toCollected(options);
   let world = applyTrancheEvent(collected.world, options.trancheId, { type: 'reserve_requested' }, OPTIONS).world;
-  world = lockFundsForTranche(world, options.trancheId, DEAL_AMOUNT);
+  world = lockFundsForTranche(world, options.trancheId, options.amount ?? DEAL_AMOUNT);
   return { ...collected, world };
 }
 
@@ -88,10 +93,7 @@ export async function toConditionReady(options: PathOptions): Promise<Advanced> 
   const reserved = await toReserved(options);
   let world = applyDealEvent(reserved.world, options.dealId, { type: 'tranches_reserved' }, OPTIONS);
   world = applyDealEvent(world, options.dealId, { type: 'filing_registered', applicationId: `app-${options.trancheId}` }, OPTIONS);
-  const extract = registryWithTransfer().paidExtract('cadastral');
-  if (extract === null) {
-    throw new Error('e2e.fixture.extract_missing');
-  }
+  const extract = extractOf(registryWithTransfer(), 'cadastral');
   world = attachRegistryExtract(world, options.trancheId, extract, `evidence-${options.trancheId}`);
   return { ...reserved, world };
 }

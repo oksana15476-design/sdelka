@@ -8,6 +8,7 @@ export * from './guards';
 export * from './ids';
 export * from './instant';
 export * from './intents';
+export * from './party';
 export * from './payout';
 export * from './reachability';
 export * from './release-condition';

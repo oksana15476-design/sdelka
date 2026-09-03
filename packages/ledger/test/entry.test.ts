@@ -219,6 +219,29 @@ describe('journal entry: сумма проводок равна нулю', () =>
         }),
       LedgerErrorCode.entryPlatformIncomeNotSwept,
     );
+    // Вывод «туда и обратно» — тоже не вывод. Прежняя редакция проверки
+    // складывала **валовые** дебеты операционного счёта, поэтому запись, где
+    // комиссия выведена дебетом 106 747 и той же записью возвращена кредитом
+    // 106 747, проходила: на операционном счёте ноль, комиссия осталась на
+    // номинальном, а проверка рапортовала о выводе. Считается чистое движение.
+    expectCode(
+      () =>
+        createJournalEntry({
+          id: 'e12',
+          occurredAt: '2026-09-03T10:00:00Z',
+          kind: 'settlement',
+          memoKey: 'ledger.entry.payout',
+          postings: [
+            debit(client, money('GEL', 21_349_500n), deal),
+            credit(bankNominal('GEL'), money('GEL', 21_349_500n), deal),
+            credit(feeIncome, money('GEL', 106_747n)),
+            debit(bankOperating('GEL'), money('GEL', 106_747n)),
+            credit(bankOperating('GEL'), money('GEL', 106_747n)),
+            debit(bankNominal('GEL'), money('GEL', 106_747n), deal),
+          ],
+        }),
+      LedgerErrorCode.entryPlatformIncomeNotSwept,
+    );
     // Частичный вывод — тоже не вывод: остаток комиссии на номинальном счёте
     // ничем не отличается от полной комиссии на нём.
     expectCode(

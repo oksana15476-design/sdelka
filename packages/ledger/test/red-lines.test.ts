@@ -190,36 +190,51 @@ describe('красная линия №1: средства одной сделк
   });
 
   /**
-   * Известная и осознанно оставленная дыра. Запись ниже переносит обеспечение
-   * с транша d1 на транш d2, не трогая ни одного обязательства.
+   * Дыра, которая была осознанно оставлена и закрыта этим батчем.
    *
-   * После E12-1 у этой формы появился законный близнец: привязка к сделке и
-   * отвязка от неё переносят отнесение кастодиана ровно так же — двумя
-   * встречными проводками по номинальному счёту, — только вместе с дебетом и
-   * кредитом обязательств в той же записи. Голое переотнесение отличается от
-   * законного отсутствием этих обязательств, но по одной проводке это не видно:
-   * та же форма встречается и в законном выводе комиссии на операционный счёт.
+   * Запись ниже переносит обеспечение с транша d1 на транш d2, не трогая ни
+   * одного обязательства. Прежде её ловило только пофайловое обеспечение — уже
+   * после факта; при построении записи она проходила, потому что по одной
+   * проводке голое переотнесение неотличимо от законного (привязка к сделке и
+   * вывод комиссии выглядят так же).
    *
-   * При построении записи её по-прежнему не поймать — ловит пофайловое
-   * обеспечение (`coverageByTranche`), но уже после факта. Закрывается вместе
-   * со сверкой в E7; до тех пор тест держит дыру видимой, чтобы её не сочли
-   * невозможной.
+   * Различить их можно не по проводке, а по файлу: у законной привязки вместе
+   * с деньгами переезжает обязательство, и прирост обеспечения файла равен
+   * нулю. Здесь файл d2 прирос на всю сумму, и платформа за это не заплатила
+   * ничем — `assertNoUnfundedClientFileGain`.
    */
-  it('does not catch a custody re-attribution between tranches — known gap, closed in E7', () => {
+  it('rejects a bare custody re-attribution between tranches', () => {
+    try {
+      createJournalEntry({
+        id: 'x6',
+        occurredAt: '2026-09-03T10:00:00Z',
+        kind: 'settlement',
+        memoKey: 'ledger.entry.custody_reattribution',
+        postings: [
+          debit(bankNominal('GEL'), money('GEL', 1_000n), other),
+          credit(bankNominal('GEL'), money('GEL', 1_000n), deal),
+        ],
+      });
+      expect.unreachable();
+    } catch (error) {
+      expect((error as LedgerError).code).toBe(LedgerErrorCode.entryClientFileGainUnfunded);
+    }
+  });
+
+  it('still allows the platform to top the shortfall up out of its own account', () => {
+    // Прирост обеспечения файла законен ровно тогда, когда за него заплачено
+    // деньгами платформы с её собственного счёта (§3.1, случай А, момент 2).
     const entry = createJournalEntry({
-      id: 'x6',
+      id: 'x7',
       occurredAt: '2026-09-03T10:00:00Z',
       kind: 'settlement',
-      memoKey: 'ledger.entry.custody_reattribution',
+      memoKey: 'ledger.entry.shortfall_topup',
       postings: [
-        debit(bankNominal('GEL'), money('GEL', 1_000n), other),
-        credit(bankNominal('GEL'), money('GEL', 1_000n), deal),
+        debit(bankNominal('GEL'), money('GEL', 100n), deal),
+        credit(bankOperating('GEL'), money('GEL', 100n)),
       ],
     });
     expect(entry.postings).toHaveLength(2);
-    // Отчётность видит то, чего не увидело построение записи.
-    const journal = appendEntry(emptyJournal, entry);
-    expect(isEveryTrancheCovered(journal)).toBe(false);
   });
 
   it('allows returning an unidentified incoming payment', () => {

@@ -34,8 +34,9 @@ import { LedgerError, LedgerErrorCode } from './errors';
  * сделки А) и отдельная привязка к сделке Б.
  *
  * `createJournalEntry` остаётся низкоуровневой дверью и держит второй контур
- * (`assertNoLockedToLocked`, `assertNoClientOwnerMove`) для записей, собранных
- * помимо словаря.
+ * для записей, собранных помимо словаря: `assertNoLockedToLocked`,
+ * `assertClientOwnerMoveOnlySettles`, направление пулов и — общее правило,
+ * которое не знает ни одного имени счёта, — `assertNoUnfundedClientFileGain`.
  *
  * Ни одна функция не считает суммы: расщепление и округление — забота
  * `@sdelka/money` (§4.3), учёт только записывает результат.
@@ -250,6 +251,9 @@ export function overpaymentToClientAccount(
  * Плательщик, получатель и сделка приходят **одним значением** (`settles`), и
  * оно же остаётся в записи: получатель расчёта связан со сделкой в самой
  * записи, а не в намерении вызывающего (красная линия №1, см. `entry.ts`).
+ * Само `settles` собирается только из подтверждения домена
+ * (`DealPartiesAttestation`), которого учёту нечем подделать, — иначе связь
+ * была бы самосертификацией вызывающего.
  */
 export function settleTrancheToClientAccount(
   meta: EntryMeta,

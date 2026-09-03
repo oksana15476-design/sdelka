@@ -32,6 +32,7 @@ import {
   type DealState,
   type Instant,
   type Intent,
+  type PartyRef,
   type PayoutEvent,
   type PayoutState,
   type Rejection,
@@ -56,7 +57,9 @@ import {
   type Journal,
   type JournalEntry,
   type TrancheRef,
+  accountBalance,
   appendEntry,
+  clientLockedAccount,
   emptyJournal,
   lockForTranche,
   unlockToClientAccount,
@@ -70,7 +73,9 @@ import {
   feeOf,
   holdUnidentifiedPayment,
   projectLedgerIntent,
+  projectSettlementIntent,
   returnUnidentifiedPayment,
+  writeOffTransitArrived,
 } from './ledger-app';
 import type { RegistryExtract } from './ports';
 import {
@@ -81,6 +86,7 @@ import {
   type World,
   coverageOk,
   dealOf,
+  payerOf,
   sealed,
   trancheOf,
   withDeal,
@@ -185,11 +191,21 @@ export function createDeal(world: World, spec: DealSpec): World {
 export interface TrancheSpec {
   readonly dealId: string;
   readonly trancheId: string;
-  readonly payer: ClientKey;
-  readonly recipient: ClientKey;
-  /** Ключ личности покупателя: с ним сверяется отправитель платежа. */
+  /**
+   * Покупатель — он же плательщик, чья запертая часть дебетуется расчётом.
+   * Обе половины личности в одном значении: сторона сделки и ключ её счёта
+   * (`FUNCTIONAL.md` §2.1). Раньше здесь было три поля — `payer`,
+   * `buyerPartyId` и `buyerPayerKey`, — и первые два никто не сверял между
+   * собой: приложение могло назвать стороной одного, а деньги взять со счёта
+   * другого.
+   */
+  readonly buyer: PartyRef;
+  /**
+   * Ключ личности покупателя в форме, которой подписан банковский платёж: с ним
+   * сверяется имя отправителя (`g_payer_matches`). Это наблюдение из выписки, а
+   * не сторона сделки, поэтому поле отдельное и алфавит у него свой.
+   */
   readonly buyerPayerKey: string;
-  readonly buyerPartyId: string;
   readonly requiredAmount: Money<CurrencyCode>;
   readonly conditionAct: ConditionAct;
   readonly createdOn: IsoDate;
@@ -205,7 +221,7 @@ export function createTranche(world: World, spec: TrancheSpec): World {
     requiredAmount: spec.requiredAmount,
     collectedAmount: null,
     buyerPayerKey: spec.buyerPayerKey,
-    buyerPartyId: spec.buyerPartyId,
+    buyer: spec.buyer,
     conditionAct: spec.conditionAct,
     evidenceBundleId: null,
     // До выписки не совпало ни одно поле: отказ закрытый, а не «наверное сойдётся».
@@ -233,8 +249,6 @@ export function createTranche(world: World, spec: TrancheSpec): World {
     trancheId: spec.trancheId,
     state: initialTrancheState(world.now, DEFAULT_DEADLINE_POLICY),
     facts,
-    payer: spec.payer,
-    recipient: spec.recipient,
     deductions: spec.deductions,
     payouts: Object.freeze([]),
     beneficiary: spec.beneficiary,
@@ -307,7 +321,7 @@ export function recordConditionAct(
     chain: record(world, {
       recordId: auditId(world, seq),
       recordedAt: auditInstant(world.now),
-      actor: auditActor(act.recipientPartyId, 'client', 'sign_condition_act'),
+      actor: auditActor(act.recipient.partyId, 'client', 'sign_condition_act'),
       subject: auditRef('tranche', trancheId),
       related: [auditRef('deal', dealId)],
       body: {
@@ -365,6 +379,24 @@ export function returnHeldPayment(world: World, amount: Money<CurrencyCode>): Wo
   });
 }
 
+/**
+ * Списание, момент 2: деньги дошли с номинального счёта на операционный.
+ *
+ * Отдельный шаг приложения, а не намерение автомата: транш терминален с момента
+ * 1, а приход подтверждает банковская выписка (`FUNCTIONAL.md` §3.1, «два
+ * момента, а не один»). До этого шага долг перед невостребованными стоит против
+ * транзита — и это видно в отчётности, как и требует документ.
+ */
+export function receiveWriteOffTransit(world: World, amount: Money<CurrencyCode>): World {
+  const { meta, seq } = nextMeta(world, 'write-off-transit');
+  return sealed({
+    ...world,
+    seq,
+    journal: appendJournal(world, writeOffTransitArrived(meta, amount)),
+    checks: world.checks,
+  });
+}
+
 export interface ConversionResult {
   readonly world: World;
   readonly converted: ConvertedAmount<CurrencyCode, CurrencyCode>;
@@ -417,7 +449,7 @@ export function lockFundsForTranche(
   return sealed({
     ...world,
     seq,
-    journal: appendJournal(world, lockForTranche(meta, runtime.payer, trancheRefOf(runtime), amount)),
+    journal: appendJournal(world, lockForTranche(meta, payerOf(runtime), trancheRefOf(runtime), amount)),
     checks: world.checks,
   });
 }
@@ -434,7 +466,7 @@ export function unlockFundsFromTranche(
     seq,
     journal: appendJournal(
       world,
-      unlockToClientAccount(meta, runtime.payer, trancheRefOf(runtime), amount),
+      unlockToClientAccount(meta, payerOf(runtime), trancheRefOf(runtime), amount),
     ),
     checks: world.checks,
   });
@@ -538,7 +570,6 @@ export function contextFor(world: World, runtime: TrancheRuntime): TrancheContex
     now: world.now,
     dealId: runtime.dealId,
     trancheId: runtime.trancheId,
-    payerClientKey: runtime.payer,
     facts: {
       ...runtime.facts,
       // Покрытие считает учёт, домен только читает (`g_coverage_ok`).
@@ -688,7 +719,7 @@ function applyIntents(
           kind: options.taskKind,
           dealId: runtime.dealId,
           trancheId: runtime.trancheId,
-          partyId: next.facts.buyerPartyId,
+          partyId: next.facts.buyer.partyId,
           rankAmount: intent.priorityAmount,
           enteredAt: world.now,
           deadlineAt: null,
@@ -704,11 +735,13 @@ function applyIntents(
             id: `entry-${seq}-${intent.template}`,
             occurredAt: new Date(world.now).toISOString(),
           },
-          deal: { dealId: intent.dealId, trancheId: intent.trancheId },
-          payer: next.payer,
-          recipient: next.recipient,
           deductions: next.deductions,
           route: options.creditRoute,
+          lockedForTranche: accountBalance(
+            journal,
+            clientLockedAccount(payerOf(next), intent.dealId, intent.trancheId),
+            intent.amount.currency,
+          ),
         });
         if (projected.kind === 'entry') {
           journal = appendEntry(journal, projected.entry);
@@ -718,6 +751,31 @@ function applyIntents(
             template: projected.template,
             reasonKey: projected.reasonKey,
           });
+        }
+        break;
+      }
+      case 'post_settlement_entry': {
+        // ⚠ Здесь приложение ничего не решает и решать не может. Стороны и
+        // ссылка на доказательства пришли в намерении, подтверждение выдал
+        // автомат — подставить своего получателя нечем, а построить
+        // подтверждение самому невозможно по типу. Отчёт, расхождение 3:
+        // свободный параметр `recipient` исчез вместе с возможностью ошибиться.
+        seq += 1;
+        const projected = projectSettlementIntent(intent, {
+          meta: {
+            id: `entry-${seq}-settlement`,
+            occurredAt: new Date(world.now).toISOString(),
+          },
+          deductions: next.deductions,
+          route: options.creditRoute,
+          lockedForTranche: accountBalance(
+            journal,
+            clientLockedAccount(payerOf(next), intent.dealId, intent.trancheId),
+            intent.amount.currency,
+          ),
+        });
+        if (projected.kind === 'entry') {
+          journal = appendEntry(journal, projected.entry);
         }
         break;
       }

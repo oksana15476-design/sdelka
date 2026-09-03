@@ -1,4 +1,5 @@
 import type { Instant } from './instant';
+import { type PartyRef, isPartyRefValid, partyRefsEqual } from './party';
 import {
   type ReleaseConditionType,
   isReleaseConditionType,
@@ -18,8 +19,19 @@ import {
  * определил условие.
  */
 export interface ConditionAct {
-  /** Кто из получателей совершил акт. Ключ стороны, не имя: имена не уникальны. */
-  readonly recipientPartyId: string;
+  /**
+   * Кто из получателей совершил акт. Ключ стороны, не имя: имена не уникальны.
+   *
+   * **Здесь же и получатель расчёта, и это не совпадение.** Статья 27(2)
+   * держится на том, что обстоятельство определил получатель: деньги идут тому,
+   * кто его определил, а не тому, кого подставили параметром. Поэтому ссылка
+   * несёт обе половины личности сразу (`PartyRef`), и у расчёта нет второго
+   * места, откуда взять получателя, — подтверждение сторон собирается **из
+   * этого поля**. Раньше получатель был свободным параметром приложения
+   * (`TrancheSpec.recipient` в `packages/e2e`), не сверявшимся ни со сторонами
+   * сделки, ни с этим актом: связи «получатель ↔ сделка» не существовало.
+   */
+  readonly recipient: PartyRef;
   readonly agreedAt: Instant;
   /**
    * Редакция текста условия, действовавшая **в момент акта** (FUNCTIONAL.md
@@ -33,7 +45,7 @@ export interface ConditionAct {
 
 export function conditionActsEqual(left: ConditionAct, right: ConditionAct): boolean {
   return (
-    left.recipientPartyId === right.recipientPartyId &&
+    partyRefsEqual(left.recipient, right.recipient) &&
     left.agreedAt === right.agreedAt &&
     left.conditionTextVersion === right.conditionTextVersion &&
     left.conditionType === right.conditionType
@@ -54,12 +66,16 @@ export function conditionActsEqual(left: ConditionAct, right: ConditionAct): boo
  *
  * Акт, датированный будущим, не принимается: он не может быть совершён позже
  * момента, в который на него ссылаются.
+ *
+ * Ссылка на получателя проверяется целиком, обеими половинами. Половина ссылки
+ * — это акт, из которого получателя расчёта не восстановить: он либо не назван
+ * стороной, либо у него нет счёта, а расчёт собирается **из этого поля**.
  */
 export function isConditionActValid(act: ConditionAct | null, now: Instant): boolean {
   if (act === null) {
     return false;
   }
-  if (act.recipientPartyId.length === 0 || act.conditionTextVersion.length === 0) {
+  if (!isPartyRefValid(act.recipient) || act.conditionTextVersion.length === 0) {
     return false;
   }
   if (!isReleaseConditionType(act.conditionType)) {

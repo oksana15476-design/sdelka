@@ -51,6 +51,12 @@ export type Account =
   | { readonly kind: 'oracle_cost_expense' }
   | { readonly kind: 'shortfall_expense' }
   | { readonly kind: 'unclaimed_liability' }
+  // Деньги в пути между номинальным и операционным счётом при списании
+  // невостребованного (§3.1, «два момента, а не один»). В плане счетов
+  // документа он был с самого начала, в коде его не было: списание собиралось
+  // одной записью прямо на операционный счёт, и обязательство перед клиентом
+  // на время перевода оставалось без единого актива за ним.
+  | { readonly kind: 'transit_writeoff' }
   | { readonly kind: 'fx_accounting_diff' };
 
 export type AccountKind = Account['kind'];
@@ -63,78 +69,177 @@ export type AccountType = 'asset' | 'liability' | 'income' | 'expense';
  */
 export type FundsOwnership = 'client' | 'platform';
 
-const ACCOUNT_TYPE: Readonly<Record<AccountKind, AccountType>> = {
-  bank_nominal: 'asset',
-  bank_operating: 'asset',
-  client_free: 'liability',
-  client_locked: 'liability',
-  suspense_unidentified: 'liability',
-  fee_income: 'income',
-  fx_income: 'income',
-  service_income: 'income',
-  psp_fee_expense: 'expense',
-  oracle_cost_expense: 'expense',
+/**
+ * Откуда у клиентских денег берётся **файл** — та единица, внутри которой
+ * считается обеспечение и между которыми красная линия №1 запрещает переливы.
+ *
+ * - `owner_in_code` — файл читается из самого кода счёта: свободная часть даёт
+ *   файл клиента, запертая — файл транша;
+ * - `in_attribution` — файл приносит отнесение проводки: так устроен
+ *   номинальный счёт, на котором лежат деньги всех файлов сразу;
+ * - `pooled` — клиентские деньги **вне файлов**: владельца ещё (или уже) нет.
+ *   Пул обязан объявить своё направление, см. `PoolDirection`.
+ */
+export type FundsFileScope = 'owner_in_code' | 'in_attribution' | 'pooled';
+
+/**
+ * Направление пула — единственная причина, по которой пулы вообще различаются.
+ *
+ * - `intake` — вход в учёт: деньги попадают сюда снаружи, без владельца, и
+ *   уходят отсюда только к владельцу (опознание). Обязательство перед уже
+ *   известным клиентом сюда не возвращается никогда: это первый шаг
+ *   двухзаписной отмывки.
+ * - `terminal` — выход: обязательство перед известным клиентом закрывается
+ *   сюда (списание невостребованного, §3.1, случай Б) и **обратно к клиенту не
+ *   выходит**, пока не отвечен вопрос §3.1 «порядок обращения с
+ *   невостребованными средствами — [открыто]».
+ */
+export type PoolDirection = 'intake' | 'terminal';
+
+/**
+ * Природа счёта: тип, принадлежность средств и — для клиентских денег —
+ * происхождение файла.
+ *
+ * **Это союз, а не запись с необязательными полями, и в этом весь смысл.**
+ * Прежняя защита красной линии №1 стояла на перечнях имён счетов
+ * (`isClientObligationAccount` перечислял три вида), и перечень дважды
+ * оказывался неполным: сначала через него прошла отмывка через
+ * `suspense:unidentified`, потом — ровно та же через `unclaimed:liability`,
+ * которого в перечне не было. Перечень всегда имеет дырку, и дырка тихая:
+ * тесты остаются зелёными.
+ *
+ * Теперь принадлежность к клиентским обязательствам **выводится** из
+ * объявленной природы счёта, а объявить её обязан каждый вид счёта: таблица
+ * `ACCOUNT_NATURE` — `Record<AccountKind, AccountNature>`, и вид счёта без
+ * записи в ней не компилируется. Объявив `funds: 'client'`, счёт обязан
+ * назвать и файл; объявив `file: 'pooled'` — направление пула. Добавить счёт
+ * мимо защиты стало ошибкой компиляции, а не тихой дырой.
+ */
+export type AccountNature = {
+  readonly type: AccountType;
+} & (
+  | { readonly funds: 'platform' }
+  | { readonly funds: 'client'; readonly file: 'owner_in_code' | 'in_attribution' }
+  | { readonly funds: 'client'; readonly file: 'pooled'; readonly pool: PoolDirection }
+);
+
+const ACCOUNT_NATURE = {
+  // Номинальный счёт — актив, на котором лежат чужие деньги всех файлов сразу.
+  // Именно он сопоставляется с обязательствами при проверке покрытия, а файл
+  // конкретной проводки приносит её отнесение.
+  bank_nominal: { type: 'asset', funds: 'client', file: 'in_attribution' },
+  bank_operating: { type: 'asset', funds: 'platform' },
+  client_free: { type: 'liability', funds: 'client', file: 'owner_in_code' },
+  client_locked: { type: 'liability', funds: 'client', file: 'owner_in_code' },
+  // Непознанное поступление: владельца ещё нет (§3.3, шаг 1). Вход, и только.
+  suspense_unidentified: { type: 'liability', funds: 'client', file: 'pooled', pool: 'intake' },
+  fee_income: { type: 'income', funds: 'platform' },
+  fx_income: { type: 'income', funds: 'platform' },
+  service_income: { type: 'income', funds: 'platform' },
+  psp_fee_expense: { type: 'expense', funds: 'platform' },
+  oracle_cost_expense: { type: 'expense', funds: 'platform' },
   // Случай А из §3.1: недостача, покрытая платформой. Признаётся в момент
-  // поступления, состоянием транша не является.
-  shortfall_expense: 'expense',
+  // поступления, состоянием транша не является. Деньги платформы.
+  shortfall_expense: { type: 'expense', funds: 'platform' },
   // Случай Б: невостребованные средства. Обязательство, а не доход. Признать
   // их доходом было бы удобно и, возможно, незаконно — порядок обращения
-  // с ними помечен в §3.1 как [открыто], до ответа юриста это долг.
-  unclaimed_liability: 'liability',
+  // с ними помечен в §3.1 как [открыто], до ответа юриста это долг. Пул
+  // терминальный: обязательство закрывается сюда и обратно не выходит.
+  unclaimed_liability: { type: 'liability', funds: 'client', file: 'pooled', pool: 'terminal' },
+  // Транзит списания — те же клиентские деньги, только в пути между банками.
+  // Актив того же пула, что и долг, который он обеспечивает.
+  transit_writeoff: { type: 'asset', funds: 'client', file: 'pooled', pool: 'terminal' },
   // FUNCTIONAL.md §3.1 помечает учётную курсовую разницу как «расход/доход»:
   // она бывает обеих знаков. Тип счёта в плане один, поэтому знак несёт
   // направление проводки, а не отдельный счёт: кредитовый остаток на этом
   // счёте читается как доход. Разводить на два счёта — решение владельца,
-  // здесь его нет.
-  fx_accounting_diff: 'expense',
-};
+  // здесь его нет. Это не наш спред: спред и разница разведены типами в money
+  // (FUNCTIONAL.md §4.5, CORE.md Ф5), поэтому средства платформы.
+  fx_accounting_diff: { type: 'expense', funds: 'platform' },
+} as const satisfies Readonly<Record<AccountKind, AccountNature>>;
 
-const FUNDS_OWNERSHIP: Readonly<Record<AccountKind, FundsOwnership>> = {
-  // Номинальный счёт — актив, на котором лежат чужие деньги. Именно он
-  // сопоставляется с обязательствами при проверке покрытия.
-  bank_nominal: 'client',
-  bank_operating: 'platform',
-  client_free: 'client',
-  client_locked: 'client',
-  suspense_unidentified: 'client',
-  fee_income: 'platform',
-  fx_income: 'platform',
-  service_income: 'platform',
-  psp_fee_expense: 'platform',
-  oracle_cost_expense: 'platform',
-  // Недостачу платформа покрывает своими деньгами — это её расход.
-  shortfall_expense: 'platform',
-  // Невостребованные средства — по-прежнему чужие деньги, поэтому 'client'.
-  // В отношение покрытия (номинальный счёт против обязательств по траншам)
-  // они при этом не входят: они лежат на операционном счёте, а не на
-  // номинальном. Обеспеченность этого долга операционным остатком отдельным
-  // отношением здесь не проверяется — см. отчёт по батчу.
-  unclaimed_liability: 'client',
-  // Учётная курсовая разница — средства платформы. Это не наш спред: спред и
-  // разница разведены типами в money (FUNCTIONAL.md §4.5, CORE.md Ф5).
-  fx_accounting_diff: 'platform',
-};
+type Assert<T extends true> = T;
+
+type KindsWithNature<Shape> = {
+  [K in AccountKind]: (typeof ACCOUNT_NATURE)[K] extends Shape ? K : never;
+}[AccountKind];
+
+/**
+ * Счёт, объявивший «владелец в коде», обязан нести владельца в значении. Иначе
+ * `clientAccountOwner` возвращал бы `null` для счёта, который по объявлению
+ * владельца имеет, и движение между владельцами снова стало бы невидимым.
+ */
+export type AssertOwnerInCodeCarriesOwner = Assert<
+  Extract<Account, { kind: KindsWithNature<{ file: 'owner_in_code' }> }> extends {
+    readonly clientKey: ClientKey;
+  }
+    ? true
+    : false
+>;
+
+/**
+ * Обязательство перед клиентом не может брать файл из отнесения проводки:
+ * отнесение задаёт тот, кто строит запись, и обязательство, чей файл назначается
+ * извне, ничем не привязано к владельцу. Файл обязательства либо в коде счёта,
+ * либо его нет вовсе (пул).
+ */
+export type AssertObligationFileIsNotAttributed = Assert<
+  KindsWithNature<{ type: 'liability'; funds: 'client'; file: 'in_attribution' }> extends never
+    ? true
+    : false
+>;
+
+export function accountNature(account: Account): AccountNature {
+  return ACCOUNT_NATURE[account.kind];
+}
 
 export function accountType(account: Account): AccountType {
-  return ACCOUNT_TYPE[account.kind];
+  return ACCOUNT_NATURE[account.kind].type;
 }
 
 export function fundsOwnership(account: Account): FundsOwnership {
-  return FUNDS_OWNERSHIP[account.kind];
+  return ACCOUNT_NATURE[account.kind].funds;
 }
 
-/** Актив, на котором физически лежат клиентские средства. */
+export function isClientFundsAccount(account: Account): boolean {
+  return fundsOwnership(account) === 'client';
+}
+
+/**
+ * Актив, на котором физически лежат клиентские средства.
+ *
+ * Выводится, а не перечисляется: клиентские деньги плюс тип «актив». Новый
+ * счёт, объявивший себя клиентским активом, попадает сюда сам.
+ */
 export function isClientCustodyAccount(account: Account): boolean {
-  return account.kind === 'bank_nominal';
+  const nature = ACCOUNT_NATURE[account.kind];
+  return nature.funds === 'client' && nature.type === 'asset';
 }
 
-/** Обязательство перед клиентом, включая непознанные поступления. */
+/**
+ * Обязательство перед клиентом — любое: и запертое под транш, и свободное, и
+ * пуловое (непознанное, невостребованное).
+ *
+ * Выводится из природы счёта: клиентские деньги плюс тип «обязательство». Это
+ * и есть исправление дефекта — прежде здесь стоял перечень из трёх имён, и
+ * `unclaimed:liability` в него не входил, поэтому отмывка через него не
+ * считалась движением обязательства вообще.
+ */
 export function isClientObligationAccount(account: Account): boolean {
-  return (
-    account.kind === 'client_free' ||
-    account.kind === 'client_locked' ||
-    account.kind === 'suspense_unidentified'
-  );
+  const nature = ACCOUNT_NATURE[account.kind];
+  return nature.funds === 'client' && nature.type === 'liability';
+}
+
+/** Откуда у счёта берётся файл. `null` — счёт не клиентских средств. */
+export function clientFundsFile(account: Account): FundsFileScope | null {
+  const nature = ACCOUNT_NATURE[account.kind];
+  return nature.funds === 'client' ? nature.file : null;
+}
+
+/** Направление пула. `null` — счёт пулом не является. */
+export function poolDirection(account: Account): PoolDirection | null {
+  const nature = ACCOUNT_NATURE[account.kind];
+  return nature.funds === 'client' && nature.file === 'pooled' ? nature.pool : null;
 }
 
 /** Запертая под конкретный транш часть счёта клиента. */
@@ -143,17 +248,16 @@ export function isClientLockedAccount(account: Account): boolean {
 }
 
 /**
- * Владелец обязательства. `null` у непознанного поступления — это не пробел, а
- * его определение: клиента у него ещё нет (FUNCTIONAL.md §3.3, шаг 1).
+ * Владелец обязательства. `null` у пуловых счетов — это не пробел, а их
+ * определение: клиента у непознанного поступления ещё нет (FUNCTIONAL.md §3.3,
+ * шаг 1), у невостребованного его уже нет.
+ *
+ * Перечня видов счетов здесь тоже больше нет: владелец есть ровно там, где он
+ * лежит в значении, а `AssertOwnerInCodeCarriesOwner` держит соответствие между
+ * этим и объявленной природой счёта.
  */
 export function clientAccountOwner(account: Account): ClientKey | null {
-  return account.kind === 'client_free' || account.kind === 'client_locked'
-    ? account.clientKey
-    : null;
-}
-
-export function isClientFundsAccount(account: Account): boolean {
-  return fundsOwnership(account) === 'client';
+  return 'clientKey' in account ? account.clientKey : null;
 }
 
 export function isPlatformIncomeAccount(account: Account): boolean {
@@ -208,6 +312,8 @@ export function accountCode(account: Account): string {
       return 'shortfall:expense';
     case 'unclaimed_liability':
       return 'unclaimed:liability';
+    case 'transit_writeoff':
+      return 'transit:writeoff';
     case 'fx_accounting_diff':
       return 'fx:accounting:diff';
   }
@@ -238,4 +344,5 @@ export const clientLockedAccount = (
 });
 export const shortfallExpense: Account = Object.freeze({ kind: 'shortfall_expense' });
 export const unclaimedLiability: Account = Object.freeze({ kind: 'unclaimed_liability' });
+export const transitWriteoff: Account = Object.freeze({ kind: 'transit_writeoff' });
 export const fxAccountingDiff: Account = Object.freeze({ kind: 'fx_accounting_diff' });

@@ -4,7 +4,7 @@ import {
   type TrancheRef,
   appendEntry,
   bankNominal,
-  bankOperating,
+  clientFreeAccount,
   clientKey,
   clientLockedAccount,
   clientTopUp,
@@ -14,6 +14,7 @@ import {
   lockForTranche,
   settleTrancheToClientAccount,
   trancheSettlement,
+  transitWriteoff,
   unclaimedLiability,
   unlockToClientAccount,
 } from '@sdelka/ledger';
@@ -37,28 +38,26 @@ import type { Intent } from '../../src/index';
  * Вызовом словаря расхождение становится невозможным по построению: форму
  * записи знает одно место, и меняется она там же, где проверяется.
  *
- * Что словарь **не** покрывает и почему здесь это видно поимённо:
+ * **У проекции больше нет ни одного свободного параметра.** Получатель расчёта
+ * приходил сюда отдельным полем `ProjectionOptions.recipientClientKey` — то
+ * есть его называла проекция, а не сделка. Теперь получателя, плательщика и
+ * подтверждение сторон несёт само намерение `post_settlement_entry`: домен
+ * читает получателя из акта об условии, а подтверждение изготавливает у себя,
+ * и подделать его здесь нечем. Осталась одна настройка — ставка комиссии,
+ * которая к сторонам отношения не имеет.
  *
- * - **получатель расчёта.** Намерение `post_journal_entry` несёт только
- *   плательщика (`clientKey`); кто получатель, знает приложение. Здесь его
- *   приносит `ProjectionOptions.recipientClientKey`. Это тот же разрыв, что
- *   `ProjectionContext.recipient` в `packages/e2e`, и закрывается он изменением
- *   периметра домена (получатель в намерении) — отдельное решение, отдельная
- *   спека.
- * - **внешний вывод** (возврат покупателю на счёт-источник, И12.2)
- *   и **списание невостребованных** (§3.1, случай Б): конструкторов в словаре
- *   нет. Возврат доведён до свободной части счёта покупателя и остановлен —
- *   выдумывать форму записи здесь нельзя. Списание собрано вручную ровно
- *   потому, что без него терминальное `written_off` не проверить; это
- *   единственное место с ручной сборкой, и оно помечено.
+ * Что словарь **не** покрывает, и это видно поимённо:
+ *
+ * - **внешний вывод возврата** (`refund_external`, красная линия №9, И12.2) и
+ *   **списание невостребованных** (`write_off`, §3.1, случай Б): конструкторов
+ *   в `entries.ts` нет. Обе записи собраны здесь вручную по формам, выписанным
+ *   в §3.1 прямым текстом, и обе помечены. Это шов между пакетами, а не
+ *   свобода проекции: пока конструкторов нет, ту же форму вынуждено повторять
+ *   и приложение (`packages/e2e`), а повторённая форма — ровно тот механизм,
+ *   из-за которого расхождение проекций и возникло.
  */
 export interface ProjectionOptions {
   readonly feeRate: Rational;
-  /**
-   * Получатель расчёта. В намерении его нет: домен знает плательщика (владельца
-   * обязательства) и не знает продавца.
-   */
-  readonly recipientClientKey: string;
 }
 
 let sequence = 0;
@@ -75,6 +74,28 @@ export function projectIntents(
 ): Journal {
   let result = journal;
   for (const intent of intents) {
+    if (intent.type === 'post_settlement_entry') {
+      const deal: TrancheRef = { dealId: intent.dealId, trancheId: intent.trancheId };
+      const payer = clientKey(intent.payerClientKey);
+      const recipient = clientKey(intent.recipientClientKey);
+      // Комиссию считает `@sdelka/money` (§4.3): остаток от округления всегда
+      // у получателя, поэтому она берётся вычитанием, а не умножением.
+      const parts = split(intent.amount, [{ key: 'fee:income', rate: options.feeRate }]);
+      const fee = parts.deductions[0]?.amount ?? null;
+      // Расчёт и вывод комиссии на операционный счёт — одна запись (красная
+      // линия №2): словарь иначе и не умеет. Подтверждение сторон приходит из
+      // намерения — проекция его не изготавливает и изготовить не может.
+      result = appendEntry(
+        result,
+        settleTrancheToClientAccount(
+          nextMeta('2026-09-03T12:00:00Z'),
+          trancheSettlement(deal, payer, recipient, intent.attestation),
+          intent.amount,
+          fee,
+        ),
+      );
+      continue;
+    }
     if (intent.type !== 'post_journal_entry') continue;
     const payer = clientKey(intent.clientKey);
     const deal: TrancheRef = { dealId: intent.dealId, trancheId: intent.trancheId };
@@ -94,53 +115,58 @@ export function projectIntents(
         );
         break;
       }
-      case 'payout_with_fee': {
-        // Комиссию считает `@sdelka/money` (§4.3): остаток от округления всегда
-        // у получателя, поэтому она берётся вычитанием, а не умножением.
-        const parts = split(amount, [{ key: 'fee:income', rate: options.feeRate }]);
-        const fee = parts.deductions[0]?.amount ?? null;
-        // Расчёт и вывод комиссии на операционный счёт — одна запись (красная
-        // линия №2): словарь иначе и не умеет.
-        result = appendEntry(
-          result,
-          settleTrancheToClientAccount(
-            nextMeta('2026-09-03T12:00:00Z'),
-            trancheSettlement(deal, payer, clientKey(options.recipientClientKey)),
-            amount,
-            fee,
-          ),
-        );
-        break;
-      }
-      case 'refund':
-        // Возврат — отвязка от сделки: деньги возвращаются в **свободную** часть
-        // счёта того же покупателя, отзывными (красная линия №7). Перевод их
-        // наружу, на счёт-источник (красная линия №9), — отдельное событие
-        // (И12.2): намерения у автомата на него нет, конструктора в словаре
-        // тоже. Проекция на этом останавливается, а не придумывает запись:
-        // «деньги у покупателя на его счёте, мы их держим» — утверждение
-        // слабее терминального `refunded`, но верное.
+      case 'refund_unlock':
+        // Возврат, момент 1: отвязка от транша. Деньги возвращаются в
+        // **свободную** часть счёта того же покупателя, отзывными (красная
+        // линия №7), и остаются на номинальном счёте — никуда они пока не
+        // уходили. Это словарная запись, обратная привязке.
         result = appendEntry(
           result,
           unlockToClientAccount(nextMeta('2026-09-03T12:00:00Z'), payer, deal, amount),
         );
         break;
+      case 'refund_external':
+        // ⚠ Собрано не словарём: конструктора внешнего вывода в `entries.ts`
+        // нет (И12.2 — то же расхождение, что и у списания).
+        //
+        // Возврат, момент 2: деньги уходят с номинального счёта на
+        // счёт-источник, на имя плательщика (красная линия №9, инвариант 20).
+        // Обязательство перед клиентом дебетуется, кастодиан кредитуется —
+        // обе проводки в файле клиента, потому что транша у этих денег больше
+        // нет: его закрыл момент 1.
+        //
+        // Куда именно ушли деньги, запись не утверждает и утверждать не может:
+        // реквизиты счёта-источника живут в комплаенсе, а домен пропускает
+        // возврат только через `g_source_account_known`.
+        result = appendEntry(
+          result,
+          createJournalEntry({
+            ...nextMeta('2026-09-03T12:00:01Z'),
+            kind: 'settlement',
+            memoKey: 'ledger.entry.refund_external',
+            postings: [
+              debit(clientFreeAccount(payer), amount, { clientKey: payer }),
+              credit(bankNominal(amount.currency), amount, { clientKey: payer }),
+            ],
+          }),
+        );
+        break;
       case 'write_off':
-        // ⚠ Единственная запись, собранная не словарём: конструктора списания в
-        // `entries.ts` нет (то же расхождение, что и в `packages/e2e`).
+        // ⚠ Собрано не словарём: конструктора списания в `entries.ts` нет.
         //
         // Случай Б из FUNCTIONAL.md §3.1: невостребованные средства. Это и есть
         // терминальное `written_off`. Обязательство дебетуется, деньги уходят с
         // номинального счёта — на нём не остаётся остатка без признанного
         // обязательства, — и превращаются не в доход, а в другой долг:
-        // `unclaimed:liability`. Форма — та, что закреплена тестами
-        // `packages/ledger` (`test/write-off.test.ts`, случай Б); документ
-        // требует ещё транзитного счёта на время межбанковского перевода, но
-        // счёта `transit:writeoff` в плане счетов нет — расхождение учёта, не
-        // домена.
+        // `unclaimed:liability`.
         //
-        // Случай А (недостача при зачислении) состоянием транша не является и
-        // здесь не проецируется: он живёт в проводке поступления.
+        // **Через транзит, а не сразу на операционный счёт.** Номинальный счёт
+        // в одном банке, операционный в другом, автоматических переводов между
+        // ними нет (§3.2, красная линия №1): в жизни это межбанковский перевод
+        // на день-два. Прежняя редакция записывала приход на операционный счёт
+        // тем же мгновением — то есть утверждала, что перевод уже дошёл.
+        // Момент 2 («деньги дошли») сюда не попадает вовсе: это факт банковской
+        // выписки, а не переход транша, и автомату сказать о нём нечего.
         result = appendEntry(
           result,
           createJournalEntry({
@@ -150,7 +176,7 @@ export function projectIntents(
             postings: [
               debit(clientLockedAccount(payer, deal.dealId, deal.trancheId), amount, deal),
               credit(bankNominal(amount.currency), amount, deal),
-              debit(bankOperating(amount.currency), amount),
+              debit(transitWriteoff, amount),
               credit(unclaimedLiability, amount),
             ],
           }),

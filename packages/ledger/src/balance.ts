@@ -4,10 +4,20 @@ import {
   type ClientKey,
   accountCode,
   accountType,
+  clientAccountOwner,
+  clientFundsFile,
+  fundsOwnership,
   isClientCustodyAccount,
   isClientObligationAccount,
+  poolDirection,
 } from './accounts';
-import { type FundsRef, type Posting, type TrancheRef, isClientRef } from './entry';
+import {
+  type FundsRef,
+  type Posting,
+  type TrancheRef,
+  clientAccountFile,
+  isClientRef,
+} from './entry';
 import { type Journal } from './journal';
 
 /**
@@ -90,12 +100,21 @@ export function coverage(journal: Journal): readonly CoverageByCurrency[] {
   const obligations = new Map<CurrencyCode, bigint>();
   for (const posting of eachPosting(journal)) {
     const currency = posting.amount.currency;
-    if (isClientCustodyAccount(posting.account)) {
-      custody.set(currency, (custody.get(currency) ?? 0n) + naturalSign(posting.account, posting));
-    } else if (isClientObligationAccount(posting.account)) {
+    const account = posting.account;
+    // Невостребованные средства в это отношение не входят — прямое указание
+    // §3.1: «отношение покрытия сопоставляет номинальный счёт с обязательствами
+    // по траншам и `unclaimed:liability` не видит вовсе. Нужна вторая
+    // проверка». Вторая проверка — `unclaimedCoverage` ниже.
+    //
+    // Условие — по объявленной природе счёта, а не по имени: клиентский актив,
+    // чей файл приносит отнесение (номинальный счёт), против клиентских
+    // обязательств, кроме терминального пула.
+    if (isClientCustodyAccount(account) && clientFundsFile(account) === 'in_attribution') {
+      custody.set(currency, (custody.get(currency) ?? 0n) + naturalSign(account, posting));
+    } else if (isClientObligationAccount(account) && poolDirection(account) !== 'terminal') {
       obligations.set(
         currency,
-        (obligations.get(currency) ?? 0n) + naturalSign(posting.account, posting),
+        (obligations.get(currency) ?? 0n) + naturalSign(account, posting),
       );
     }
   }
@@ -111,6 +130,62 @@ export function coverage(journal: Journal): readonly CoverageByCurrency[] {
       covered: custodyTotal >= obligationsTotal,
       ratio: obligationsTotal === 0n ? null : rational(custodyTotal, obligationsTotal),
     });
+  });
+}
+
+/**
+ * Обеспечение невостребованных средств — вторая проверка, которую требует §3.1.
+ *
+ * Деньги, признанные чужими, уходят с номинального счёта и потому выпадают из
+ * основного отношения покрытия. Если их не сопоставить ни с чем, они перестают
+ * быть кем-либо обеспечены ровно в тот момент, когда за ними больше никто не
+ * следит. Сопоставляются они с тем, где физически лежат: операционный счёт
+ * плюс транзит списания.
+ *
+ * ⚠ На операционном счёте лежат и собственные деньги платформы, поэтому
+ * отношение показывает лишь **достаточность**, а не раздельность. Раздельность
+ * даст только отдельный счёт для невостребованных, и это решение владельца —
+ * вместе с ответом на вопрос §3.1, помеченный **[открыто]**.
+ */
+export function unclaimedCoverage(journal: Journal): readonly CoverageByCurrency[] {
+  const custody = new Map<CurrencyCode, bigint>();
+  const obligations = new Map<CurrencyCode, bigint>();
+  for (const posting of eachPosting(journal)) {
+    const currency = posting.amount.currency;
+    const account = posting.account;
+    if (poolDirection(account) === 'terminal' && accountType(account) === 'liability') {
+      obligations.set(
+        currency,
+        (obligations.get(currency) ?? 0n) + naturalSign(account, posting),
+      );
+      continue;
+    }
+    // Активы, на которых эти деньги лежат: транзит списания (тот же пул) и
+    // операционный счёт платформы.
+    if (
+      (accountType(account) === 'asset' && fundsOwnership(account) === 'platform') ||
+      (poolDirection(account) === 'terminal' && accountType(account) === 'asset')
+    ) {
+      custody.set(currency, (custody.get(currency) ?? 0n) + naturalSign(account, posting));
+    }
+  }
+  const currencies = new Set<CurrencyCode>([...custody.keys(), ...obligations.keys()]);
+  return [...currencies].sort().flatMap((currency) => {
+    const obligationsTotal = obligations.get(currency) ?? 0n;
+    // Валюта, в которой невостребованных обязательств нет вовсе, отношения не
+    // образует: остаток операционного счёта сам по себе ничего не покрывает.
+    if (obligationsTotal === 0n) return [];
+    const custodyTotal = custody.get(currency) ?? 0n;
+    return [
+      Object.freeze({
+        currency,
+        custody: money(currency, custodyTotal),
+        obligations: money(currency, obligationsTotal),
+        difference: money(currency, custodyTotal - obligationsTotal),
+        covered: custodyTotal >= obligationsTotal,
+        ratio: rational(custodyTotal, obligationsTotal),
+      }),
+    ];
   });
 }
 
@@ -246,21 +321,28 @@ function sourceKey(source: FundsSource): string {
     : `tranche|${source.deal.dealId}|${source.deal.trancheId}`;
 }
 
+function asSource(ref: FundsRef | null): FundsSource | null {
+  if (ref === null) return null;
+  return isClientRef(ref)
+    ? { kind: 'client', clientKey: ref.clientKey }
+    : { kind: 'tranche', deal: { dealId: ref.dealId, trancheId: ref.trancheId } };
+}
+
+/**
+ * Файл проводки: у обязательства — из кода счёта, у кастодиана — из отнесения.
+ * Перечня видов счетов здесь нет: и то и другое читается по объявленной природе
+ * счёта, поэтому новый счёт попадает в свой файл сам.
+ */
 function sourceOfPosting(posting: Posting): FundsSource | null {
   const account = posting.account;
-  if (account.kind === 'client_locked') {
-    return { kind: 'tranche', deal: { dealId: account.dealId, trancheId: account.trancheId } };
+  const scope = clientFundsFile(account);
+  if (scope === 'owner_in_code') {
+    return asSource(clientAccountFile(account));
   }
-  if (account.kind === 'client_free') {
-    return { kind: 'client', clientKey: account.clientKey };
+  if (scope === 'in_attribution') {
+    return asSource(posting.attribution);
   }
-  if (isClientCustodyAccount(account)) {
-    const attribution: FundsRef | null = posting.attribution;
-    if (attribution === null) return null;
-    return isClientRef(attribution)
-      ? { kind: 'client', clientKey: attribution.clientKey }
-      : { kind: 'tranche', deal: attribution };
-  }
+  // Пулы файла не образуют: ни сделки, ни клиента у них нет.
   return null;
 }
 
@@ -373,7 +455,8 @@ function byCurrencyList(totals: ReadonlyMap<CurrencyCode, bigint>): readonly Cur
  * журнала. Разбивка по (сделка, транш) — ровно то, чем приложение джойнит одно
  * с другим.
  *
- * Непознанные поступления в выписку не попадают: клиента у них ещё нет.
+ * Пуловые счета в выписку не попадают: владельца у них нет — ни у непознанного
+ * поступления (ещё), ни у невостребованного (уже).
  *
  * Нулевые строки не отфильтрованы: «была валюта и вся заперта» и «валюты не
  * было вовсе» — разные факты, и различать их — забота представления, а не
@@ -387,21 +470,23 @@ export function clientStatement(journal: Journal, owner: ClientKey): ClientState
   for (const posting of eachPosting(journal)) {
     const account = posting.account;
     const currency = posting.amount.currency;
-    if (account.kind === 'client_free' && account.clientKey === owner) {
+    if (!isClientObligationAccount(account) || clientAccountOwner(account) !== owner) continue;
+    // Свободно или заперто — это наличие транша в файле счёта, а не его имя:
+    // счёт, заведённый завтра, попадёт в выписку сам.
+    const file = clientAccountFile(account);
+    if (file === null || isClientRef(file)) {
       free.set(currency, (free.get(currency) ?? 0n) + naturalSign(account, posting));
       continue;
     }
-    if (account.kind === 'client_locked' && account.clientKey === owner) {
-      const deal: TrancheRef = { dealId: account.dealId, trancheId: account.trancheId };
-      const key = `${deal.dealId} ${deal.trancheId}`;
-      const bucket = locked.get(key) ?? { deal, totals: new Map<CurrencyCode, bigint>() };
-      bucket.totals.set(
-        currency,
-        (bucket.totals.get(currency) ?? 0n) + naturalSign(account, posting),
-      );
-      locked.set(key, bucket);
-      lockedTotal.set(currency, (lockedTotal.get(currency) ?? 0n) + naturalSign(account, posting));
-    }
+    const deal: TrancheRef = { dealId: file.dealId, trancheId: file.trancheId };
+    const key = `${deal.dealId} ${deal.trancheId}`;
+    const bucket = locked.get(key) ?? { deal, totals: new Map<CurrencyCode, bigint>() };
+    bucket.totals.set(
+      currency,
+      (bucket.totals.get(currency) ?? 0n) + naturalSign(account, posting),
+    );
+    locked.set(key, bucket);
+    lockedTotal.set(currency, (lockedTotal.get(currency) ?? 0n) + naturalSign(account, posting));
   }
 
   const lockedList: LockedPortion[] = [];

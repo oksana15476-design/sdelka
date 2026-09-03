@@ -9,6 +9,7 @@ import {
 import type { BeneficiaryLock } from './beneficiary';
 import { type ConditionAct, isConditionActValid } from './condition-act';
 import { type Instant, HOUR } from './instant';
+import { type PartyRef, isSameParty } from './party';
 import type { TrancheEvent } from './tranche-events';
 
 /**
@@ -35,6 +36,25 @@ export const GUARD_IDS = [
    */
   'g_beneficiary_verified',
   'g_no_active_payout',
+  /**
+   * введено кодом: **под траншем действительно есть собранные средства**.
+   *
+   * В §1.3 такого guard'а нет, потому что документ считает его само собой
+   * разумеющимся: в `reserved` попадают из `collected`. Но путь
+   * `collecting → release_blocked → release_pending → paying_out` (§1.4, тот
+   * самый, ради которого продублированы guard'ы доказательств) в `collected`
+   * не заходит вовсе — платёж третьего лица уводится в блокировку, оттуда
+   * выходит по утверждению оператора, и деньги на транш при этом **не
+   * зачислялись**. Транш доходил до `paid_out`, не имея за собой ни лари.
+   *
+   * Что при этом происходило в журнале: ничего. Сумма проводки берётся из
+   * собранных средств, и при их отсутствии намерение проводки просто не
+   * порождалось — расчёт уходил в банк, а в учёте не оставалось следа. Ни один
+   * инвариант учёта такого не видит: записи, которой нет, нечему не сойтись.
+   * А деньги на выплату при этом взялись бы с номинального счёта, то есть из
+   * средств других сделок — красная линия №1.
+   */
+  'g_funds_collected',
   'g_coverage_ok',
   'g_source_account_known',
   /**
@@ -152,11 +172,20 @@ export interface TrancheFacts {
   /** Ключ плательщика-покупателя, с которым сверяется отправитель платежа. */
   readonly buyerPayerKey: string;
   /**
-   * Ключ стороны-покупателя. Это не то же, что `buyerPayerKey`: тот сверяется с
-   * именем отправителя платежа, а этот отвечает на вопрос «кто из сторон
-   * принял редакцию условия» (Ф13, E11-4).
+   * Покупатель как сторона сделки — он же плательщик, чья запертая часть
+   * дебетуется расчётом.
+   *
+   * Это не то же, что `buyerPayerKey`: тот сверяется с именем отправителя
+   * банковского платежа (наблюдение из выписки), а здесь — сторона, которая
+   * принимает редакцию условия (Ф13, E11-4) и чей счёт ведёт учёт.
+   *
+   * Раньше этих двух ответов было два разных поля в двух разных структурах:
+   * `buyerPartyId` в фактах и `payerClientKey` в контексте. Между ними не
+   * стояло ни одной сверки — приложение могло назвать стороной одного, а
+   * деньги взять со счёта другого. Теперь это одно значение (§2.1: личность
+   * одна, роль — свойство участия).
    */
-  readonly buyerPartyId: string;
+  readonly buyer: PartyRef;
   /**
    * Акт получателя об условии — порождающий акт (CORE.md Ф13). `null` означает,
    * что акта нет, и приём средств не открывается: отказ закрытый.
@@ -331,18 +360,52 @@ export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> =
    */
   g_beneficiary_verified: ({ facts }) => facts.beneficiary.status === 'verified',
   g_no_active_payout: ({ facts }) => facts.activePayouts === 0,
+  /**
+   * Сравнение с валютой транша, а не только с нулём: собранное в другой валюте
+   * — это не «мало», а «не те деньги», и отказ здесь закрытый, как у
+   * `g_amount_sufficient`. Сверка с требуемой суммой сюда не входит: допуск по
+   * недоплате — правило §4.3, у него своё место, а здесь проверяется только
+   * то, что расчёту есть что двигать.
+   */
+  g_funds_collected: ({ facts }) => {
+    const collected = facts.collectedAmount;
+    if (collected === null) return false;
+    if (collected.currency !== facts.requiredAmount.currency) return false;
+    return collected.minor > 0n;
+  },
   g_coverage_ok: ({ facts }) => facts.coverageOk,
   g_source_account_known: ({ facts }) => facts.sourceAccountKnown,
-  g_condition_agreed: (input) => isConditionActValid(effectiveConditionAct(input), input.now),
+  /**
+   * Акт получателя годен **и назначает получателем не покупателя**.
+   *
+   * Вторая половина проверки стоит здесь, а не в `isConditionActValid`: сам по
+   * себе акт о покупателе ничего не знает, а сравнить его с покупателем можно
+   * только там, где известны факты транша. Раньше эта сверка существовала
+   * ровно в одном месте — на амендменте, — то есть **изменить** условие в свою
+   * пользу было нельзя, а **сразу завести** его таким было можно.
+   *
+   * Одно лицо по обе стороны — отказ, а не предупреждение (FUNCTIONAL.md §2.1).
+   * Здесь же и красная линия №6: условие, которое получатель определил сам
+   * себе, будучи покупателем, зависит только от воли одной стороны и делает
+   * сделку ничтожной целиком. Учёт отвергнет такой расчёт своим
+   * `settlementSelfDealing`, но к тому моменту деньги уже приняты — отказывать
+   * надо на входе, до денег.
+   */
+  g_condition_agreed: (input) => {
+    const act = effectiveConditionAct(input);
+    if (act === null) return false;
+    if (isSameParty(act.recipient, input.facts.buyer)) return false;
+    return isConditionActValid(act, input.now);
+  },
   g_amendment_accepted_by_both: ({ facts, event }) => {
     if (event.type !== 'condition_act_amended') return false;
     // «Обе стороны» — это покупатель и получатель, а не два любых подписанта:
     // иначе условие переопределяется в одностороннем порядке двумя учётными
     // записями одной стороны (CORE.md Ф13).
     const accepted = new Set(event.acceptedBy);
-    const recipient = event.act.recipientPartyId;
-    if (recipient === facts.buyerPartyId) return false;
-    return accepted.has(facts.buyerPartyId) && accepted.has(recipient);
+    const recipient = event.act.recipient;
+    if (isSameParty(recipient, facts.buyer)) return false;
+    return accepted.has(facts.buyer.partyId) && accepted.has(recipient.partyId);
   },
   g_mismatch_resolved: ({ facts }) => facts.mismatchResolved,
   g_write_off_approvers_distinct: ({ facts, event }) => {

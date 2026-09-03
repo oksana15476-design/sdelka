@@ -3,6 +3,7 @@ import {
   type ConditionAct,
   type DeadlinePolicy,
   type Instant,
+  type PartyRef,
   type TrancheContext,
   type TrancheFacts,
   DEFAULT_APPROVAL_POLICY,
@@ -15,25 +16,37 @@ export const NOW: Instant = instant(Date.UTC(2026, 8, 3, 10, 0, 0));
 export const DEAL_ID = 'deal-1';
 export const TRANCHE_ID = 'tranche-1';
 
-/**
- * Владелец обязательства по траншу. После E12-1 счёт клиента в плане счетов
- * адресуется ключом личности, и намерение проводки его несёт. Форма ключа —
- * алфавит `@sdelka/ledger` (`[A-Za-z0-9._-]`): двоеточие там разделитель кода
- * счёта.
- */
-export const PAYER_CLIENT_KEY = 'ge.passport.buyer-1';
-
 export const AMOUNT: Money<CurrencyCode> = money('GEL', 1_000_000n);
 
 export const BUYER_PARTY_ID = 'party-buyer-1';
 export const RECIPIENT_PARTY_ID = 'party-seller-1';
 
 /**
+ * Покупатель и получатель — по одному значению на каждого.
+ *
+ * Форма ключа счёта — алфавит `@sdelka/ledger` (`[A-Za-z0-9._-]`): двоеточие
+ * там разделитель кода счёта, поэтому ключ личности приходит в учёт с точками.
+ */
+export const BUYER: PartyRef = Object.freeze({
+  partyId: BUYER_PARTY_ID,
+  accountKey: 'ge.passport.buyer-1',
+});
+
+export const RECIPIENT: PartyRef = Object.freeze({
+  partyId: RECIPIENT_PARTY_ID,
+  accountKey: 'ge.passport.seller-1',
+});
+
+/** Владелец обязательства по траншу — он же покупатель, он же плательщик. */
+export const PAYER_CLIENT_KEY = BUYER.accountKey;
+export const RECIPIENT_CLIENT_KEY = RECIPIENT.accountKey;
+
+/**
  * Акт получателя об условии (CORE.md Ф13). Совершён до NOW: акт, датированный
  * будущим, не принимается.
  */
 export const CONDITION_ACT: ConditionAct = Object.freeze({
-  recipientPartyId: RECIPIENT_PARTY_ID,
+  recipient: RECIPIENT,
   agreedAt: instant(Date.UTC(2026, 8, 3, 9, 0, 0)),
   conditionTextVersion: 'condition.registration_transfer.v1',
   conditionType: 'registration_transfer',
@@ -56,7 +69,7 @@ export function facts(overrides: Partial<TrancheFacts> = {}): TrancheFacts {
     requiredAmount: AMOUNT,
     collectedAmount: AMOUNT,
     buyerPayerKey: 'buyer-1',
-    buyerPartyId: BUYER_PARTY_ID,
+    buyer: BUYER,
     conditionAct: CONDITION_ACT,
     evidenceBundleId: 'evidence-1',
     statementFields: MATCHING_STATEMENT,
@@ -92,7 +105,6 @@ export function context(
     now,
     dealId: DEAL_ID,
     trancheId: TRANCHE_ID,
-    payerClientKey: PAYER_CLIENT_KEY,
     facts: facts(overrides),
     deadlinePolicy,
   };

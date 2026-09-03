@@ -16,9 +16,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@sdelka/ledger": "workspace:*",
     "@sdelka/money": "workspace:*"
-  },
-  "devDependencies": {
-    "@sdelka/ledger": "workspace:*"
   }
 }

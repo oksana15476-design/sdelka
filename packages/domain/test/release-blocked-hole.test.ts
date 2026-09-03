@@ -63,6 +63,12 @@ describe('дыра release_blocked → release_pending → paying_out', () => {
       // дубля путь через `release_blocked` выпускал бы выплату на реквизиты, у
       // которых сошлось только имя.
       'g_beneficiary_verified',
+      // Под траншем есть собранные средства. Продублирован по той же причине и
+      // на тех же рёбрах: путь через `release_blocked` в `collected` не
+      // заходит, и транш, за которым нет ни лари, доходил до `paid_out` — а
+      // проводки при этом не возникало вовсе, потому что сумма берётся из
+      // собранных средств.
+      'g_funds_collected',
       'g_approvals_sufficient',
       'g_no_active_payout',
       'g_coverage_ok',
@@ -75,5 +81,32 @@ describe('дыра release_blocked → release_pending → paying_out', () => {
     const releasePending = accept(blocked.state, { type: 'approval_added', userId: 'operator-2' }, ctx);
     const payingOut = accept(releasePending.state, { type: 'release_authorized' }, ctx);
     expect(payingOut.state.status).toBe('paying_out');
+  });
+
+  it('stops the same path when the third-party payment never funded the tranche', () => {
+    // Фикстура выше несёт `collectedAmount` из базовых фактов, и это делает её
+    // мягче жизни: платёж третьего лица на транш **не зачисляется** — он уходит
+    // в блокировку. Честные факты этого пути — денег под траншем нет.
+    //
+    // До `g_funds_collected` такой транш доходил до `paid_out`, и проводки при
+    // этом не возникало ни одной: сумма берётся из собранных средств, а без них
+    // намерение не порождалось. Выплата уходила в банк, а в учёте не оставалось
+    // следа — то есть деньги на неё брались с номинального счёта, из средств
+    // других сделок (красная линия №1).
+    const ctx = context({ mismatchResolved: true, collectedAmount: null });
+    const blocked = accept(stateAt('collecting'), thirdPartyPayment, ctx);
+    const releasePending = accept(blocked.state, { type: 'approval_added', userId: 'operator-2' }, ctx);
+    const error = reject(releasePending.state, { type: 'release_authorized' }, ctx);
+    expect(error.code).toBe(RejectionCode.guardFailed);
+    expect(error.failedGuards).toContain('g_funds_collected');
+
+    // И на последней двери тоже: guard, стоящий только на одном входе, не
+    // защищает состояние.
+    const atPayout = reject(
+      stateAt('paying_out'),
+      { type: 'payout_result', outcome: 'settled' },
+      ctx,
+    );
+    expect(atPayout.failedGuards).toContain('g_funds_collected');
   });
 });
