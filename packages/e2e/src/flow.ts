@@ -63,6 +63,7 @@ import {
   emptyJournal,
   lockForTranche,
   unlockToClientAccount,
+  writeOffTransitArrived,
 } from '@sdelka/ledger';
 import type { ConvertedAmount, CurrencyCode, Deduction, FxRates, IsoDate, Money, PlatformSpread } from '@sdelka/money';
 import { accountingFxDifference, convert, platformSpread } from '@sdelka/money';
@@ -75,7 +76,6 @@ import {
   projectLedgerIntent,
   projectSettlementIntent,
   returnUnidentifiedPayment,
-  writeOffTransitArrived,
 } from './ledger-app';
 import type { RegistryExtract } from './ports';
 import {

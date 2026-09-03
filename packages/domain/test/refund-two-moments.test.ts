@@ -114,9 +114,13 @@ describe('возврат: два момента, а не один', () => {
     // что конструктора внешнего вывода в `@sdelka/ledger` нет (И12.2). Шов
     // помечен и в проекции.
     expect(memos).toContain('ledger.entry.unlocked_to_client');
-    expect(memos).toContain('ledger.entry.refund_external');
+    // Ключ памятки — `refund_to_source`, а не `refund_external`: запись теперь
+    // строит конструктор словаря `@sdelka/ledger`, а не проекция от руки.
+    // Форма и порядок двух моментов не изменились, изменилось только имя, и
+    // именно поэтому расхождение проекций больше невозможно.
+    expect(memos).toContain('ledger.entry.refund_to_source');
     expect(memos.indexOf('ledger.entry.unlocked_to_client')).toBeLessThan(
-      memos.indexOf('ledger.entry.refund_external'),
+      memos.indexOf('ledger.entry.refund_to_source'),
     );
   });
 

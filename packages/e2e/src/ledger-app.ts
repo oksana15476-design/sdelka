@@ -27,6 +27,9 @@ import {
   transitWriteoff,
   unclaimedLiability,
   unlockToClientAccount,
+  refundToSourceAccount,
+  writeOffTransitArrived,
+  writeOffUnclaimed,
 } from '@sdelka/ledger';
 import type { Intent, LedgerTemplate } from '@sdelka/domain';
 
@@ -206,89 +209,6 @@ export function convertClientBalance(
             credit({ kind: 'fx_income' } as const, spread.amount),
           ]
         : []),
-    ],
-  });
-}
-
-/**
- * Возврат покупателю наружу, на счёт-источник (красная линия №9).
- *
- * Деньги уходят со свободной части счёта клиента и с номинального счёта. Что
- * счёт именно тот, с которого пришли, и на имя плательщика, проверяет
- * `assessRefundDestination` в `@sdelka/compliance` и guard
- * `g_source_account_known` в домене — журнал этого не знает и знать не может.
- *
- * ⚠ Конструктора внешнего возврата в `entries.ts` нет. Отчёт, расхождение 5.
- */
-export function refundToSourceAccount(
-  meta: EntryMeta,
-  owner: ClientKey,
-  amount: Money<CurrencyCode>,
-): JournalEntry {
-  const ref = { clientKey: owner };
-  return createJournalEntry({
-    ...meta,
-    kind: 'settlement',
-    memoKey: 'ledger.entry.refund_to_source',
-    postings: [
-      debit(clientFreeAccount(owner), amount, ref),
-      credit(bankNominal(amount.currency), amount, ref),
-    ],
-  });
-}
-
-/**
- * Списание невостребованных средств, **момент 1** (случай Б, `FUNCTIONAL.md`
- * §3.1): обязательство по траншу закрывается, деньги уходят с номинального
- * счёта в транзит и становятся долгом невостребованных.
- *
- * ⚠ Прежняя редакция собирала списание **одной** записью прямо на операционный
- * счёт — то есть утверждала, что межбанковский перевод уже дошёл. §3.1 говорит
- * прямо противоположное: счета в разных банках, автоматических переводов между
- * ними нет, перевод занимает день-два, и всё это время долг перед
- * невостребованными обязан стоять против транзитного актива, а не против
- * операционного остатка, которого ещё нет. Промежуток обязан быть виден.
- *
- * ⚠ Конструктора списания в `entries.ts` нет. Отчёт, расхождение 5.
- */
-export function writeOffUnclaimed(
-  meta: EntryMeta,
-  owner: ClientKey,
-  deal: TrancheRef,
-  amount: Money<CurrencyCode>,
-): JournalEntry {
-  return createJournalEntry({
-    ...meta,
-    kind: 'settlement',
-    memoKey: 'ledger.entry.written_off',
-    postings: [
-      debit(clientLockedAccount(owner, deal.dealId, deal.trancheId), amount, deal),
-      credit(bankNominal(amount.currency), amount, deal),
-      debit(transitWriteoff, amount),
-      credit(unclaimedLiability, amount),
-    ],
-  });
-}
-
-/**
- * Списание, **момент 2**: деньги дошли на операционный счёт, транзит закрыт.
- *
- * Это не переход транша: транш терминален с момента 1, а приход подтверждает
- * банковская выписка. Поэтому у момента нет намерения в домене и нет шаблона в
- * `LedgerTemplate` — его инициирует приложение по выписке. Остаток на транзите
- * старше двух банковских дней — расхождение для сверки, а не норма (§3.1).
- */
-export function writeOffTransitArrived(
-  meta: EntryMeta,
-  amount: Money<CurrencyCode>,
-): JournalEntry {
-  return createJournalEntry({
-    ...meta,
-    kind: 'settlement',
-    memoKey: 'ledger.entry.write_off_transit_arrived',
-    postings: [
-      debit(bankOperating(amount.currency), amount),
-      credit(transitWriteoff, amount),
     ],
   });
 }

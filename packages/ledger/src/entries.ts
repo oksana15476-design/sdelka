@@ -12,6 +12,8 @@ import {
   bankOperating,
   clientFreeAccount,
   clientLockedAccount,
+  transitWriteoff,
+  unclaimedLiability,
 } from './accounts';
 import {
   type ClientRef,
@@ -289,6 +291,94 @@ export function settleTrancheToClientAccount(
       credit(custody, gross, tranche),
       debit(custody, net, recipientRef),
       ...(withheld === null ? [] : [debit(bankOperating(withheld.currency), withheld)]),
+    ],
+  });
+}
+
+/**
+ * Возврат, момент 2 (И12.2, красная линия №9): деньги уходят с номинального
+ * счёта на счёт-источник, на имя плательщика. Обязательство перед клиентом
+ * дебетуется, кастодиан кредитуется — обе проводки в файле клиента, потому что
+ * транша у этих денег больше нет: его закрыл момент 1 (`unlockToClientAccount`).
+ *
+ * Куда именно ушли деньги, запись не утверждает и утверждать не может:
+ * реквизиты счёта-источника живут в комплаенсе, а домен пропускает возврат
+ * только через `g_source_account_known`.
+ *
+ * Конструктор жил в двух местах — в проекции домена и в приложении, — и это
+ * ровно тот механизм, из-за которого модели проводок однажды разошлись:
+ * повторённая от руки форма расходится молча, а вызванная из словаря — не
+ * может.
+ */
+export function refundToSourceAccount(
+  meta: EntryMeta,
+  owner: ClientKey,
+  amount: Money<CurrencyCode>,
+): JournalEntry {
+  const ref: ClientRef = { clientKey: owner };
+  return createJournalEntry({
+    ...meta,
+    kind: 'settlement',
+    memoKey: 'ledger.entry.refund_to_source',
+    postings: [
+      debit(clientFreeAccount(owner), amount, ref),
+      credit(bankNominal(amount.currency), amount, ref),
+    ],
+  });
+}
+
+/**
+ * Списание невостребованных средств, **момент 1** (FUNCTIONAL.md §3.1, случай
+ * Б): обязательство по траншу закрывается, деньги уходят с номинального счёта в
+ * транзит и превращаются не в доход, а в другой долг — `unclaimed:liability`.
+ *
+ * Признать невостребованное доходом было бы удобно и, возможно, незаконно:
+ * порядок обращения с такими средствами помечен открытым. До ответа юриста это
+ * долг.
+ *
+ * **Через транзит, а не сразу на операционный счёт.** Счета в разных банках,
+ * автоматических переводов между ними нет (§3.2, красная линия №1): в жизни это
+ * межбанковский перевод на день-два. Запись прямо на операционный счёт
+ * утверждала бы, что перевод уже дошёл.
+ */
+export function writeOffUnclaimed(
+  meta: EntryMeta,
+  owner: ClientKey,
+  deal: TrancheRef,
+  amount: Money<CurrencyCode>,
+): JournalEntry {
+  const tranche = trancheRef(deal.dealId, deal.trancheId);
+  return createJournalEntry({
+    ...meta,
+    kind: 'settlement',
+    memoKey: 'ledger.entry.unclaimed',
+    postings: [
+      debit(clientLockedAccount(owner, deal.dealId, deal.trancheId), amount, tranche),
+      credit(bankNominal(amount.currency), amount, tranche),
+      debit(transitWriteoff, amount),
+      credit(unclaimedLiability, amount),
+    ],
+  });
+}
+
+/**
+ * Списание невостребованных, **момент 2**: межбанковский перевод дошёл.
+ *
+ * Это факт банковской выписки, а не переход транша, — поэтому автомату сказать
+ * о нём нечего, и запись порождает сверка. Остаток на транзитном счёте старше
+ * двух банковских дней — расхождение, а не норма.
+ */
+export function writeOffTransitArrived(
+  meta: EntryMeta,
+  amount: Money<CurrencyCode>,
+): JournalEntry {
+  return createJournalEntry({
+    ...meta,
+    kind: 'settlement',
+    memoKey: 'ledger.entry.write_off_transit_arrived',
+    postings: [
+      debit(bankOperating(amount.currency), amount),
+      credit(transitWriteoff, amount),
     ],
   });
 }
