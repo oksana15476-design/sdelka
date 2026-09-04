@@ -23,5 +23,6 @@ export * from './keys';
 export * from './ledger-app';
 export * from './ports';
 export * from './scheduler';
+export * from './unwind';
 export * from './withdrawal';
 export * from './world';

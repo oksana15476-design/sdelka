@@ -1,4 +1,4 @@
-import type { Anchor, AuditChain, RawSourceRef } from '@sdelka/audit';
+import type { Anchor, AuditChain, AuditRoleId, NonEmpty, RawSourceRef } from '@sdelka/audit';
 import { verifyChain } from '@sdelka/audit';
 import type { BeneficiaryState, NameObservation, ReviewTask } from '@sdelka/compliance';
 import {
@@ -83,6 +83,58 @@ export interface TrancheRuntime {
   readonly observation: ObservationState;
 }
 
+/**
+ * Подпись под откатом: кто поставил, в какой роли и когда.
+ *
+ * Роль хранится вместе с именем, а не выводится потом из справочника: через год
+ * ответ на вопрос «кто имел право это подписать» обязан читаться из самой
+ * записи. Домену она не видна — `g_unwind_approvers_distinct` считает только
+ * различие имён, — но журналу и оператору видна.
+ */
+export interface UnwindApproval {
+  readonly userId: string;
+  readonly roleId: AuditRoleId;
+  readonly at: Instant;
+}
+
+/**
+ * Разбор человеком: заявка на откат сделки и собранные под ней подписи.
+ *
+ * **Почему это живёт в приложении, а не в фактах сделки.** Домен принимает
+ * утверждающих **событием** (`unwind_authorized.userIds`) и объясняет почему:
+ * копить их в фактах значило бы завести у сделки поле «откат кем-то утверждён»,
+ * которое переживёт причину своего появления (`deal.ts`, комментарий к
+ * `g_unwind_approvers_distinct`). Но подписи ставятся не одновременно: первый
+ * утверждающий уходит, второй приходит через час, и между ними состояние
+ * «разбор идёт» обязано где-то лежать. Место такого состояния — слой
+ * приложения: у сделки от него не появляется ни нового статуса, ни нового
+ * правила.
+ *
+ * Заодно закрывается цена, названная в `STATE-MACHINES.md` §3.2 у выбранного
+ * разбора развилки: «идёт разбор» было неотличимо от «ждём реестр». Теперь
+ * отличимо — по наличию заявки, а не по статусу сделки.
+ *
+ * ⚠ **Проверки «двое и они разные» здесь нет намеренно.** Это правило домена, и
+ * второй его экземпляр в приложении сделал бы guard непроверяемым: снятие
+ * `g_unwind_approvers_distinct` не изменило бы поведения ни в одном сценарии, и
+ * мутационный прогон отчитался бы о покрытии, которого нет.
+ */
+export interface UnwindReview {
+  /** Кто поднял разбор. Утверждающим при этом он может быть, а может и не быть. */
+  readonly requestedBy: string;
+  /** Ключ локализации причины. Текста в коде нет (три языка, `CLAUDE.md`). */
+  readonly reasonKey: string;
+  readonly openedAt: Instant;
+  /**
+   * На чём основано решение. Непусто по типу: возврат денег при поданном
+   * заявлении — это движение денег, и «просто вернуть» без основания не
+   * существует как операция (красная линия №5 по смыслу, `DecisionMadeBody` по
+   * типу записи журнала).
+   */
+  readonly evidence: NonEmpty<RawSourceRef>;
+  readonly approvals: readonly UnwindApproval[];
+}
+
 export interface DealRuntime {
   readonly dealId: string;
   readonly state: DealState;
@@ -100,6 +152,13 @@ export interface DealRuntime {
    * событием `filing_registered`, читается guard'ом `g_no_open_filing`.
    */
   readonly filings: readonly DealFiling[];
+  /**
+   * Открытый разбор отката. `null` — разбора никто не поднимал.
+   *
+   * Хранится при сделке, а не отдельной картой мира: разбор всегда о конкретной
+   * сделке, и «разбор без сделки» — состояние, которого не бывает.
+   */
+  readonly unwindReview: UnwindReview | null;
 }
 
 /**

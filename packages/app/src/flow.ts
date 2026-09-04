@@ -225,6 +225,10 @@ export function createDeal(world: World, spec: DealSpec): World {
     trancheIds: Object.freeze([]),
     objectCadastralCode: spec.objectCadastralCode,
     filings: Object.freeze<DealFiling[]>([]),
+    // Разбор отката никто не поднимал. `null`, а не пустая заявка: «заявки нет»
+    // и «заявка есть, подписей ноль» — разные состояния, и второе означает, что
+    // человек уже принял решение возвращать деньги.
+    unwindReview: null,
   };
   return sealed({ ...world, deals: withDeal(world, runtime), checks: world.checks });
 }
