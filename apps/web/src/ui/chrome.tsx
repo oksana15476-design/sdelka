@@ -34,12 +34,20 @@ const SECTIONS = [
 /**
  * Консоль — другое рабочее место, а не раздел кабинета: клиентская навигация в
  * ней не показывается вовсе, иначе оператор попадает в чужой счёт одним нажатием.
+ *
+ * Разделов **два, и оба не про сущности**. Прежде их было четыре — очередь,
+ * решение о выплате, сверка, заморозка, — то есть три из четырёх были входом в
+ * одну конкретную сделку. Оператор в такой панели выбирает не работу, а экран, и
+ * очередь перестаёт быть очередью (`CABINETS.md` §5.1).
+ *
+ * Осталось ровно то, ради чего в консоль заходят: **очередь работы** — всё, что
+ * требует человека, и **дежурный дашборд** — пять метрик, на которые смотрят
+ * каждое утро (§5.4). Разбор выплаты, расхождения и приостановки — это карточки
+ * задач, и достижимы они только из очереди.
  */
 const CONSOLE_SECTIONS = [
   { key: 'nav.queue', href: '/ops' },
-  { key: 'nav.decision', href: '/ops/decision' },
-  { key: 'nav.reconciliation', href: '/ops/reconciliation' },
-  { key: 'nav.unfreeze', href: '/ops/unfreeze' },
+  { key: 'nav.duty', href: '/ops/duty' },
 ] as const;
 
 /**
@@ -59,6 +67,27 @@ function isCurrent(path: string, locale: string, href: string): boolean {
   const own = `/${locale}${href}`;
   if (href === '') return path === `/${locale}` || path === `/${locale}/`;
   return path === own || path.startsWith(`${own}/`);
+}
+
+/**
+ * Текущий раздел — **один**, самый длинный из подошедших.
+ *
+ * Разделы вкладываются друг в друга: `/ops` и `/ops/duty` подходят к адресу
+ * дежурного дашборда оба, и без выбора самого длинного `aria-current="page"`
+ * оказывается на двух ссылках сразу. Для скринридера это два «текущих» пункта в
+ * одном списке, то есть ни одного.
+ */
+function currentHref(
+  sections: readonly { readonly href: string }[],
+  path: string,
+  locale: string,
+): string | null {
+  let best: string | null = null;
+  for (const section of sections) {
+    if (!isCurrent(path, locale, section.href)) continue;
+    if (best === null || section.href.length > best.length) best = section.href;
+  }
+  return best;
 }
 
 /**
@@ -94,7 +123,12 @@ export function AppShell({
   const console = variant === 'console';
   const owner = variant === 'owner';
   const home = console ? `/${l.locale}/ops` : owner ? `/${l.locale}/owner` : `/${l.locale}`;
-  const sections = console ? CONSOLE_SECTIONS : owner ? OWNER_SECTIONS : SECTIONS;
+  const sections: readonly { readonly key: string; readonly href: string }[] = console
+    ? CONSOLE_SECTIONS
+    : owner
+      ? OWNER_SECTIONS
+      : SECTIONS;
+  const current = currentHref(sections, path, l.locale);
   const wide = console || owner;
   return (
     <div className="frame">
@@ -114,7 +148,7 @@ export function AppShell({
                 className="nav__link"
                 key={item.key}
                 href={`/${l.locale}${item.href}`}
-                aria-current={isCurrent(path, l.locale, item.href) ? 'page' : undefined}
+                aria-current={item.href === current ? 'page' : undefined}
               >
                 <span>{t(l.dict, item.key)}</span>
                 {item.key === 'nav.notifications' && unread > 0 ? (

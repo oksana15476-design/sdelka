@@ -68,7 +68,9 @@ import { listOwnerDeals, ownerJournal } from '@/fixtures/owner';
  */
 
 const PAYER = clientKey('payer');
-const RECIPIENT = clientKey('seller');
+// Ключ клиента — ключ личности, а не роли в сделке: одна и та же личность
+// бывает плательщиком в одной сделке и получателем в другой (§2.1).
+const RECIPIENT = clientKey('recipient');
 const TARIFF = 'tariff-v1';
 
 const JUNE: JournalPeriod = { from: Date.UTC(2026, 5, 1), to: Date.UTC(2026, 6, 1) };
