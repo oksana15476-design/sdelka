@@ -1,6 +1,7 @@
 import { type CurrencyCode, type Money, money } from '@sdelka/money';
 import { type DurationMs, DAY, HOUR, duration } from '@sdelka/domain';
 import { type PolicyVersionId, policyVersionId } from './decision';
+import type { DualControlRequirement } from './dual-control';
 import type { CountryCode } from './identity';
 import { countryCode } from './identity';
 import type { NameFeatureWeights } from './names';
@@ -63,7 +64,13 @@ export interface BeneficiaryPolicy {
   readonly cooldown: DurationMs;
   /** Изменение в последние 72 часа перед релизом — автоматический блок. */
   readonly preReleaseBlackout: DurationMs;
-  readonly requiredApprovals: number;
+  /**
+   * Сколько утверждений требует изменение реквизитов. Тип, а не `number`:
+   * политика с нулём означала бы «реквизиты выплаты меняются без второго
+   * человека», и включалось бы это правкой одного значения, невидимой в
+   * поведении (`dual-control.ts`).
+   */
+  readonly requiredApprovals: DualControlRequirement;
 }
 
 export interface ConcentrationPolicy {

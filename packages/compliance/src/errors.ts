@@ -5,6 +5,7 @@ export const ComplianceErrorCode = {
   basisPointsOutOfRange: 'compliance.basis_points.out_of_range',
   nameObservationEmpty: 'compliance.name_observation.empty',
   policyVersionInvalid: 'compliance.policy_version.invalid',
+  dualControlRequirementInvalid: 'compliance.dual_control.requirement_invalid',
   capabilityNotGranted: 'compliance.capability.not_granted',
   aggregateNegative: 'compliance.aggregate.negative',
   aggregateCurrencyMismatch: 'compliance.aggregate.currency_mismatch',

@@ -8,7 +8,7 @@ import { money } from '@sdelka/money';
  * находка на аудите» (`BACKLOG.md` E4-4), — и двух её редакций быть не должно:
  * вторая копия это второе место, где обоснование можно потерять.
  */
-import type { JustifiedThreshold } from '@sdelka/compliance';
+import type { DualControlRequirement, JustifiedThreshold } from '@sdelka/compliance';
 import { IntakeError, IntakeErrorCode } from './errors';
 
 /**
@@ -74,7 +74,12 @@ export interface MatchingPolicy {
 export interface ManualMatchPolicy {
   /** Выше этой суммы ручное сопоставление требует второго утверждения (И2.2). */
   readonly secondApprovalAbove: readonly Money<CurrencyCode>[];
-  readonly requiredApprovals: number;
+  /**
+   * Сколько утверждений требуется, **когда порог пройден**. Ноль невыразим по
+   * типу: «второго утверждения не нужно» — это не значение порога, а другая
+   * ветка `ManualMatchSecondApproval`, и решает её сумма, а не настройка.
+   */
+  readonly requiredApprovals: DualControlRequirement;
 }
 
 export interface QuotePolicy {

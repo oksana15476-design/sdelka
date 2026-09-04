@@ -177,7 +177,12 @@ describe('автоматический релиз запрещён при люб
     // бы молча в день снижения минимума. CRO-risk.md: релиз без человека
     // запрещён при любой сумме.
     for (const tier of DEFAULT_APPROVAL_POLICY.tiers) {
-      expect(tier.requiredApprovals === 0).toBe(false);
+      // Ноль стал невыразим и по типу (`ApprovalTierRequirement` в
+      // `guards.ts`), поэтому сравнение с ним требует приведения. Само
+      // надгробие остаётся рантайм-проверкой: лестница — версионируемая
+      // политика, приведением в неё можно занести что угодно, и запрет обязан
+      // стоять на обоих рубежах.
+      expect((tier.requiredApprovals as number | null) === 0).toBe(false);
     }
   });
 

@@ -1,6 +1,9 @@
 import { money } from '@sdelka/money';
 import { describe, expect, it } from 'vitest';
 import {
+  type ApprovalPolicy,
+  type ApprovalTier,
+  type ApprovalTierRequirement,
   type GuardId,
   type TrancheEvent,
   BENEFICIARY_PRE_RELEASE_BLACKOUT_MS,
@@ -11,12 +14,14 @@ import {
   RELEASE_CONDITIONS,
   evaluateGuard,
   instant,
+  requiredApprovals,
 } from '../src/index';
 import {
   AMOUNT,
   BUYER,
   BUYER_PARTY_ID,
   CONDITION_ACT,
+  CREATED_ON,
   MATCHING_STATEMENT,
   NOW,
   RECIPIENT_PARTY_ID,
@@ -504,5 +509,51 @@ describe('каждый guard проходит и не проходит', () => {
       ),
     ).toBe(false);
     expect(check('g_write_off_approvers_distinct', {}, fundsReceived)).toBe(false);
+  });
+});
+
+describe('ступень с нулём утверждений', () => {
+  it('невыразима типом', () => {
+    // Компиляционный тест: запрет исчезнет — `@ts-expect-error` останется без
+    // ошибки, и не соберётся уже этот файл. Прозы в комментарии к
+    // `DEFAULT_APPROVAL_POLICY` для этого недостаточно: она не мешает завести
+    // такую ступень ни в коде, ни в фикстуре.
+    // @ts-expect-error ноль подписей — это автоматический релиз, а не низкий порог
+    const zero: ApprovalTier = { upToMinor: null, requiredApprovals: 0 };
+    expect(zero.requiredApprovals).toBe(0);
+    // Тройки тоже нет: уровней утверждения два, третью подпись брать неоткуда.
+    // @ts-expect-error ступеней выше двух подписей не существует
+    const three: ApprovalTier = { upToMinor: null, requiredApprovals: 3 };
+    expect(three.requiredApprovals).toBe(3);
+  });
+
+  it('ноль, пришедший приведением, читается как «утверждений не набрать»', () => {
+    // До правки на такой лестнице `requiredApprovals` возвращал `0`, а
+    // `g_approvals_sufficient` проходил с пустым списком утверждающих — выплата
+    // без единого человека. Отказ здесь той же формы, что у суммы выше потолка
+    // пилота: `null`, а не «ноль достаточно».
+    const smuggled: ApprovalPolicy = {
+      currency: 'GEL',
+      tiers: [{ upToMinor: null, requiredApprovals: 0 as unknown as ApprovalTierRequirement }],
+    };
+    expect(requiredApprovals(smuggled, AMOUNT, null, CREATED_ON)).toBeNull();
+    expect(check('g_approvals_sufficient', { approvalPolicy: smuggled, approvals: [] })).toBe(false);
+    // И с утверждениями тоже: испорченная настройка не выплачивает вовсе.
+    expect(
+      check('g_approvals_sufficient', {
+        approvalPolicy: smuggled,
+        approvals: [{ userId: 'approver-1' }],
+      }),
+    ).toBe(false);
+  });
+
+  it('дробь и отрицательная ступень отказывают так же', () => {
+    for (const broken of [0.5, 1.5, -1, 3]) {
+      const policy: ApprovalPolicy = {
+        currency: 'GEL',
+        tiers: [{ upToMinor: null, requiredApprovals: broken as unknown as ApprovalTierRequirement }],
+      };
+      expect(requiredApprovals(policy, AMOUNT, null, CREATED_ON)).toBeNull();
+    }
   });
 });

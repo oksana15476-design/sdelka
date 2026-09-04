@@ -164,11 +164,34 @@ export const GUARD_IDS = [
 
 export type GuardId = (typeof GUARD_IDS)[number];
 
+/**
+ * Сколько подписей требует ступень — **1 или 2, и ничего больше**.
+ *
+ * Запрет нуля стоял прозой в комментарии к `DEFAULT_APPROVAL_POLICY` и держался
+ * на составе одной константы: тип `number` разрешал ступень `requiredApprovals:
+ * 0`, а на такой ступени `requiredApprovals` возвращал `0`, и
+ * `g_approvals_sufficient` проходил при **пустом** списке утверждающих — то есть
+ * выплата без человека (проба на дереве до правки: `requiredApprovals = 0`,
+ * guard = `true`). `CRO-risk.md`: автоматический релиз запрещён при любой сумме;
+ * ломалось бы при этом не поведение, а его отсутствие, и заметить это на ревью
+ * нечем.
+ *
+ * Верх — двойка: кворум набирается по уровням утверждения
+ * (`packages/auth/src/approval.ts`), а их два. Ступень «три подписи» потребует
+ * сначала третьего уровня; до тех пор она невыразима.
+ */
+export const APPROVAL_TIER_REQUIREMENTS = [1, 2] as const;
+export type ApprovalTierRequirement = (typeof APPROVAL_TIER_REQUIREMENTS)[number];
+
 export interface ApprovalTier {
   /** Верхняя граница включительно в минорных единицах; `null` — всё, что выше. */
   readonly upToMinor: bigint | null;
-  /** `null` — сумма не берётся вообще (FUNCTIONAL.md §3.5: свыше 500 000 ₾ на пилоте не берём). */
-  readonly requiredApprovals: number | null;
+  /**
+   * `null` — сумма не берётся вообще (FUNCTIONAL.md §3.5: свыше 500 000 ₾ на
+   * пилоте не берём). Это «утверждений не набрать», а не «утверждений не нужно»:
+   * ноль в ступени невыразим по типу.
+   */
+  readonly requiredApprovals: ApprovalTierRequirement | null;
 }
 
 export interface ApprovalPolicy {
@@ -361,10 +384,21 @@ export interface GuardInput {
  * по курсу 2,50 — равные до копейки суммы — требуют разного числа подписей, и
  * эту асимметрию невозможно объяснить оператору.
  */
-function approvalsForTier(policy: ApprovalPolicy, minor: bigint): number | null {
+function approvalsForTier(policy: ApprovalPolicy, minor: bigint): ApprovalTierRequirement | null {
   for (const tier of policy.tiers) {
     if (tier.upToMinor === null || minor <= tier.upToMinor) {
-      return tier.requiredApprovals;
+      /*
+       * Рантайм-дубль компиляционного рубежа. Тип не переживает границу
+       * процесса: лестница — версионируемая политика, она приходит из фактов
+       * транша и однажды будет храниться вне кода, а до тех пор попасть сюда
+       * можно приведением. Ноль, тройка и дробь обязаны отказать здесь, а не
+       * дойти до сравнения в `g_approvals_sufficient`, где ноль означал
+       * «утверждений достаточно». Отказ закрытый и той же формы, что «сумма
+       * выше потолка пилота»: `null` — «утверждений не набрать».
+       */
+      return (
+        APPROVAL_TIER_REQUIREMENTS.find((candidate) => candidate === tier.requiredApprovals) ?? null
+      );
     }
   }
   return null;
@@ -390,7 +424,7 @@ export function requiredApprovals(
   amount: Money<CurrencyCode>,
   officialRate: OfficialRateAtCreation | null,
   createdOn: IsoDate,
-): number | null {
+): ApprovalTierRequirement | null {
   if (amount.currency === policy.currency) {
     return approvalsForTier(policy, amount.minor);
   }

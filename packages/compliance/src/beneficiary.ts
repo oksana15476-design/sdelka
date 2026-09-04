@@ -308,9 +308,14 @@ export function advanceBeneficiaryChange(
     case 'approval_added': {
       // Второе утверждение — второй человек. Не настройка прав, а разные учётные
       // записи; проверка одна на все периметры (`dual-control.ts`).
+      //
+      // Порог сюда не передаётся: вопрос «годится ли этот утверждающий» о людях,
+      // а не о счёте. Раньше здесь стоял `requiredApprovals: 0` — поле не
+      // читалось, но читался ноль, и выглядело это как «нуля утверждений
+      // достаточно». Порог проверяется один раз, в `applyBeneficiaryChange`.
       if (
         !isDistinctApprover(
-          { preparedBy: request.requestedBy, approvals: request.approvals, requiredApprovals: 0 },
+          { preparedBy: request.requestedBy, approvals: request.approvals },
           event.userId,
         )
       ) {

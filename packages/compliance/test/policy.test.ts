@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type BeneficiaryPolicy,
   ALL_REASON_KEYS,
   hasHighRiskNationality,
   policyVersionId,
@@ -35,6 +36,20 @@ describe('уровень проверки — политика с версией
     expect(POLICY.beneficiary.cooldown).toBeGreaterThanOrEqual(24 * hour);
     expect(POLICY.beneficiary.cooldown).toBeLessThanOrEqual(48 * hour);
     expect(POLICY.beneficiary.preReleaseBlackout).toBe(72 * hour);
+  });
+
+  it('изменение реквизитов без второго человека невыразимо политикой', () => {
+    expect(POLICY.beneficiary.requiredApprovals).toBe(1);
+    const withoutApproval: Omit<BeneficiaryPolicy, 'requiredApprovals'> = {
+      cooldown: POLICY.beneficiary.cooldown,
+      preReleaseBlackout: POLICY.beneficiary.preReleaseBlackout,
+    };
+    // Компиляционный тест: ноль в политике означал бы «реквизиты выплаты
+    // меняются без второго утверждения», и включался бы он правкой одного
+    // значения. Исчезнет запрет — этот файл перестанет собираться.
+    // @ts-expect-error ноль утверждений — не порог, а его отсутствие
+    const zero: BeneficiaryPolicy = { ...withoutApproval, requiredApprovals: 0 };
+    expect(zero.requiredApprovals).toBe(0);
   });
 
   it('политика заморожена: значения не правятся в рантайме', () => {

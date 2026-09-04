@@ -48,12 +48,37 @@ export function requiresSecondApproval(
   return compare(amount, threshold) > 0;
 }
 
+/**
+ * Нужно ли здесь второе утверждение — **признак, а не число**.
+ *
+ * Раньше «второе утверждение не требуется» выражалось порогом `0`, и два разных
+ * факта становились неразличимы: «проверки нет» и «проверка пройдена» давали
+ * один и тот же ответ `dualControlSatisfied === true`. Разница между ними —
+ * вся суть правила: в первом случае спрашивать не о чем, во втором второй
+ * человек обязан существовать и быть найден.
+ *
+ * Кворум лежит **внутри** ветки `required` и только там: у ветки
+ * `not_required` его нет вовсе, поэтому вопрос «набран ли он» задать не к чему —
+ * ни в коде, ни в кабинете оператора. Ноль в порог не подставляется, потому что
+ * порога здесь нет.
+ */
+export type ManualMatchSecondApproval =
+  /** Сумма ниже порога: второго человека правило не требует. */
+  | { readonly kind: 'not_required' }
+  /**
+   * Сумма выше порога: требуется столько утверждений, сколько объявила политика.
+   * Утверждающие считаются множеством за вычетом готовившего (`dual-control.ts`).
+   */
+  | { readonly kind: 'required'; readonly control: DualControl };
+
 export interface ManualMatchAssessment {
   readonly allowed: boolean;
-  readonly requiresSecondApproval: boolean;
+  /**
+   * Требуется ли второе утверждение и, если требуется, его кворум. Заменяет
+   * прежнюю пару «булев признак рядом с `DualControl`, у которого порог ноль».
+   */
+  readonly secondApproval: ManualMatchSecondApproval;
   readonly failures: readonly IntakeReasonKey[];
-  /** Утверждающие, зачтённые правилом: различные записи за вычетом готовившего. */
-  readonly control: DualControl;
 }
 
 const MANUAL_MATCH_REASONS = Object.freeze({
@@ -68,30 +93,43 @@ const MANUAL_MATCH_REASONS = Object.freeze({
  * основание не отличается от угадывания, а И2.2 требует «отнести деньги к
  * сделке или вернуть их, **не угадывая**».
  */
+function manualMatchControl(request: ManualMatchRequest, policy: IntakePolicy): DualControl {
+  return Object.freeze({
+    preparedBy: request.preparedBy,
+    approvals: Object.freeze([...request.approvals]),
+    requiredApprovals: policy.manualMatch.requiredApprovals,
+  });
+}
+
 export function assessManualMatch(
   request: ManualMatchRequest,
   policy: IntakePolicy,
 ): ManualMatchAssessment {
-  const needsSecond = requiresSecondApproval(request.amount, policy);
-  const control: DualControl = Object.freeze({
-    preparedBy: request.preparedBy,
-    approvals: Object.freeze([...request.approvals]),
-    requiredApprovals: needsSecond ? policy.manualMatch.requiredApprovals : 0,
-  });
+  // Кворум собирается только там, где он есть: ниже порога собирать нечего, и
+  // объекта с порогом ноль в этой ветке больше не существует.
+  const secondApproval: ManualMatchSecondApproval = requiresSecondApproval(request.amount, policy)
+    ? Object.freeze({ kind: 'required' as const, control: manualMatchControl(request, policy) })
+    : Object.freeze({ kind: 'not_required' as const });
 
   const failures: IntakeReasonKey[] = [];
   if (request.justificationRef.trim() === '') {
     failures.push(INTAKE_REASON_KEYS.matchManualJustificationMissing);
   }
-  // Актор не передаётся: готовивший отфильтрован из утверждающих самим правилом
-  // (`distinctApprovers`), и подставлять его сюда значило бы вернуть отказ
-  // «утвердил тот же, кто готовил» на каждой заявке без единого утверждения.
-  failures.push(...dualControlFailures<IntakeReasonKey>(control, MANUAL_MATCH_REASONS));
+  // Правило второго утверждения спрашивается только там, где оно требуется.
+  // Прежде оно спрашивалось всегда, а «не требуется» изображалось порогом ноль
+  // — и ответ «правило выполнено» приходил на операцию, у которой правила не
+  // было. Актор не передаётся: готовивший отфильтрован из утверждающих самим
+  // правилом (`distinctApprovers`), и подставлять его сюда значило бы вернуть
+  // отказ «утвердил тот же, кто готовил» на каждой заявке без утверждений.
+  if (secondApproval.kind === 'required') {
+    failures.push(
+      ...dualControlFailures<IntakeReasonKey>(secondApproval.control, MANUAL_MATCH_REASONS),
+    );
+  }
 
   return Object.freeze({
     allowed: failures.length === 0,
-    requiresSecondApproval: needsSecond,
+    secondApproval,
     failures: Object.freeze(failures),
-    control,
   });
 }
