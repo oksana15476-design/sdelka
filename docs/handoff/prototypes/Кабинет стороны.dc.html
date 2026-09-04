@@ -1,0 +1,1794 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+Georgian:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#F5F5F7; color:#0F1729; font-family:"Manrope","Noto Sans Georgian",system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
+  * { box-sizing:border-box; }
+  a { color:#1E3FBF; text-decoration:none; } a:hover { color:#172E8C; }
+  .m { font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums; }
+  .eb { font-family:"IBM Plex Mono",monospace; font-size:10px; letter-spacing:.16em; text-transform:uppercase; }
+  .lari { display:inline-block; width:.62em; text-align:center; font-family:"IBM Plex Mono",monospace; }
+  .mk { width:24px; height:24px; position:relative; flex-shrink:0; }
+  .mk i { position:absolute; width:72%; height:72%; border-radius:999px; }
+  .mk i.a { left:0; top:0; background:#0F1729; } .mk i.b { right:0; bottom:0; background:#2D5BFF; }
+  .tab { border:0; background:none; font-family:'Manrope',sans-serif; font-size:13.5px; font-weight:500; color:#56637A; padding:8px 13px; border-radius:9px; cursor:pointer; min-height:38px; }
+  .tab:hover { background:#F0F2F6; color:#0F1729; }
+  .tab.on { background:#EEF3FF; color:#1E3FBF; font-weight:700; }
+  .lg { border:0; background:none; font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:600; color:#68758B; padding:5px 9px; border-radius:6px; cursor:pointer; }
+  .lg.on { background:#0F1729; color:#fff; }
+  .btn { border:0; background:#2D5BFF; color:#fff; font-family:'Manrope',sans-serif; font-size:14px; font-weight:700; padding:13px 20px; border-radius:12px; min-height:44px; cursor:pointer; transition:background 150ms cubic-bezier(.2,.8,.2,1); }
+  .btn:hover { background:#1E3FBF; } .btn:active { background:#172E8C; }
+  .btn2 { border:1px solid #DCE3EE; background:#fff; color:#0F1729; font-family:'Manrope',sans-serif; font-size:13.5px; font-weight:600; padding:12px 18px; border-radius:12px; min-height:44px; cursor:pointer; }
+  .btn2:hover { background:#F5F5F7; border-color:#C2CBD9; }
+  .cp { border:1px solid #DCE3EE; background:#fff; color:#56637A; font-family:'Manrope',sans-serif; font-size:11.5px; font-weight:600; padding:7px 11px; border-radius:8px; cursor:pointer; white-space:nowrap; }
+  .cp:hover { background:#F5F5F7; }
+  .card { background:#fff; border-radius:18px; padding:26px; box-shadow:0 1px 2px rgba(15,23,41,.04), 0 1px 3px rgba(15,23,41,.06); }
+  .fld { border:1px solid #DCE3EE; outline:none; border-radius:8px; padding:12px 14px; font-size:15px; min-height:44px; background:#fff; font-family:"IBM Plex Mono",monospace; width:100%; }
+  .fld:focus { border-color:#2D5BFF; box-shadow:0 0 0 3px rgba(45,91,255,.2); }
+  button:focus-visible, a:focus-visible { outline:2px solid #2D5BFF; outline-offset:2px; border-radius:8px; }
+  button:focus:not(:focus-visible) { outline:none; }
+  .rw { display:flex; justify-content:space-between; align-items:baseline; gap:16px; }
+  .amt-hero { font-size:42px; }
+  @media (max-width: 767px) { .amt-hero { font-size:32px; } }
+  @media (prefers-reduced-motion: reduce) { * { transition-duration:.01ms !important } }
+
+  /* ══ Показ мобильной верстки прямо здесь ══
+     Ширину задаёт не окно, а сама оболочка: контейнерные запросы дают тот же
+     результат, что медиазапросы на телефоне, но работают и когда оболочка
+     сужена переключателем на широком экране. */
+  .stage { width:100%; display:flex; justify-content:center; background:#E7EAF0; }
+  .stage.full { background:#F5F5F7; }
+  /* Контейнером запросов должна быть обёртка, а не сама оболочка: правила
+     внутри @container не применяются к элементу, который этот контейнер задал. */
+  .frame { container-type:inline-size; width:100%; position:relative; }
+  .shell { width:100%; background:#F5F5F7; }
+  .stage.xs .frame { max-width:360px; }
+  .stage.sm .frame { max-width:390px; }
+  .stage.md .frame { max-width:834px; }
+  .stage.xs, .stage.sm, .stage.md { padding:18px 12px 40px; }
+  /* В рамке нижняя навигация крепится к рамке, а не к окну. */
+  .stage.xs .frame, .stage.sm .frame, .stage.md .frame {
+    position:relative; border-radius:22px; overflow:hidden;
+    box-shadow:0 30px 60px -35px rgba(15,23,41,.45);
+    height:min(760px, 88vh);
+  }
+  .stage.xs .shell, .stage.sm .shell, .stage.md .shell { height:100%; min-height:0 !important; }
+  .stage.xs .main, .stage.sm .main, .stage.md .main { flex:1 1 auto; min-height:0; overflow-y:auto; }
+
+  .vwbar {
+    position:fixed; top:12px; right:14px; z-index:80; display:flex; gap:3px; align-items:center;
+    background:#0F1729; padding:5px; border-radius:999px; box-shadow:0 10px 24px -12px rgba(15,23,41,.6);
+  }
+  .vwbar span { font-family:"IBM Plex Mono",monospace; font-size:9px; letter-spacing:.14em; text-transform:uppercase; color:#68758B; padding:0 7px; }
+  .vwbar button { border:0; background:none; font-family:"IBM Plex Mono",monospace; font-size:10.5px; font-weight:600; color:#9AA5B5; padding:6px 9px; border-radius:999px; cursor:pointer; min-height:30px; }
+  .vwbar button:hover { color:#fff; }
+  .vwbar button.on { background:#2D5BFF; color:#fff; }
+
+  /* ══ Брейкпоинты §16.3 · база проектирования xs 360 ══
+     Ниже 1024 сайдбар не переодевается в шапку, а становится выдвижной панелью:
+     разделов шесть, в таб-бар они не влезают, а деньгам нужна полная ширина.
+     Шапка на экране остаётся тонкой: бургер, марка, код сделки.
+     !important обязателен: разметка держит инлайновые стили. */
+  .topbar { display:none; }
+  .scrim { display:none; }
+  .burger { border:0; background:none; cursor:pointer; width:44px; height:44px; flex-shrink:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; border-radius:10px; }
+  .burger:hover { background:#F0F2F6; }
+  .burger i { display:block; width:18px; height:2px; border-radius:2px; background:#0F1729; }
+  /* Факты, которые читают один раз, живут под раскрытием: экран отвечает
+     на «где деньги» и «что от меня нужно», а не показывает всё сразу. */
+  details > summary { cursor:pointer; list-style:none; display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:44px; }
+  details > summary::-webkit-details-marker { display:none; }
+  details > summary::after { content:"развернуть"; font-family:"IBM Plex Mono",monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#9AA5B5; }
+  details[open] > summary::after { content:"свернуть"; }
+  details > summary:hover::after { color:#1E3FBF; }
+
+  @container (max-width: 1023px) {
+    .shell { flex-direction:column !important; min-height:0 !important; }
+    .topbar {
+      display:flex; align-items:center; gap:9px;
+      padding:8px 12px; min-height:58px;
+      background:#fff; border-bottom:1px solid #ECEFF3;
+      position:sticky; top:0; z-index:20;
+    }
+    .side {
+      position:absolute !important; left:0; top:0; bottom:0; z-index:60;
+      width:274px !important; height:auto !important;
+      padding:16px 12px !important; gap:16px !important;
+      border-right:1px solid #ECEFF3 !important; overflow-y:auto;
+      transform:translateX(-102%); visibility:hidden;
+      transition:transform 220ms cubic-bezier(.2,.8,.2,1), visibility 220ms;
+    }
+    .side.open { transform:translateX(0); visibility:visible; box-shadow:0 0 70px -12px rgba(15,23,41,.45); }
+    /* Цели касания в панели: 44 px — минимум §16, у языков он тоже действует. */
+    .side .tab { min-height:46px !important; padding:11px 13px !important; }
+    .side .lg { min-height:44px; padding:0 15px; }
+    .side .cp { min-height:44px; }
+    .side__brand { min-height:44px; }
+    /* Место под панель прототипа держим только в режиме «окно»: в рамке
+       переключатель стоит за её пределами и шапке не мешает. */
+    .stage.full .topbar { padding-right:236px; }
+    .stage.full .side { position:fixed !important; }
+    .scrim {
+      display:block; position:absolute; inset:0; z-index:50;
+      background:rgba(15,23,41,.42); opacity:0; pointer-events:none;
+      transition:opacity 200ms cubic-bezier(.2,.8,.2,1);
+    }
+    .stage.full .scrim { position:fixed; }
+    .scrim.open { opacity:1; pointer-events:auto; }
+    .main { padding:20px 16px 52px !important; }
+    .main > div { max-width:100% !important; }
+  }
+
+  @container (max-width: 767px) {
+    .proto-inline { display:none !important; }
+    .main { padding:16px 14px 44px !important; }
+    .card { padding:18px 16px !important; border-radius:14px !important; }
+    h1 { font-size:21px !important; }
+  }
+
+  /* xs ≤479 · база: одна колонка, крупные цели, поля без зума iOS */
+  @container (max-width: 479px) {
+    .amt-hero { font-size:27px; }
+    .stage.full .topbar { padding-right:206px; }
+    .main { padding:14px 12px 40px !important; }
+    .card { padding:16px 14px !important; }
+    h1 { font-size:19px !important; }
+    .rw { flex-direction:column !important; align-items:flex-start !important; gap:3px !important; }
+    .fld { font-size:16px !important; }
+    .cell { width:38px !important; height:46px !important; font-size:17px !important; }
+    .btn, .btn2 { width:100%; justify-content:center; }
+    .cp { padding:9px 12px !important; min-height:40px; }
+  }
+</style>
+</helmet>
+
+<div style="min-height:100vh; display:flex; flex-direction:column;">
+
+  <div class="vwbar">
+    <span>ширина</span>
+    <button type="button" class="{{ n.vwXs }}" onClick="{{ go.vwXs }}">360</button>
+    <button type="button" class="{{ n.vwSm }}" onClick="{{ go.vwSm }}">390</button>
+    <button type="button" class="{{ n.vwMd }}" onClick="{{ go.vwMd }}">834</button>
+    <button type="button" class="{{ n.vwFull }}" onClick="{{ go.vwFull }}">окно</button>
+  </div>
+
+  <div class="stage {{ vw }}">
+  <div class="frame">
+  <div class="shell" style="display:flex; min-height:100vh;">
+
+  <!-- ════ БОКОВАЯ НАВИГАЦИЯ ════ -->
+  <aside class="side {{ drawer }}" style="width:248px; flex-shrink:0; background:#fff; border-right:1px solid #ECEFF3; padding:20px 14px; display:flex; flex-direction:column; gap:22px; position:sticky; top:0; height:100vh;">
+    <button type="button" class="side__brand" onClick="{{ go.deals }}" style="border:0; background:none; padding:6px; display:flex; align-items:center; gap:10px; cursor:pointer;">
+      <div class="mk"><i class="a"></i><i class="b"></i></div>
+      <span style="font-size:16px; font-weight:800; letter-spacing:-.04em;">Reestra</span>
+    </button>
+
+    <nav class="side__nav" style="display:flex; flex-direction:column; gap:3px;">
+      <button type="button" class="tab {{ n.deals }}" style="width:100%; text-align:left;" onClick="{{ go.deals }}">{{ t.navDeals }}</button>
+      <button type="button" class="tab {{ n.account }}" style="width:100%; text-align:left;" onClick="{{ go.account }}">{{ t.navAccount }}</button>
+      <button type="button" class="tab nav-sec {{ n.docs }}" style="width:100%; text-align:left;" onClick="{{ go.docs }}">{{ t.navDocs }}</button>
+      <button type="button" class="tab {{ n.inbox }}" style="width:100%; text-align:left; display:flex; justify-content:space-between;" onClick="{{ go.inbox }}"><span>{{ t.navInbox }}</span><sc-if value="{{ unread }}" hint-placeholder-val="{{ true }}"><span class="m" style="font-size:10px; font-weight:700; color:#fff; background:#2D5BFF; padding:1px 6px; border-radius:999px;">1</span></sc-if></button>
+      <button type="button" class="tab nav-sec {{ n.help }}" style="width:100%; text-align:left;" onClick="{{ go.help }}">{{ t.navHelp }}</button>
+      <button type="button" class="tab {{ n.profile }}" style="width:100%; text-align:left;" onClick="{{ go.profile }}">{{ t.navProfile }}</button>
+    </nav>
+
+    <sc-if value="{{ showCur }}" hint-placeholder-val="{{ false }}">
+      <div class="side__deal" style="background:#EEF3FF; border-radius:12px; padding:14px; display:flex; flex-direction:column; gap:6px;">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; gap:8px;">
+          <span class="eb" style="color:#1E3FBF;">{{ curCode }}</span>
+          <span style="font-size:10px; font-weight:700; color:#56637A;">{{ curRole }}</span>
+        </div>
+        <span style="font-size:12.5px; line-height:1.45; font-weight:600; color:#0F1729;">{{ curAddr }}</span>
+        <span style="display:inline-flex; align-items:center; gap:5px; align-self:flex-start; background:{{ curChipBg }}; color:{{ curChipFg }}; font-size:10.5px; font-weight:700; padding:3px 7px; border-radius:6px; margin-top:2px;"><span class="m" style="font-size:9px;">●</span>{{ curBadge }}</span>
+      </div>
+    </sc-if>
+
+    <div class="side__foot" style="margin-top:auto; display:flex; flex-direction:column; gap:12px;">
+      <div class="side__langs" style="display:flex; gap:2px; background:#F5F5F7; padding:3px; border-radius:8px;">
+        <button type="button" class="lg {{ n.ka }}" onClick="{{ go.ka }}">KA</button>
+        <button type="button" class="lg {{ n.ru }}" onClick="{{ go.ru }}">RU</button>
+        <button type="button" class="lg {{ n.en }}" onClick="{{ go.en }}">EN</button>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:2px; padding-top:8px; border-top:1px solid #ECEFF3;">
+        <button type="button" onClick="{{ go.profile }}" style="border:0; background:none; cursor:pointer; display:flex; align-items:center; gap:10px; padding:8px 6px; border-radius:9px; text-align:left; font-family:'Manrope',sans-serif;">
+          <div style="width:30px; height:30px; border-radius:999px; background:#F7F9FC; display:flex; align-items:center; justify-content:center; font-size:11.5px; font-weight:700; color:#56637A;">MS</div>
+          <div style="display:flex; flex-direction:column; gap:1px; min-width:0;">
+            <span style="font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Martin Schulz</span>
+            <span style="font-size:11px; color:#68758B;">m.schulz@example.de</span>
+          </div>
+        </button>
+        <button type="button" class="tab" style="width:100%; text-align:left; font-size:12.5px;">{{ t.logout }}</button>
+      </div>
+      <div class="side__proto" style="padding:10px 6px 0; border-top:1px solid #ECEFF3; display:flex; flex-direction:column; gap:6px;">
+        <span class="eb" style="color:#C2CBD9;">панель прототипа</span>
+        <div style="display:flex; gap:4px; flex-wrap:wrap;">
+          <button type="button" class="cp" style="font-size:10.5px;" onClick="{{ go.empty }}">пустой кабинет</button>
+          <button type="button" class="cp" style="font-size:10.5px;" onClick="{{ go.newDeal }}">новая сделка</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="scrim {{ drawer }}" onClick="{{ go.closeDrawer }}"></div>
+
+  <!-- ════ МОБИЛЬНАЯ ШАПКА ════ -->
+  <header class="topbar">
+    <button type="button" class="burger" onClick="{{ go.toggleDrawer }}" aria-label="Разделы кабинета" aria-expanded="{{ drawerAria }}">
+      <i></i><i></i><i></i>
+    </button>
+    <button type="button" onClick="{{ go.deals }}" style="border:0; background:none; padding:0; display:flex; align-items:center; gap:8px; cursor:pointer;">
+      <div class="mk"><i class="a"></i><i class="b"></i></div>
+      <span style="font-size:15px; font-weight:800; letter-spacing:-.04em;">Reestra</span>
+    </button>
+    <sc-if value="{{ showCur }}" hint-placeholder-val="{{ false }}">
+      <span class="m" style="font-size:10.5px; font-weight:600; color:{{ curChipFg }}; background:{{ curChipBg }}; padding:4px 8px; border-radius:6px; white-space:nowrap;">{{ curCode }}</span>
+    </sc-if>
+  </header>
+
+  <!-- ════ СОДЕРЖИМОЕ ════ -->
+  <div class="main" style="flex:1; min-width:0; padding:32px 40px 80px; display:flex; justify-content:center;">
+    <div style="width:100%; max-width:880px; display:flex; flex-direction:column; gap:16px;">
+
+      <!-- ─── ПУСТОЕ СОСТОЯНИЕ ─── -->
+      <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:22px; align-items:center; text-align:center; padding:60px 20px;">
+          <div class="mk" style="width:40px; height:40px;"><i class="a"></i><i class="b"></i></div>
+          <div style="display:flex; flex-direction:column; gap:10px; max-width:52ch;">
+            <h1 style="margin:0; font-size:26px; letter-spacing:-.03em; font-weight:800;">{{ t.emptyTitle }}</h1>
+            <span style="font-size:14px; line-height:1.6; color:#56637A; text-wrap:pretty;">{{ t.emptyBody }}</span>
+          </div>
+          <button type="button" class="btn" onClick="{{ go.newDeal }}">{{ t.emptyCta }}</button>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; width:100%; max-width:820px; margin-top:14px; text-align:left;">
+            <div style="background:#fff; border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:7px;"><span class="m" style="font-size:11px; color:#2D5BFF;">01</span><span style="font-size:12.5px; line-height:1.5; color:#34405A;">{{ t.emptyStep1 }}</span></div>
+            <div style="background:#fff; border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:7px;"><span class="m" style="font-size:11px; color:#2D5BFF;">02</span><span style="font-size:12.5px; line-height:1.5; color:#34405A;">{{ t.emptyStep2 }}</span></div>
+            <div style="background:#fff; border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:7px;"><span class="m" style="font-size:11px; color:#2D5BFF;">03</span><span style="font-size:12.5px; line-height:1.5; color:#34405A;">{{ t.emptyStep3 }}</span></div>
+            <div style="background:#EEF3FF; border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:7px;"><span class="m" style="font-size:11px; color:#1E3FBF;">04</span><span style="font-size:12.5px; line-height:1.5; font-weight:600; color:#172E8C;">{{ t.emptyStep4 }}</span></div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─── ВЫВОД СРЕДСТВ ─── -->
+      <sc-if value="{{ isWithdraw }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <div style="display:flex; align-items:center; gap:12px;">
+            <button type="button" class="cp" onClick="{{ go.account }}">← {{ t.back }}</button>
+            <h1 style="margin:0; font-size:26px; letter-spacing:-.03em; font-weight:800;">{{ t.withdrawTitle }}</h1>
+          </div>
+
+          <div class="proto-inline" style="background:#fff; border-radius:14px; padding:14px 16px; display:flex; flex-direction:column; gap:9px; max-width:720px; box-shadow:0 1px 2px rgba(15,23,41,.04);">
+            <div style="display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+              <!-- Панель прототипа: не переводится, на телефоне скрыта. Решение, а не пропуск. -->
+              <span class="eb" style="color:#9AA5B5;">панель прототипа · состояние заявки · client-account.ts</span>
+              <span class="m" style="font-size:10.5px; color:#9AA5B5;">{{ wdId }}</span>
+            </div>
+            <div style="display:flex; gap:4px; flex-wrap:wrap;">
+              <sc-for list="{{ wdList }}" as="w" hint-placeholder-count="6">
+                <button type="button" class="lg {{ w.on }}" style="font-size:10.5px;" onClick="{{ w.pick }}">{{ w.id }}</button>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="background:{{ wdBg }}; border:1px solid {{ wdBd }}; border-radius:16px; padding:24px 26px; display:flex; flex-direction:column; gap:12px; max-width:720px;">
+            <div style="display:flex; align-items:center; gap:10px;">
+              <span class="m" style="font-size:14px; color:{{ wdDot }};">●</span>
+              <span style="display:inline-flex; align-items:center; gap:6px; background:{{ wdChipBg }}; color:{{ wdChipFg }}; font-size:11px; font-weight:700; padding:4px 9px; border-radius:6px;">{{ wdBadge }}</span>
+            </div>
+            <span style="font-size:18px; line-height:1.3; letter-spacing:-.02em; font-weight:700; color:{{ wdFg }};">{{ wdH }}</span>
+            <span style="font-size:13.5px; line-height:1.6; color:{{ wdFg }}; max-width:62ch;">{{ wdB }}</span>
+            <sc-if value="{{ wdCanCancel }}" hint-placeholder-val="{{ true }}">
+              <button type="button" class="btn2" style="align-self:flex-start;">{{ t.cancelRequest }}</button>
+            </sc-if>
+          </div>
+
+          <div style="background:#EEF3FF; border:1px solid #B6C8FF; border-radius:16px; padding:22px 24px; display:flex; flex-direction:column; gap:9px; max-width:720px;">
+            <span class="eb" style="color:#172E8C;">{{ t.withdrawSourceTitle }}</span>
+            <span style="font-size:13.5px; line-height:1.6; color:#0F1729;">{{ t.withdrawSourceBody }}</span>
+          </div>
+
+          <div class="card" style="display:flex; flex-direction:column; gap:16px; max-width:720px;">
+            <div style="display:flex; flex-direction:column; gap:6px;">
+              <label style="font-size:12.5px; font-weight:600; color:#34405A;">{{ t.withdrawAmount }}</label>
+              <div style="display:flex; align-items:center; border:1px solid #DCE3EE; border-radius:8px; overflow:hidden; background:#fff;">
+                <input type="text" class="fld" value="0,00" style="border:0; box-shadow:none;">
+                <span class="m" style="padding:0 14px; font-size:13px; font-weight:600; border-left:1px solid #ECEFF3; align-self:stretch; display:flex; align-items:center;">GEL ₾</span>
+              </div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:8px; padding-top:14px; border-top:1px solid #ECEFF3;">
+              <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.available }}</span><span class="m" style="font-size:13px;">0,00 <span class="lari">₾</span></span></div>
+              <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.withdrawFee }}</span><span class="m" style="font-size:13px;">0,00 <span class="lari">₾</span></span></div>
+            </div>
+            <div style="background:#FCF2DD; border-radius:10px; padding:13px 15px; font-size:12.5px; line-height:1.55; color:#34405A;">{{ t.withdrawNote }}</div>
+            <button type="button" disabled style="align-self:flex-start; border:0; background:#ECEFF3; color:#9AA5B5; font-family:'Manrope',sans-serif; font-size:14px; font-weight:700; padding:13px 20px; border-radius:12px; min-height:44px; cursor:not-allowed;">{{ t.withdrawCta }}</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─── АРХИВ ─── -->
+      <sc-if value="{{ isArchive }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <h1 style="margin:0; font-size:26px; letter-spacing:-.03em; font-weight:800;">{{ t.archiveTitle }}</h1>
+          <span style="font-size:13.5px; line-height:1.6; color:#56637A; max-width:70ch;">{{ t.archiveIntro }}</span>
+          <div style="display:flex; flex-direction:column; gap:12px;">
+            <div class="card" style="display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap;">
+              <div style="display:flex; flex-direction:column; gap:4px;">
+                <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">{{ t.arch1 }}</span>
+                <span class="m" style="font-size:11.5px; color:#68758B;">{{ t.arch1meta }}</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:14px;">
+                <span class="m" style="font-size:14px; color:#0E7C3D;">96 400,00 <span class="lari">₾</span></span>
+                <button type="button" class="cp">{{ t.archDocs }}</button>
+              </div>
+            </div>
+            <div class="card" style="display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap;">
+              <div style="display:flex; flex-direction:column; gap:4px;">
+                <span style="font-size:15px; font-weight:700; letter-spacing:-.02em; color:#56637A;">{{ t.arch2 }}</span>
+                <span class="m" style="font-size:11.5px; color:#68758B;">{{ t.arch2meta }}</span>
+                <span class="m" style="font-size:11px; color:#5B3FD6;">{{ t.archRollback }}</span>
+              </div>
+              <button type="button" class="cp">{{ t.archDocs }}</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─── СДЕЛКА · РОЛЬ ПРОДАВЦА ─── -->
+      <sc-if value="{{ isSellerDeal }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <button type="button" class="cp" style="align-self:flex-start;" onClick="{{ go.deals }}">← {{ t.navDeals }}</button>
+          <div style="display:flex; flex-direction:column; gap:5px;">
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <h1 style="margin:0; font-size:26px; letter-spacing:-.03em; font-weight:800;">{{ t.sellerDealTitle }}</h1>
+              <span style="font-size:10.5px; font-weight:700; color:#5B3FD6; background:#F0EBFF; padding:3px 8px; border-radius:6px;">{{ t.asSeller }}</span>
+            </div>
+            <span class="m" style="font-size:12px; color:#68758B;">{{ t.sellerDealMeta }}</span>
+          </div>
+
+          <div style="background:#FCF2DD; border:1px solid #F0DFB8; border-radius:18px; padding:26px 28px; display:flex; flex-direction:column; gap:12px;">
+            <span class="eb" style="color:#916200;">{{ t.sellerNeed }}</span>
+            <span style="font-size:19px; letter-spacing:-.02em; font-weight:700;">{{ t.sellerNeedTitle }}</span>
+            <span style="font-size:14px; line-height:1.6; color:#34405A; max-width:66ch; text-wrap:pretty;">{{ t.sellerNeedBody }}</span>
+          </div>
+
+          <div class="card" style="display:flex; flex-direction:column; gap:14px; max-width:720px;">
+            <div class="rw"><span class="eb" style="color:#68758B;">{{ t.assuranceTitle }}</span><span class="m" style="font-size:11.5px; color:#68758B;">{{ t.updated }}</span></div>
+            <div style="display:flex; gap:4px;">
+              <div style="flex:1; height:9px; border-radius:3px; background:#2D5BFF;"></div>
+              <div style="flex:1; height:9px; border-radius:3px; background:#ECEFF3;"></div>
+              <div style="flex:1; height:9px; border-radius:3px; background:#ECEFF3;"></div>
+              <div style="flex:1; height:9px; border-radius:3px; background:#ECEFF3;"></div>
+            </div>
+            <span style="font-size:16px; font-weight:700; letter-spacing:-.02em;">{{ t.assuranceLevel }}</span>
+            <span style="font-size:13.5px; line-height:1.6; color:#34405A;">{{ t.assuranceBody }}</span>
+            <span style="font-size:12px; line-height:1.55; color:#68758B; padding-top:12px; border-top:1px solid #EEF1F6;">{{ t.assuranceNote }}</span>
+          </div>
+
+          <div class="proto-inline" style="background:#fff; border-radius:14px; padding:14px 16px; display:flex; flex-direction:column; gap:9px; max-width:720px; box-shadow:0 1px 2px rgba(15,23,41,.04);">
+            <div style="display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+              <!-- Панель прототипа: не переводится, на телефоне скрыта. Решение, а не пропуск. -->
+              <span class="eb" style="color:#9AA5B5;">панель прототипа · состояние реквизитов · beneficiary.ts</span>
+              <span class="m" style="font-size:10.5px; color:#9AA5B5;">{{ benId }}</span>
+            </div>
+            <div style="display:flex; gap:4px; flex-wrap:wrap;">
+              <sc-for list="{{ benList }}" as="b" hint-placeholder-count="6">
+                <button type="button" class="lg {{ b.on }}" style="font-size:10.5px;" onClick="{{ b.pick }}">{{ b.id }}</button>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="background:{{ benBg }}; border:1px solid {{ benBd }}; border-radius:16px; padding:24px 26px; display:flex; flex-direction:column; gap:11px; max-width:720px;">
+            <span style="display:inline-flex; align-items:center; gap:6px; align-self:flex-start; background:{{ benChipBg }}; color:{{ benChipFg }}; font-size:11px; font-weight:700; padding:4px 9px; border-radius:6px;">{{ benBadge }}</span>
+            <span style="font-size:18px; line-height:1.3; letter-spacing:-.02em; font-weight:700; color:{{ benFg }};">{{ benH }}</span>
+            <span style="font-size:13.5px; line-height:1.6; color:{{ benFg }}; max-width:62ch;">{{ benB }}</span>
+          </div>
+
+          <sc-if value="{{ frozen }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#F0EBFF; border:1px solid #DDD3FF; border-radius:16px; padding:24px 26px; display:flex; flex-direction:column; gap:14px; max-width:720px;">
+              <span class="eb" style="color:#4B2FB8;">{{ t.freezeLabel }}</span>
+              <span style="font-size:18px; line-height:1.3; letter-spacing:-.02em; font-weight:700; color:#4B2FB8;">{{ t.freezeH }}</span>
+              <span style="font-size:13.5px; line-height:1.6; color:#4B2FB8; max-width:62ch;">{{ t.freezeB }}</span>
+              <div style="background:#fff; border-radius:10px; padding:14px 16px; display:flex; flex-direction:column; gap:8px;">
+                <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.freezeWho }}</span><span style="font-size:12.5px; font-weight:600;">{{ t.freezeWhoVal }}</span></div>
+                <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.freezeTerm }}</span><span class="m" style="font-size:12.5px; font-weight:600;">16.06</span></div>
+                <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.freezeTicket }}</span><span class="m" style="font-size:12.5px;">88-1042</span></div>
+              </div>
+              <span style="font-size:12.5px; line-height:1.6; color:#4B2FB8;">{{ t.freezeNote }}</span>
+              <button type="button" class="btn2" style="align-self:flex-start;">{{ t.writeUs }}</button>
+            </div>
+          </sc-if>
+
+          <div class="card" style="display:flex; flex-direction:column; gap:16px; max-width:720px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;">
+              <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">{{ t.reqFormTitle }}</span>
+              <button type="button" class="cp" onClick="{{ toggleFreeze }}">{{ t.showFreeze }}</button>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px;">
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <label style="font-size:12.5px; font-weight:600; color:#34405A;">{{ t.fIban }}</label>
+                <input type="text" class="fld" value="">
+                <span style="font-size:11.5px; line-height:1.45; color:#68758B;">{{ t.fIbanHint }}</span>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <label style="font-size:12.5px; font-weight:600; color:#34405A;">{{ t.fHolder }}</label>
+                <input type="text" class="fld" value="ჯავახიშვილი ნინო" style="font-family:'Manrope','Noto Sans Georgian',sans-serif;">
+                <span style="font-size:11.5px; line-height:1.45; color:#68758B;">{{ t.fHolderHint }}</span>
+              </div>
+            </div>
+            <sc-if value="{{ benEditable }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                <button type="button" class="btn">{{ t.saveReq }}</button>
+                <span style="font-size:12px; color:#916200;">{{ t.saveReqNote }}</span>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─── УВЕДОМЛЕНИЯ ─── -->
+      <sc-if value="{{ isInbox }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <div style="display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+            <h1 style="margin:0; font-size:26px; letter-spacing:-.03em; font-weight:800;">{{ t.navInbox }}</h1>
+            <button type="button" class="cp">{{ t.markRead }}</button>
+          </div>
+          <span style="font-size:13.5px; line-height:1.6; color:#56637A; max-width:70ch;">{{ t.inboxIntro }}</span>
+
+          <div style="display:flex; flex-direction:column; gap:1px; background:#ECEFF3; border-radius:14px; overflow:hidden;">
+            <div style="background:#F7F9FF; padding:16px 18px; display:flex; gap:14px; align-items:flex-start; border-left:3px solid #2D5BFF;">
+              <span class="m" style="font-size:12px; color:#1E3FBF; margin-top:3px;">●</span>
+              <div style="display:flex; flex-direction:column; gap:3px; flex:1;">
+                <span style="font-size:13.5px; font-weight:700;">{{ t.nt1 }}</span>
+                <span style="font-size:12.5px; line-height:1.55; color:#34405A;">{{ t.nt1b }}</span>
+                <span class="m" style="font-size:11px; color:#68758B; margin-top:2px;">12.06 · 16:04 · D-24-0917</span>
+              </div>
+            </div>
+            <div style="background:#fff; padding:16px 18px; display:flex; gap:14px; align-items:flex-start;">
+              <span class="m" style="font-size:12px; color:#916200; margin-top:3px;">▲</span>
+              <div style="display:flex; flex-direction:column; gap:3px; flex:1;">
+                <span style="font-size:13.5px; font-weight:700;">{{ t.nt2 }}</span>
+                <span style="font-size:12.5px; line-height:1.55; color:#34405A;">{{ t.nt2b }}</span>
+                <span class="m" style="font-size:11px; color:#68758B; margin-top:2px;">12.06 · 09:30 · D-24-0931</span>
+              </div>
+            </div>
+            <div style="background:#fff; padding:16px 18px; display:flex; gap:14px; align-items:flex-start;">
+              <span class="m" style="font-size:12px; color:#0E7C3D; margin-top:3px;">✓</span>
+              <div style="display:flex; flex-direction:column; gap:3px; flex:1;">
+                <span style="font-size:13.5px; font-weight:600;">{{ t.nt3 }}</span>
+                <span style="font-size:12.5px; line-height:1.55; color:#56637A;">{{ t.nt3b }}</span>
+                <span class="m" style="font-size:11px; color:#68758B; margin-top:2px;">11.06 · 09:12 · D-24-0917</span>
+              </div>
+            </div>
+          </div>
+
+          <div style="background:#F7F9FC; border:1px solid #ECEFF3; border-radius:14px; padding:18px; display:flex; flex-direction:column; gap:6px;">
+            <span class="eb" style="color:#68758B;">{{ t.inboxRuleTitle }}</span>
+            <span style="font-size:12.5px; line-height:1.6; color:#34405A;">{{ t.inboxRuleBody }}</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─── ПРОФИЛЬ И ПРОВЕРКА ─── -->
+      <sc-if value="{{ isProfile }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <h1 style="margin:0; font-size:26px; letter-spacing:-.03em; font-weight:800;">{{ t.navProfile }}</h1>
+
+          <div class="card" style="display:flex; flex-direction:column; gap:16px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+              <div style="display:flex; align-items:center; gap:13px;">
+                <div style="width:44px; height:44px; border-radius:999px; background:#F7F9FC; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#56637A;">MS</div>
+                <div style="display:flex; flex-direction:column; gap:2px;">
+                  <span style="font-size:16px; font-weight:700; letter-spacing:-.02em;">Martin Schulz</span>
+                  <span style="font-size:12.5px; color:#68758B;">m.schulz@example.de</span>
+                </div>
+              </div>
+              <span style="display:inline-flex; align-items:center; gap:6px; background:#E7F6EE; color:#0E7C3D; font-size:11.5px; font-weight:700; padding:6px 11px; border-radius:7px;"><span class="m" style="font-size:10px;">✓</span>{{ t.verified }}</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:9px; padding-top:14px; border-top:1px solid #ECEFF3;">
+              <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.pDoc }}</span><span class="m" style="font-size:12.5px;">{{ t.pDocVal }}</span></div>
+              <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.pResidency }}</span><span class="m" style="font-size:12.5px;">DE</span></div>
+              <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.pSource }}</span><span class="m" style="font-size:12.5px; color:#0E7C3D;">{{ t.pSourceVal }}</span></div>
+              <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.pReview }}</span><span class="m" style="font-size:12.5px; color:#916200;">12.06.2027</span></div>
+            </div>
+            <div style="background:#FCF2DD; border-radius:10px; padding:13px 15px; font-size:12.5px; line-height:1.55; color:#34405A;">{{ t.pReviewNote }}</div>
+          </div>
+
+          <div class="card" style="display:flex; flex-direction:column; gap:14px;">
+            <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">{{ t.pDevices }}</span>
+            <div style="display:flex; flex-direction:column; gap:1px; background:#ECEFF3; border-radius:12px; overflow:hidden;">
+              <div style="background:#fff; padding:13px 15px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <div style="display:flex; flex-direction:column; gap:2px;"><span style="font-size:13px; font-weight:600;">MacBook · Berlin</span><span class="m" style="font-size:11px; color:#0E7C3D;">{{ t.pCurrent }}</span></div>
+              </div>
+              <div style="background:#fff; padding:13px 15px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <div style="display:flex; flex-direction:column; gap:2px;"><span style="font-size:13px; font-weight:600;">iPhone · Tbilisi</span><span class="m" style="font-size:11px; color:#68758B;">11.06 · 09:12</span></div>
+                <button type="button" class="cp">{{ t.pClose }}</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="display:flex; flex-direction:column; gap:12px;">
+            <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">{{ t.pData }}</span>
+            <span style="font-size:12.5px; line-height:1.6; color:#56637A;">{{ t.pDataBody }}</span>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+              <button type="button" class="btn2">{{ t.pExport }}</button>
+              <button type="button" class="btn2">{{ t.pDelete }}</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─── МОИ СДЕЛКИ ─── -->
+      <sc-if value="{{ isDeals }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <div style="display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+            <h1 style="margin:0; font-size:26px; letter-spacing:-.03em; font-weight:800;">{{ t.navDeals }}</h1>
+            <button type="button" class="btn" onClick="{{ go.newDeal }}">{{ t.addDeal }}</button>
+          </div>
+          <span style="font-size:13.5px; line-height:1.6; color:#56637A; max-width:70ch;">{{ t.dealsIntro }}</span>
+
+          <div style="display:flex; flex-direction:column; gap:12px;">
+            <button type="button" onClick="{{ go.deal }}" style="border:0; padding:0; background:none; text-align:left; cursor:pointer;">
+              <div class="card" style="display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap;">
+                <div style="display:flex; flex-direction:column; gap:5px; min-width:0;">
+                  <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap;">
+                    <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">{{ t.propAddr }}</span>
+                    <span style="font-size:10.5px; font-weight:700; color:#1E3FBF; background:#EEF3FF; padding:3px 8px; border-radius:6px;">{{ t.asBuyer }}</span>
+                  </div>
+                  <span class="m" style="font-size:11.5px; color:#68758B;">D-24-0917 · {{ t.propMeta }}</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:18px;">
+                  <div style="display:flex; flex-direction:column; gap:3px; text-align:right;">
+                    <span class="m" style="font-size:15px; font-weight:600;">248 000,00 <span class="lari">₾</span></span>
+                    <span style="display:inline-flex; align-items:center; gap:5px; align-self:flex-end; background:#D6E0FF; color:#172E8C; font-size:10.5px; font-weight:700; padding:3px 7px; border-radius:6px;"><span class="m" style="font-size:9px;">●</span>{{ t.badgeReserved }}</span>
+                  </div>
+                  <span style="color:#C2CBD9; font-size:14px;">›</span>
+                </div>
+              </div>
+            </button>
+
+            <button type="button" onClick="{{ go.sellerDeal }}" class="card" style="border:0; cursor:pointer; text-align:left; font-family:'Manrope',sans-serif; display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap;">
+              <div style="display:flex; flex-direction:column; gap:5px; min-width:0;">
+                <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap;">
+                  <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">{{ t.deal2Addr }}</span>
+                  <span style="font-size:10.5px; font-weight:700; color:#5B3FD6; background:#F0EBFF; padding:3px 8px; border-radius:6px;">{{ t.asSeller }}</span>
+                </div>
+                <span class="m" style="font-size:11.5px; color:#68758B;">D-24-0931 · {{ t.deal2Meta }}</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:18px;">
+                <div style="display:flex; flex-direction:column; gap:3px; text-align:right;">
+                  <span class="m" style="font-size:15px; font-weight:600;">96 400,00 <span class="lari">₾</span></span>
+                  <span style="display:inline-flex; align-items:center; gap:5px; align-self:flex-end; background:#FCF2DD; color:#916200; font-size:10.5px; font-weight:700; padding:3px 7px; border-radius:6px;"><span class="m" style="font-size:9px;">▲</span>{{ t.needRequisites }}</span>
+                </div>
+                <span style="color:#C2CBD9; font-size:14px;">›</span>
+              </div>
+            </button>
+          </div>
+
+          <div style="background:#F7F9FC; border:1px solid #ECEFF3; border-radius:14px; padding:18px; display:flex; flex-direction:column; gap:6px;">
+            <span class="eb" style="color:#68758B;">{{ t.roleNoteTitle }}</span>
+            <span style="font-size:12.5px; line-height:1.6; color:#34405A;">{{ t.roleNoteBody }}</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─── НОВАЯ СДЕЛКА ─── -->
+      <sc-if value="{{ isNewDeal }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <div style="display:flex; align-items:center; gap:12px;">
+            <button type="button" class="cp" onClick="{{ go.deals }}">← {{ t.back }}</button>
+            <h1 style="margin:0; font-size:26px; letter-spacing:-.03em; font-weight:800;">{{ t.addDeal }}</h1>
+          </div>
+
+          <div class="card" style="display:flex; flex-direction:column; gap:16px;">
+            <div style="display:flex; flex-direction:column; gap:7px;">
+              <span style="font-size:16px; font-weight:700; letter-spacing:-.02em;">{{ t.roleQuestion }}</span>
+              <span style="font-size:13px; line-height:1.6; color:#56637A;">{{ t.roleQuestionSub }}</span>
+            </div>
+
+            <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px;">
+              <button type="button" onClick="{{ go.roleBuyer }}" style="text-align:left; cursor:pointer; border:2px solid {{ buyerBd }}; background:{{ buyerBg }}; border-radius:14px; padding:20px; display:flex; flex-direction:column; gap:9px; font-family:'Manrope',sans-serif;">
+                <span style="font-size:10.5px; font-weight:700; color:#1E3FBF; background:#EEF3FF; padding:3px 8px; border-radius:6px; align-self:flex-start;">{{ t.asBuyer }}</span>
+                <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">{{ t.buyerTitle }}</span>
+                <span style="font-size:12.5px; line-height:1.6; color:#56637A;">{{ t.buyerBody }}</span>
+              </button>
+              <button type="button" onClick="{{ go.roleSeller }}" style="text-align:left; cursor:pointer; border:2px solid {{ sellerBd }}; background:{{ sellerBg }}; border-radius:14px; padding:20px; display:flex; flex-direction:column; gap:9px; font-family:'Manrope',sans-serif;">
+                <span style="font-size:10.5px; font-weight:700; color:#5B3FD6; background:#F0EBFF; padding:3px 8px; border-radius:6px; align-self:flex-start;">{{ t.asSeller }}</span>
+                <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">{{ t.sellerTitle }}</span>
+                <span style="font-size:12.5px; line-height:1.6; color:#56637A;">{{ t.sellerBody }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="card" style="display:flex; flex-direction:column; gap:16px;">
+            <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">{{ t.dealForm }}</span>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px;">
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <label style="font-size:12.5px; font-weight:600; color:#34405A;">{{ t.fCadastral }}</label>
+                <input type="text" class="fld" value="01.14.06.043.021">
+                <span style="font-size:11.5px; line-height:1.45; color:#68758B;">{{ t.fCadastralHint }}</span>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <label style="font-size:12.5px; font-weight:600; color:#34405A;">{{ t.fAmount }}</label>
+                <div style="display:flex; align-items:center; border:1px solid #DCE3EE; border-radius:8px; overflow:hidden; background:#fff;">
+                  <input type="text" class="fld" value="248 000,00" style="border:0; box-shadow:none;">
+                  <span class="m" style="padding:0 14px; font-size:13px; font-weight:600; border-left:1px solid #ECEFF3; align-self:stretch; display:flex; align-items:center;">GEL ₾</span>
+                </div>
+                <span style="font-size:11.5px; line-height:1.45; color:#68758B;">{{ t.fAmountHint }}</span>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <label style="font-size:12.5px; font-weight:600; color:#34405A;">{{ t.fCounterparty }}</label>
+                <input type="email" class="fld" value="" style="font-family:'Manrope',sans-serif;">
+                <span style="font-size:11.5px; line-height:1.45; color:#68758B;">{{ t.fCounterpartyHint }}</span>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <label style="font-size:12.5px; font-weight:600; color:#34405A;">{{ t.fCondition }}</label>
+                <div style="display:flex; align-items:center; justify-content:space-between; border:1px solid #DCE3EE; border-radius:8px; padding:12px 14px; min-height:44px; background:#fff;">
+                  <span style="font-size:13.5px;">{{ t.fConditionValue }}</span>
+                  <span style="color:#9AA5B5; font-size:10px;">▾</span>
+                </div>
+                <span style="font-size:11.5px; line-height:1.45; color:#68758B;">{{ t.fConditionHint }}</span>
+              </div>
+            </div>
+
+            <div style="background:#FCF2DD; border-radius:10px; padding:13px 15px; display:flex; gap:10px; align-items:flex-start;">
+              <span class="m" style="font-size:12px; color:#916200;">▲</span>
+              <span style="font-size:12.5px; line-height:1.55; color:#34405A;">{{ t.newDealWarn }}</span>
+            </div>
+
+            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+              <button type="button" class="btn">{{ t.sendToCheck }}</button>
+              <span style="font-size:12px; color:#68758B;">{{ t.sendNote }}</span>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─── СДЕЛКА ─── -->
+      <sc-if value="{{ isDeal }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <button type="button" class="cp" style="align-self:flex-start;" onClick="{{ go.deals }}">← {{ t.navDeals }}</button>
+          <div style="display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+            <div style="display:flex; flex-direction:column; gap:5px;">
+              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <h1 style="margin:0; font-size:26px; letter-spacing:-.03em; font-weight:800;">{{ t.propAddr }}</h1>
+                <span style="font-size:10.5px; font-weight:700; color:#1E3FBF; background:#EEF3FF; padding:3px 8px; border-radius:6px;">{{ t.asBuyer }}</span>
+              </div>
+              <span class="m" style="font-size:12px; color:#68758B;">D-24-0917 · {{ t.propMeta }}</span>
+            </div>
+            <span style="display:inline-flex; align-items:center; gap:6px; background:{{ trChipBg }}; color:{{ trChipFg }}; font-size:11.5px; font-weight:700; padding:6px 11px; border-radius:7px; white-space:nowrap;"><span class="m" style="font-size:10px;">●</span>{{ trBadge }}</span>
+          </div>
+
+          <div class="proto-inline" style="order:2; background:#fff; border-radius:14px; padding:14px 16px; display:flex; flex-direction:column; gap:9px; box-shadow:0 1px 2px rgba(15,23,41,.04); max-width:720px;">
+            <div style="display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+              <!-- Панели прототипа адресованы команде, а не клиенту: не переводятся
+                   и на телефоне скрыты через .proto-inline. Это решение, а не пропуск. -->
+              <span class="eb" style="color:#9AA5B5;">панель прототипа · состояние транша · STATE-MACHINES.md §1.1</span>
+              <span class="m" style="font-size:10.5px; color:#9AA5B5;">{{ trId }}</span>
+            </div>
+            <div style="display:flex; gap:4px; flex-wrap:wrap;">
+              <sc-for list="{{ trList }}" as="s" hint-placeholder-count="12">
+                <button type="button" class="lg {{ s.on }}" style="font-size:10.5px;" onClick="{{ s.pick }}">{{ s.label }}</button>
+              </sc-for>
+            </div>
+            <div style="display:flex; gap:18px; flex-wrap:wrap; padding-top:10px; border-top:1px solid #EEF1F6;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span class="eb" style="color:#9AA5B5;">валюта сделки</span>
+                <div style="display:flex; gap:3px;">
+                  <sc-for list="{{ ccyList }}" as="c" hint-placeholder-count="3">
+                    <button type="button" class="lg {{ c.on }}" onClick="{{ c.pick }}">{{ c.code }}</button>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span class="eb" style="color:#9AA5B5;">валюта перевода</span>
+                <div style="display:flex; gap:3px; flex-wrap:wrap;">
+                  <sc-for list="{{ payList }}" as="c" hint-placeholder-count="6">
+                    <button type="button" class="lg {{ c.on }}" onClick="{{ c.pick }}">{{ c.code }}</button>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Одна карточка вместо трёх: деньги, требуемое действие и срок —
+               один ответ, а не три равнозначных блока. -->
+          <div style="background:{{ trBg }}; border:1px solid {{ trBd }}; border-radius:18px; padding:28px 30px; display:flex; flex-direction:column; gap:22px;">
+            <div style="display:flex; flex-direction:column; gap:12px;">
+              <div class="rw">
+                <div style="display:flex; align-items:center; gap:11px;">
+                  <span class="m" style="font-size:16px; color:{{ trDot }};">●</span>
+                  <span style="font-size:11px; letter-spacing:.06em; text-transform:uppercase; font-weight:700; color:{{ trFg }};">{{ t.whereMoney }}</span>
+                </div>
+                <span class="m" style="font-size:11px; color:{{ trFg }};">{{ t.updated }}</span>
+              </div>
+              <div class="m amt-hero" style="line-height:1; letter-spacing:-.035em; font-weight:600;">{{ trAmount }} <span class="{{ lariCls }}">{{ ccySign }}</span></div>
+              <div style="font-size:19px; line-height:1.3; letter-spacing:-.02em; font-weight:700; color:{{ trFg }};">{{ trH }}</div>
+              <div style="font-size:15px; line-height:1.6; color:{{ trFg }}; max-width:62ch; text-wrap:pretty;">{{ trB }}</div>
+            </div>
+
+            <div style="background:#fff; border-radius:14px; padding:20px 22px; display:flex; flex-direction:column; gap:14px;">
+              <div style="display:flex; flex-direction:column; gap:7px;">
+                <span class="eb" style="color:#68758B;">{{ t.actionTitle }}</span>
+                <span style="font-size:19px; line-height:1.3; letter-spacing:-.02em; font-weight:700;">{{ needT }}</span>
+                <span style="font-size:13.5px; line-height:1.6; color:#56637A; max-width:60ch;">{{ needB }}</span>
+              </div>
+              <sc-if value="{{ showTopup }}" hint-placeholder-val="{{ false }}">
+                <button type="button" class="btn" style="align-self:flex-start;" onClick="{{ go.topup }}">{{ t.topupFromDeal }}</button>
+              </sc-if>
+              <sc-if value="{{ showDeadline }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex; flex-direction:column; gap:5px; padding-top:14px; border-top:1px solid #EEF1F6;">
+                  <div class="rw">
+                    <span style="font-size:12.5px; color:#68758B;">{{ t.deadline }}</span>
+                    <span class="m" style="font-size:13px; font-weight:600;">18.06 · 18:00 <span style="font-size:11px; font-weight:500; color:#68758B;">{{ t.tz }}</span></span>
+                  </div>
+                  <div class="rw">
+                    <span class="m" style="font-size:11.5px; color:#916200;">{{ t.deadlineLeft }}</span>
+                    <span class="m" style="font-size:11.5px; color:#68758B;">{{ t.tzLocal }}</span>
+                  </div>
+                  <span style="font-size:12.5px; line-height:1.55; color:#34405A; padding-top:7px;">{{ t.consequence }}</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{ showRevocation }}" hint-placeholder-val="{{ true }}">
+                <div style="padding-top:14px; border-top:1px solid #EEF1F6; display:flex; flex-direction:column; gap:4px;">
+                  <span class="eb" style="color:#916200;">{{ t.revocationLabel }}</span>
+                  <span style="font-size:13px; line-height:1.6; color:#34405A; max-width:60ch;">{{ t.revocationBody }}</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{ showReserve }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex; align-items:center; gap:12px; padding-top:14px; border-top:1px solid #EEF1F6; flex-wrap:wrap;">
+                  <button type="button" onClick="{{ go.docs }}" style="border:0; background:none; padding:0; font-family:'Manrope',sans-serif; font-size:13.5px; font-weight:600; color:#1E3FBF; cursor:pointer; text-decoration:underline;">{{ t.reserveDoc }}</button>
+                  <span class="m" style="font-size:11.5px; color:#68758B;">RSV-24-0917</span>
+                </div>
+              </sc-if>
+            </div>
+          </div>
+
+          <sc-if value="{{ showMoney }}" hint-placeholder-val="{{ true }}">
+          <div class="card" style="display:flex; flex-direction:column; gap:14px;">
+            <div class="rw" style="align-items:flex-end;">
+              <div style="display:flex; flex-direction:column; gap:3px;">
+                <span style="font-size:12.5px; color:#68758B;">{{ totalLabel }}</span>
+                <span class="m" style="font-size:24px; font-weight:700; letter-spacing:-.025em;">{{ totalValue }} <span class="{{ lariCls }}">{{ ccySign }}</span></span>
+              </div>
+              <sc-if value="{{ showMoneyFacts }}" hint-placeholder-val="{{ true }}"><span class="m" style="font-size:11.5px; color:#9AA5B5;">{{ t.rateFixed }}</span></sc-if>
+            </div>
+            <span style="font-size:12px; line-height:1.55; color:#68758B;">{{ moneyFootnote }}</span>
+            <details style="border-top:1px solid #ECEFF3; padding-top:4px;">
+              <summary><span style="font-size:13.5px; font-weight:600; color:#34405A;">{{ t.moneyTitle }} · {{ t.howCounted }}</span></summary>
+            <div style="display:flex; flex-direction:column; gap:9px; padding-top:12px;">
+              <sc-if value="{{ showMoneyFacts }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex; flex-direction:column; gap:9px;">
+                  <div class="rw"><span style="font-size:13.5px; color:#56637A;">{{ t.youSent }}</span><span class="m" style="font-size:14px; font-weight:500;">{{ payAmount }} {{ payCode }}</span></div>
+                  <sc-if value="{{ showConversion }}" hint-placeholder-val="{{ true }}">
+                    <div style="display:flex; flex-direction:column; gap:9px;">
+                      <div class="rw"><span style="font-size:13.5px; color:#56637A;">{{ t.rate }}</span><span class="m" style="font-size:13.5px; color:#34405A;">{{ payRate }} <span class="{{ lariCls }}">{{ ccySign }}</span></span></div>
+                      <div class="rw"><span style="font-size:13.5px; color:#56637A;">{{ t.feeFx }}</span><span class="m" style="font-size:13.5px; color:#34405A;">{{ feeFxVal }} <span class="{{ lariCls }}">{{ ccySign }}</span></span></div>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ sameCcy }}" hint-placeholder-val="{{ false }}">
+                    <div style="background:#F7F9FC; border-radius:8px; padding:10px 12px; font-size:12px; line-height:1.5; color:#68758B;">{{ t.sameCcyNote }}</div>
+                  </sc-if>
+                  <sc-if value="{{ showFeeService }}" hint-placeholder-val="{{ true }}">
+                    <div class="rw"><span style="font-size:13.5px; color:#56637A;">{{ t.feeService }}</span><span class="m" style="font-size:13.5px; color:#34405A;">{{ feeSrvVal }} <span class="{{ lariCls }}">{{ ccySign }}</span></span></div>
+                  </sc-if>
+                </div>
+              </sc-if>
+              <div class="rw" style="padding-top:13px; border-top:1px solid #ECEFF3;"><span style="font-size:13.5px; font-weight:700;">{{ totalLabel }}</span><span class="m" style="font-size:15px; font-weight:700;">{{ totalValue }} <span class="{{ lariCls }}">{{ ccySign }}</span></span></div>
+            </div>
+            </details>
+          </div>
+          </sc-if>
+
+          <div class="card" style="display:flex; flex-direction:column; gap:18px;">
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <span style="font-size:15px; letter-spacing:-.02em; font-weight:700;">{{ t.timeline }}</span>
+              <span style="font-size:12px; line-height:1.55; color:#68758B;">{{ t.ballHint }}</span>
+            </div>
+            <div style="display:flex; flex-direction:column;">
+              <sc-for list="{{ trList2 }}" as="s" hint-placeholder-count="6">
+                <div style="display:flex; gap:15px;">
+                  <div style="display:flex; flex-direction:column; align-items:center;">
+                    <span class="m" style="font-size:13px; color:{{ s.color }};">{{ s.glyph }}</span>
+                    <div style="width:2px; flex:1; background:{{ s.line }}; min-height:26px;"></div>
+                  </div>
+                  <div style="display:flex; flex-direction:column; gap:3px; padding-bottom:{{ s.last }};">
+                    <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap;">
+                      <span style="font-size:14px; font-weight:{{ s.weight }}; color:{{ s.fg }};">{{ s.l }}</span>
+                      <span class="m" style="font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:{{ s.ballFg }}; background:{{ s.ballBg }}; padding:2px 6px; border-radius:5px;">{{ s.ball }}</span>
+                    </div>
+                    <span class="m" style="font-size:11.5px; color:#68758B;">{{ s.ts }}</span>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <details class="card">
+            <summary><span style="font-size:15px; letter-spacing:-.02em; font-weight:700;">{{ t.object }} · {{ t.parties }}</span></summary>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; padding-top:16px;">
+            <div style="display:flex; flex-direction:column; gap:12px;">
+              <span style="font-size:13.5px; letter-spacing:-.01em; font-weight:700;">{{ t.object }}</span>
+              <div style="display:flex; flex-direction:column; gap:7px;">
+                <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.cadastral }}</span><span class="m" style="font-size:12.5px;">01.14.06.043.021</span></div>
+                <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.area }}</span><span class="m" style="font-size:12.5px;">74,2 м²</span></div>
+                <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.encumbr }}</span><span class="m" style="font-size:12.5px; color:#0E7C3D;">{{ t.none }}</span></div>
+              </div>
+              <span style="font-size:12px; line-height:1.55; color:#68758B; padding-top:10px; border-top:1px solid #EEF1F6;">{{ t.objectNote }}</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:12px;">
+              <span style="font-size:13.5px; letter-spacing:-.01em; font-weight:700;">{{ t.parties }}</span>
+              <div style="display:flex; flex-direction:column; gap:10px;">
+                <div class="rw"><div style="display:flex; flex-direction:column; gap:1px;"><span style="font-size:13px; font-weight:600;">Martin Schulz</span><span style="font-size:11.5px; color:#68758B;">{{ t.roleBuyer }}</span></div><span style="font-size:10.5px; font-weight:700; color:#0E7C3D; background:#E7F6EE; padding:3px 7px; border-radius:6px;">{{ t.verified }}</span></div>
+                <div class="rw"><div style="display:flex; flex-direction:column; gap:1px;"><span style="font-size:13px; font-weight:600;">ჯავახიშვილი ნინო</span><span style="font-size:11.5px; color:#68758B;">{{ t.rolePayee }}</span></div><span style="font-size:10.5px; font-weight:700; color:#0E7C3D; background:#E7F6EE; padding:3px 7px; border-radius:6px;">{{ t.verified }}</span></div>
+              </div>
+            </div>
+          </div>
+          </details>
+        </div>
+      </sc-if>
+
+      <!-- ─── МОЙ СЧЁТ ─── -->
+      <sc-if value="{{ isAccount }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <h1 style="margin:0; font-size:26px; letter-spacing:-.03em; font-weight:800;">{{ t.navAccount }}</h1>
+
+          <div class="card" style="display:flex; flex-direction:column; gap:16px;">
+            <span class="eb" style="color:#68758B;">{{ t.byCurrency }}</span>
+            <div style="display:flex; flex-direction:column; gap:1px; background:#ECEFF3; border-radius:12px; overflow:hidden;">
+              <div style="background:#fff; padding:14px 16px; display:flex; align-items:baseline; justify-content:space-between; gap:14px;">
+                <div style="display:flex; flex-direction:column; gap:2px;"><span class="m" style="font-size:13px; font-weight:600;">GEL</span><span style="font-size:11.5px; color:#68758B;">{{ t.reserved }} · D-24-0917</span></div>
+                <div style="display:flex; flex-direction:column; gap:2px; text-align:right;"><span class="m" style="font-size:15px; font-weight:600;">0,00 <span class="lari">₾</span></span><span class="m" style="font-size:11.5px; color:#1E3FBF;">248 000,00 <span class="lari">₾</span></span></div>
+              </div>
+              <div style="background:#fff; padding:14px 16px; display:flex; align-items:baseline; justify-content:space-between; gap:14px;">
+                <div style="display:flex; flex-direction:column; gap:2px;"><span class="m" style="font-size:13px; font-weight:600;">USD</span><span style="font-size:11.5px; color:#68758B;">{{ t.available }}</span></div>
+                <span class="m" style="font-size:15px; font-weight:600;">0,00 $</span>
+              </div>
+              <div style="background:#fff; padding:14px 16px; display:flex; align-items:baseline; justify-content:space-between; gap:14px;">
+                <div style="display:flex; flex-direction:column; gap:2px;"><span class="m" style="font-size:13px; font-weight:600;">EUR</span><span style="font-size:11.5px; color:#68758B;">{{ t.available }}</span></div>
+                <span class="m" style="font-size:15px; font-weight:600;">1 240,00 €</span>
+              </div>
+            </div>
+            <span style="font-size:12px; line-height:1.55; color:#68758B;">{{ t.byCurrencyNote }}</span>
+            <div style="font-size:12.5px; line-height:1.55; color:#68758B;">{{ t.accountNote }}</div>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+              <button type="button" class="btn2" onClick="{{ go.topup }}">{{ t.topupCta }}</button>
+              <sc-if value="{{ canWithdraw }}" hint-placeholder-val="{{ true }}">
+                <button type="button" class="btn2" onClick="{{ go.withdraw }}">{{ t.withdrawCta }}</button>
+              </sc-if>
+              <sc-if value="{{ reserveLock }}" hint-placeholder-val="{{ false }}">
+                <span style="font-size:12.5px; line-height:1.5; color:#916200; background:#FCF2DD; padding:9px 13px; border-radius:10px;">{{ reserveLockNote }}</span>
+              </sc-if>
+              <button type="button" class="btn2" onClick="{{ go.archive }}">{{ t.archiveTitle }}</button>
+            </div>
+          </div>
+
+          <div class="card" style="display:flex; flex-direction:column; gap:14px;">
+            <span style="font-size:15px; letter-spacing:-.02em; font-weight:700;">{{ t.movements }}</span>
+            <div style="display:flex; flex-direction:column; gap:1px; background:#ECEFF3; border-radius:12px; overflow:hidden;">
+              <div style="background:#fff; padding:14px 16px; display:flex; justify-content:space-between; gap:14px;">
+                <div style="display:flex; flex-direction:column; gap:2px;"><span style="font-size:13px; font-weight:600;">{{ t.mvReserve }}</span><span class="m" style="font-size:11.5px; color:#68758B;">12.06 · 16:04</span></div>
+                <span class="m" style="font-size:13px;">−248 000,00 <span class="lari">₾</span></span>
+              </div>
+              <div style="background:#fff; padding:14px 16px; display:flex; justify-content:space-between; gap:14px;">
+                <div style="display:flex; flex-direction:column; gap:2px;"><span style="font-size:13px; font-weight:600;">{{ t.mvFx }}</span><span class="m" style="font-size:11.5px; color:#68758B;">11.06 · 09:41 · 1 USD = 2,6842 <span class="lari">₾</span></span></div>
+                <div style="display:flex; flex-direction:column; gap:2px; text-align:right;"><span class="m" style="font-size:13px;">−92 400,00 USD</span><span class="m" style="font-size:13px; color:#0E7C3D;">+248 000,00 <span class="lari">₾</span></span></div>
+              </div>
+              <div style="background:#fff; padding:14px 16px; display:flex; justify-content:space-between; gap:14px;">
+                <div style="display:flex; flex-direction:column; gap:2px;"><span style="font-size:13px; font-weight:600;">{{ t.mvIn }}</span><span class="m" style="font-size:11.5px; color:#68758B;">11.06 · 09:12 · SD-24-0917-A</span></div>
+                <span class="m" style="font-size:13px; color:#0E7C3D;">+92 400,00 USD</span>
+              </div>
+            </div>
+            <span style="font-size:12px; line-height:1.55; color:#68758B;">{{ t.mvNote }}</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─── ПОПОЛНЕНИЕ ─── -->
+      <sc-if value="{{ isTopup }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <div style="display:flex; align-items:center; gap:12px;">
+            <button type="button" class="cp" onClick="{{ go.account }}">← {{ t.back }}</button>
+            <div style="display:flex; flex-direction:column; gap:3px;">
+              <h1 style="margin:0; font-size:26px; letter-spacing:-.03em; font-weight:800;">{{ t.topupTitle }}</h1>
+              <span class="m" style="font-size:12px; color:#68758B;">{{ curCode }} · {{ curAddr }}</span>
+            </div>
+          </div>
+
+          <div style="background:{{ qBg }}; border:1px solid {{ qBd }}; border-radius:14px; padding:18px 20px; display:flex; flex-direction:column; gap:10px; max-width:720px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+              <span style="display:inline-flex; align-items:center; gap:6px; background:#fff; color:{{ qFg }}; font-size:11px; font-weight:700; padding:4px 9px; border-radius:6px;">{{ qBadge }}</span>
+              <span class="m" style="font-size:13px; font-weight:600; color:{{ qFg }};">{{ qTimer }}</span>
+            </div>
+            <span style="font-size:16px; line-height:1.3; letter-spacing:-.02em; font-weight:700; color:{{ qFg }};">{{ qH }}</span>
+            <span style="font-size:13px; line-height:1.6; color:{{ qFg }}; max-width:62ch;">{{ qB }}</span>
+          </div>
+
+          <div style="background:{{ crBg }}; border:1px solid {{ crBd }}; border-radius:14px; padding:18px 20px; display:flex; flex-direction:column; gap:9px; max-width:720px;">
+            <span style="display:inline-flex; align-items:center; gap:6px; align-self:flex-start; background:#fff; color:{{ crFg }}; font-size:11px; font-weight:700; padding:4px 9px; border-radius:6px;">{{ crBadge }}</span>
+            <span style="font-size:16px; line-height:1.3; letter-spacing:-.02em; font-weight:700; color:{{ crFg }};">{{ crH }}</span>
+            <span style="font-size:13px; line-height:1.6; color:{{ crFg }}; max-width:62ch;">{{ crB }}</span>
+          </div>
+
+          <div class="proto-inline" style="background:#fff; border-radius:14px; padding:14px 16px; display:flex; flex-direction:column; gap:9px; max-width:720px; box-shadow:0 1px 2px rgba(15,23,41,.04);">
+            <div style="display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+              <span class="eb" style="color:#9AA5B5;">панель прототипа · котировка и зачисление</span>
+              <span class="m" style="font-size:10.5px; color:#9AA5B5;">{{ qId }} · {{ crId }}</span>
+            </div>
+            <div style="display:flex; gap:4px; flex-wrap:wrap;">
+              <sc-for list="{{ qList }}" as="q" hint-placeholder-count="6">
+                <button type="button" class="lg {{ q.on }}" style="font-size:10.5px;" onClick="{{ q.pick }}">{{ q.id }}</button>
+              </sc-for>
+            </div>
+            <div style="display:flex; gap:4px; flex-wrap:wrap;">
+              <sc-for list="{{ crList }}" as="c" hint-placeholder-count="7">
+                <button type="button" class="lg {{ c.on }}" style="font-size:10.5px;" onClick="{{ c.pick }}">{{ c.id }}</button>
+              </sc-for>
+            </div>
+          </div>
+
+          <div class="card" style="display:flex; flex-direction:column; gap:16px;">
+            <div style="display:flex; flex-direction:column; gap:6px;">
+              <label style="font-size:12.5px; font-weight:600; color:#56637A;">{{ t.youSend }}</label>
+              <div style="display:flex; align-items:center; border:1px solid #DCE3EE; border-radius:8px; overflow:hidden; background:#fff;">
+                <input type="text" class="fld" value="92 400,00" style="border:0; box-shadow:none;">
+                <span class="m" style="padding:0 14px; font-size:13px; font-weight:600; border-left:1px solid #ECEFF3; align-self:stretch; display:flex; align-items:center;">USD</span>
+              </div>
+            </div>
+            <sc-if value="{{ qShowLari }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <label style="font-size:12.5px; font-weight:600; color:#56637A;">{{ t.weCredit }}</label>
+                <div style="display:flex; align-items:center; border:1px solid #DCE3EE; border-radius:8px; overflow:hidden; background:#F7F9FC;">
+                  <input type="text" class="fld" value="248 000,00" style="border:0; box-shadow:none; background:transparent;">
+                  <span class="m" style="padding:0 14px; font-size:13px; font-weight:600; color:#56637A; border-left:1px solid #ECEFF3; align-self:stretch; display:flex; align-items:center;">GEL ₾</span>
+                </div>
+              </div>
+            </sc-if>
+            <sc-if value="{{ qHideLari }}" hint-placeholder-val="{{ false }}">
+              <div style="border:1px dashed #C2CBD9; border-radius:10px; padding:16px; display:flex; flex-direction:column; gap:5px; background:#F5F5F7;">
+                <span class="eb" style="color:#916200;">{{ t.lariHiddenLabel }}</span>
+                <span style="font-size:12.5px; line-height:1.6; color:#34405A;">{{ t.lariHiddenBody }}</span>
+              </div>
+            </sc-if>
+            <div style="display:flex; flex-direction:column; gap:8px; padding-top:14px; border-top:1px solid #ECEFF3;">
+              <div class="rw"><span style="font-size:13px; font-weight:600; color:#34405A;">{{ t.rate }}</span><span class="m" style="font-size:14px; font-weight:600;">1 USD = 2,6842 <span class="lari">₾</span></span></div>
+              <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.marketRate }}</span><span class="m" style="font-size:12.5px; color:#56637A;">1 USD = 2,7104 <span class="lari">₾</span></span></div>
+              <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.feeFx }} <span style="color:#916200;">⚖</span></span><span class="m" style="font-size:12.5px; color:#56637A;">2 096,00 <span class="lari">₾</span></span></div>
+              <div class="rw"><span style="font-size:12.5px; color:#68758B;">{{ t.feeService }}</span><span class="m" style="font-size:12.5px; color:#56637A;">2 480,00 <span class="lari">₾</span></span></div>
+            </div>
+            <div style="background:#FCF2DD; border-radius:10px; padding:12px 14px; display:flex; gap:10px; align-items:flex-start;">
+              <span class="m" style="font-size:12px; color:#916200;">▲</span>
+              <span style="font-size:12.5px; line-height:1.5; color:#34405A;">{{ t.bankFees }}</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:8px; padding-top:14px; border-top:1px solid #ECEFF3;">
+              <span class="eb" style="color:#68758B;">{{ t.payMethods }}</span>
+              <div style="display:flex; flex-direction:column; gap:1px; background:#ECEFF3; border-radius:10px; overflow:hidden;">
+                <div style="background:#fff; padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                  <div style="display:flex; flex-direction:column; gap:2px;"><span style="font-size:13px; font-weight:600;">{{ t.pmBank }}</span><span style="font-size:11.5px; color:#68758B;">{{ t.pmBankSub }}</span></div>
+                  <span style="font-size:11px; font-weight:700; color:#0E7C3D; background:#E7F6EE; padding:3px 8px; border-radius:6px;">{{ t.pmAvailable }}</span>
+                </div>
+                <div style="background:#fff; padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                  <div style="display:flex; flex-direction:column; gap:2px;"><span style="font-size:13px; font-weight:600;">{{ t.pmApp }}</span><span style="font-size:11.5px; color:#68758B;">{{ t.pmAppSub }}</span></div>
+                  <span style="font-size:11px; font-weight:700; color:#68758B; background:#F7F9FC; padding:3px 8px; border-radius:6px;">{{ t.pmChecking }}</span>
+                </div>
+                <div style="background:#F7F9FC; padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                  <div style="display:flex; flex-direction:column; gap:2px;"><span style="font-size:13px; font-weight:600; color:#9AA5B5;">{{ t.pmCard }}</span><span style="font-size:11.5px; line-height:1.45; color:#68758B; max-width:44ch;">{{ t.pmCardSub }}</span></div>
+                  <span style="font-size:11px; font-weight:700; color:#9AA5B5; background:#ECEFF3; padding:3px 8px; border-radius:6px;">{{ t.pmUnsuitable }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="display:flex; flex-direction:column; gap:14px;">
+            <div style="background:#EEF3FF; border:1px solid #B6C8FF; border-radius:12px; padding:15px 17px; display:flex; flex-direction:column; gap:7px;">
+              <span class="eb" style="color:#172E8C;">{{ t.payerRule }}</span>
+              <span style="font-size:13px; line-height:1.55; color:#0F1729;">{{ t.payerRuleBody }}</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:1px; background:#ECEFF3; border-radius:12px; overflow:hidden;">
+              <div style="background:#fff; padding:12px 15px; display:flex; align-items:center; justify-content:space-between; gap:12px;"><div style="display:flex; flex-direction:column; gap:1px;"><span style="font-size:11px; color:#68758B;">{{ t.beneficiary }}</span><span class="m" style="font-size:12.5px;">REESTRA OPERATIONS LLC</span></div><button type="button" class="cp">{{ t.copy }}</button></div>
+              <div style="background:#fff; padding:12px 15px; display:flex; align-items:center; justify-content:space-between; gap:12px;"><div style="display:flex; flex-direction:column; gap:1px;"><span style="font-size:11px; color:#68758B;">IBAN</span><span class="m" style="font-size:12.5px;">GE29 BG00 0000 5104 9049 17</span></div><button type="button" class="cp">{{ t.copy }}</button></div>
+              <div style="background:#fff; padding:12px 15px; display:flex; align-items:center; justify-content:space-between; gap:12px;"><div style="display:flex; flex-direction:column; gap:1px;"><span style="font-size:11px; color:#68758B;">SWIFT</span><span class="m" style="font-size:12.5px;">BAGAGE22</span></div><button type="button" class="cp">{{ t.copy }}</button></div>
+              <div style="background:#FCF2DD; padding:13px 15px; display:flex; align-items:center; justify-content:space-between; gap:12px;"><div style="display:flex; flex-direction:column; gap:1px;"><span style="font-size:11px; font-weight:700; color:#916200;">{{ t.reference }}</span><span class="m" style="font-size:14px; font-weight:600;">SD-24-0917-A</span></div><button type="button" class="cp" style="border-color:#E8A317; color:#916200;">{{ t.copy }}</button></div>
+            </div>
+            <span style="font-size:12px; line-height:1.55; color:#68758B;">{{ t.reqNote }}</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─── ДОКУМЕНТЫ ─── -->
+      <sc-if value="{{ isDocs }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <h1 style="margin:0; font-size:26px; letter-spacing:-.03em; font-weight:800;">{{ t.navDocs }}</h1>
+          <div class="card" style="display:flex; flex-direction:column; gap:1px; padding:0; overflow:hidden;">
+            <div style="padding:18px 22px; display:flex; align-items:center; justify-content:space-between; gap:14px; border-bottom:1px solid #ECEFF3;">
+              <div style="display:flex; flex-direction:column; gap:2px;"><span style="font-size:14px; font-weight:700;">{{ t.docReserve }}</span><span class="m" style="font-size:11.5px; color:#68758B;">RSV-24-0917 · 12.06.2026</span></div>
+              <button type="button" class="cp">{{ t.open }}</button>
+            </div>
+            <div style="padding:18px 22px; display:flex; align-items:center; justify-content:space-between; gap:14px;">
+              <div style="display:flex; flex-direction:column; gap:2px;"><span style="font-size:14px; color:#9AA5B5;">{{ t.docSettlement }}</span><span class="m" style="font-size:11.5px; color:#C2CBD9;">{{ t.afterSettlement }}</span></div>
+            </div>
+          </div>
+          <div style="background:#F7F9FC; border:1px solid #ECEFF3; border-radius:14px; padding:18px; display:flex; flex-direction:column; gap:6px;">
+            <span class="eb" style="color:#68758B;">{{ t.watermark }}</span>
+            <span style="font-size:12.5px; line-height:1.55; color:#34405A;">{{ t.watermarkBody }}</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─── ПОМОЩЬ ─── -->
+      <sc-if value="{{ isHelp }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <h1 style="margin:0; font-size:26px; letter-spacing:-.03em; font-weight:800;">{{ t.navHelp }}</h1>
+          <div class="card" style="display:flex; flex-direction:column; gap:14px;">
+            <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">{{ t.secTitleFull }}</span>
+            <div style="display:flex; flex-direction:column; gap:9px;">
+              <span style="font-size:13.5px; line-height:1.6; color:#34405A;">{{ t.sec1 }}</span>
+              <span style="font-size:13.5px; line-height:1.6; color:#34405A;">{{ t.sec2 }}</span>
+              <span style="font-size:13.5px; line-height:1.6; color:#34405A;">{{ t.sec3 }}</span>
+            </div>
+            <button type="button" class="btn" style="align-self:flex-start;">{{ t.reportCta }}</button>
+          </div>
+          <div class="card" style="display:flex; flex-direction:column; gap:12px;">
+            <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">{{ t.whereMoneyNow }}</span>
+            <span style="font-size:13.5px; line-height:1.6; color:#34405A;">{{ t.whereMoneyNowBody }}</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─── ПОДВАЛ БЕЗОПАСНОСТИ ─── -->
+      <sc-if value="{{ showFooter }}" hint-placeholder-val="{{ true }}">
+      <div style="background:#fff; border-radius:18px; padding:22px 26px; display:flex; align-items:flex-start; justify-content:space-between; gap:28px; flex-wrap:wrap; box-shadow:0 1px 2px rgba(15,23,41,.04);">
+        <div style="display:flex; flex-direction:column; gap:8px; max-width:62ch;">
+          <span class="eb" style="color:#68758B;">{{ t.secTitle }}</span>
+          <span style="font-size:13px; line-height:1.6; color:#34405A;">{{ t.secBody }}</span>
+        </div>
+        <button type="button" class="btn2" onClick="{{ go.help }}">{{ t.reportCta }}</button>
+      </div>
+      </sc-if>
+    </div>
+  </div>
+  </div>
+  </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const RU = {
+  navDeal: "Сделка", navAccount: "Мой счёт", navDocs: "Документы", navHelp: "Помощь",
+  propAddr: "Вахтанга Горгасали 17, кв. 42", propMeta: "Тбилиси · 74,2 м²",
+  badgeReserved: "Зарезервировано", whereMoney: "Где ваши деньги", updated: "обновлено 14:02",
+  reservedBody: "Деньги на счёте номинального держания в Банке Грузии: не у получателя и не на нашем балансе. Кнопка вывода на время резерва закрыта.",
+  reserveDoc: "Подтверждение резервирования",
+  actionTitle: "Что требуется от вас", actionNone: "Ничего, ждём подачу документов",
+  actionNoneBody: "Документы на регистрацию подаёт получатель. Мы сообщим сами — заходить и проверять не нужно.",
+  deadline: "Срок", deadlineLeft: "через 3 дн 4 ч", tz: "Тбилиси", tzLocal: "18.06 · 15:00 — ваше время, Берлин",
+  consequence: "Если регистрация не подтвердится к этому времени — резерв снимается, деньги остаются у вас.",
+  moneyTitle: "Деньги по сделке", rateFixed: "курс зафиксирован 12.06",
+  youSent: "Вы отправили", rate: "Курс для этой сделки", marketRate: "Рыночный курс",
+  feeFx: "Комиссия за конвертацию", feeService: "Комиссия за организацию расчёта", toSeller: "К получению",
+  moneyNote: "Остаток округления идёт получателю. Состав комиссий раскрыт полностью.",
+  timeline: "Как идёт сделка",
+  tl1: "Стороны проверены", tl2: "Объект сверен с реестром", tl3: "Средства зачислены и сконвертированы",
+  tl4: "Зарезервированы под сделку", tl5: "Документы поданы на регистрацию", tl6: "Расчёт исполнен", expected: "ожидается",
+  object: "Объект", cadastral: "Кадастровый код", area: "Площадь", encumbr: "Обременения", none: "не найдены",
+  objectNote: "Собственник, обременения и аресты — по выписке от 10.06.2026. Реестр показывает зарегистрированные права, а не притязания третьих лиц.",
+  parties: "Стороны", roleBuyer: "плательщик · вы", rolePayee: "получатель", verified: "проверен",
+  available: "Доступно", reserved: "Зарезервировано под сделку",
+  accountNote: "Зарезервированные средства остаются вашими, но до конца окна резервирования недоступны к выводу.",
+  topupCta: "Пополнить счёт", movements: "Движения",
+  mvReserve: "Резерв под сделку D-24-0917", mvFx: "Конвертация", mvIn: "Поступление перевода",
+  mvNote: "Конвертация показана двумя строками: списание валюты и зачисление лари, с курсом между ними.",
+  back: "Назад", topupTitle: "Пополнение счёта",
+  qExpTitle: "Окно фиксации курса истекает через 7 минут",
+  qExpBody: "После истечения суммы в лари будут скрыты до подтверждения нового курса. Введённые данные сохранятся.",
+  youSend: "Вы отправляете из своего банка", weCredit: "Мы зачислим на ваш счёт",
+  bankFees: "Ваш банк и банки-посредники могут удержать свою комиссию из суммы перевода — мы её не видим и не контролируем.",
+  payerRule: "Правило плательщика",
+  payerRuleBody: "Перевод должен прийти с вашего личного счёта, на ваше имя. Платёж от супруга, вашей компании или знакомого будет остановлен и не зачислен на сделку.",
+  beneficiary: "Получатель", reference: "Референс — обязательно в назначении платежа", copy: "Копировать",
+  reqNote: "Реквизиты не кэшируются: устаревшие реквизиты — это украденный перевод. Сверяйте их здесь перед каждым переводом.",
+  docReserve: "Подтверждение резервирования средств", docSettlement: "Документ о расчёте",
+  afterSettlement: "появится после исполнения расчёта", open: "Открыть", watermark: "просмотр документов",
+  watermarkBody: "Каждый просмотр и каждая выгрузка помечаются водяным знаком с вашим именем и временем. Кто открывал документ, видно в журнале сделки.",
+  secTitle: "Безопасность", secTitleFull: "Как мы защищаем ваши деньги",
+  secBody: "Мы не сообщаем реквизиты по телефону, почте и в мессенджере. Единственное место, где вы видите реквизиты, — этот кабинет. Мы никогда не просим перевести деньги на другой счёт.",
+  sec1: "Мы не сообщаем реквизиты по телефону, почте и в мессенджере.",
+  sec2: "Единственное место, где вы видите реквизиты, — этот кабинет.",
+  sec3: "Мы никогда не просим перевести деньги на другой счёт.",
+  reportCta: "Сообщить о подозрительном контакте",
+  whereMoneyNow: "Где мои деньги прямо сейчас",
+  whereMoneyNowBody: "248 000,00 ₾ зарезервированы под сделку D-24-0917 на счёте номинального держания в Банке Грузии. Они не у получателя и не на нашем балансе."
+};
+
+const EN = Object.assign({}, RU, {
+  navDeal: "Deal", navAccount: "My account", navDocs: "Documents", navHelp: "Help",
+  propAddr: "17 Vakhtang Gorgasali St, apt. 42",
+  propMeta: "Tbilisi · 74.2 m\u00b2", badgeReserved: "Reserved", whereMoney: "Where your money is", updated: "updated 14:02",
+  reservedBody: "The money is in a nominee account at Bank of Georgia: not with the recipient and not on our balance sheet. The withdrawal button is closed while the reservation holds.",
+  reserveDoc: "Reservation confirmation",
+  actionTitle: "What we need from you", actionNone: "Nothing \u2014 waiting for filing",
+  actionNoneBody: "The recipient files for registration. We will tell you ourselves; there is no need to check back.",
+  deadline: "Deadline", deadlineLeft: "in 3 d 4 h", tz: "Tbilisi", tzLocal: "18.06 \u00b7 15:00 \u2014 your time, Berlin",
+  consequence: "If registration is not confirmed by then, the reservation is released and the money stays with you.",
+  moneyTitle: "Money in this deal", rateFixed: "rate fixed on 12.06",
+  youSent: "You sent", rate: "Rate for this deal", marketRate: "Market rate",
+  feeFx: "Conversion fee", feeService: "Settlement arrangement fee", toSeller: "To be received",
+  moneyNote: "Rounding remainder goes to the recipient. Fees are disclosed in full.",
+  timeline: "Deal progress", tl1: "Parties verified", tl2: "Property matched against the registry",
+  tl3: "Funds credited and converted", tl4: "Reserved for the deal", tl5: "Filed for registration",
+  tl6: "Settlement executed", expected: "expected",
+  object: "Property", cadastral: "Cadastral code", area: "Area", encumbr: "Encumbrances", none: "none found",
+  objectNote: "Owner, encumbrances and seizures — per the registry extract of 10.06.2026. The registry shows registered rights, not third-party claims.",
+  parties: "Parties", roleBuyer: "payer \u00b7 you", rolePayee: "recipient", verified: "verified",
+  available: "Available", reserved: "Reserved for the deal",
+  accountNote: "Reserved funds remain yours but cannot be withdrawn until the reservation window ends.",
+  topupCta: "Top up", movements: "Transactions",
+  mvReserve: "Reservation for deal D-24-0917", mvFx: "Conversion", mvIn: "Incoming transfer",
+  mvNote: "Conversion is shown on two lines: currency debited and lari credited, with the rate between them.",
+  back: "Back", topupTitle: "Top up your account",
+  qExpTitle: "The rate window expires in 7 minutes",
+  qExpBody: "After that, lari amounts are hidden until you confirm a new rate. Your input is kept.",
+  youSend: "You send from your bank", weCredit: "We credit to your account",
+  bankFees: "Your bank and intermediary banks may deduct their own fee from the transfer \u2014 we neither see nor control it.",
+  payerRule: "Payer rule",
+  payerRuleBody: "The transfer must come from your own account, in your name. A payment from a spouse, your company or an acquaintance is held and not credited to the deal.",
+  beneficiary: "Beneficiary", reference: "Reference \u2014 required in the payment details", copy: "Copy",
+  reqNote: "Account details are never cached: stale details mean a stolen transfer. Check them here before every transfer.",
+  docReserve: "Funds reservation confirmation", docSettlement: "Settlement document",
+  afterSettlement: "appears after settlement", open: "Open", watermark: "document viewing",
+  watermarkBody: "Every view and download is watermarked with your name and the time. Who opened a document is visible in the deal log.",
+  secTitle: "Security", secTitleFull: "How we protect your money",
+  secBody: "We never share account details by phone, email or messenger. The only place you see them is this account. We never ask you to send money to a different account.",
+  sec1: "We never share account details by phone, email or messenger.",
+  sec2: "The only place you see them is this account.",
+  sec3: "We never ask you to send money to a different account.",
+  reportCta: "Report a suspicious contact",
+  whereMoneyNow: "Where my money is right now",
+  whereMoneyNowBody: "248,000.00 \u20be is reserved for deal D-24-0917 in a nominee account at Bank of Georgia. It is not with the recipient and not on our balance sheet."
+});
+
+const KA = Object.assign({}, RU, {
+  navDeal: "\u10d2\u10d0\u10e0\u10d8\u10d2\u10d4\u10d1\u10d0", navAccount: "\u10e9\u10d4\u10db\u10d8 \u10d0\u10dc\u10d2\u10d0\u10e0\u10d8\u10e8\u10d8",
+  navDocs: "\u10d3\u10dd\u10d9\u10e3\u10db\u10d4\u10dc\u10e2\u10d4\u10d1\u10d8", navHelp: "\u10d3\u10d0\u10ee\u10db\u10d0\u10e0\u10d4\u10d1\u10d0",
+  propAddr: "\u10d5\u10d0\u10ee\u10e2\u10d0\u10dc\u10d2 \u10d2\u10dd\u10e0\u10d2\u10d0\u10e1\u10da\u10d8\u10e1 17, \u10d1. 42", propMeta: "\u10d7\u10d1\u10d8\u10da\u10d8\u10e1\u10d8 \u00b7 74,2 \u10db\u00b2",
+  badgeReserved: "\u10d3\u10d0\u10e0\u10d4\u10d6\u10d4\u10e0\u10d5\u10d4\u10d1\u10e3\u10da\u10d8\u10d0", whereMoney: "\u10e1\u10d0\u10d3 \u10d0\u10e0\u10d8\u10e1 \u10d7\u10e5\u10d5\u10d4\u10dc\u10d8 \u10e4\u10e3\u10da\u10d8", updated: "\u10d2\u10d0\u10dc\u10d0\u10ee\u10da\u10d3\u10d0 14:02",
+  reservedBody: "\u10d3\u10d0\u10e0\u10d4\u10d6\u10d4\u10e0\u10d5\u10d4\u10d1\u10e3\u10da\u10d8\u10d0 \u10d0\u10db \u10d2\u10d0\u10e0\u10d8\u10d2\u10d4\u10d1\u10d8\u10e1\u10d7\u10d5\u10d8\u10e1 18 \u10d8\u10d5\u10dc\u10d8\u10e1\u10d0\u10db\u10d3\u10d4. \u10d8\u10dc\u10d0\u10ee\u10d4\u10d1\u10d0 \u10dc\u10dd\u10db\u10d8\u10dc\u10d0\u10da\u10e3\u10e0 \u10d0\u10dc\u10d2\u10d0\u10e0\u10d8\u10e8\u10d6\u10d4 \u10e1\u10d0\u10e5\u10d0\u10e0\u10d7\u10d5\u10d4\u10da\u10dd\u10e1 \u10d1\u10d0\u10dc\u10d9\u10e8\u10d8 \u2014 \u10d0\u10e0\u10d0 \u10d2\u10d0\u10db\u10eb\u10d8\u10e0\u10d5\u10d4\u10da\u10d7\u10d0\u10dc \u10d3\u10d0 \u10d0\u10e0\u10d0 \u10e9\u10d5\u10d4\u10dc\u10e1 \u10d1\u10d0\u10da\u10d0\u10dc\u10e1\u10d6\u10d4.",
+  actionTitle: "\u10e0\u10d0 \u10d2\u10d5\u10ec\u10d8\u10e0\u10d3\u10d4\u10d1\u10d0 \u10d7\u10e5\u10d5\u10d4\u10dc\u10d2\u10d0\u10dc", actionNone: "\u10d0\u10e0\u10d0\u10e4\u10d4\u10e0\u10d8, \u10d5\u10d4\u10da\u10dd\u10d3\u10d4\u10d1\u10d8\u10d7 \u10d2\u10d0\u10dc\u10d0\u10ea\u10ee\u10d0\u10d3\u10e1",
+  deadline: "\u10d5\u10d0\u10d3\u10d0", tz: "\u10d7\u10d1\u10d8\u10da\u10d8\u10e1\u10d8",
+  moneyTitle: "\u10d7\u10d0\u10dc\u10ee\u10d0 \u10d2\u10d0\u10e0\u10d8\u10d2\u10d4\u10d1\u10d0\u10e8\u10d8", timeline: "\u10d2\u10d0\u10e0\u10d8\u10d2\u10d4\u10d1\u10d8\u10e1 \u10db\u10e1\u10d5\u10da\u10d4\u10da\u10dd\u10d1\u10d0",
+  object: "\u10dd\u10d1\u10d8\u10d4\u10e5\u10e2\u10d8", parties: "\u10db\u10ee\u10d0\u10e0\u10d4\u10d4\u10d1\u10d8", verified: "\u10d3\u10d0\u10d3\u10d0\u10e1\u10e2\u10e3\u10e0\u10d4\u10d1\u10e3\u10da\u10d8",
+  available: "\u10ee\u10d4\u10da\u10db\u10d8\u10e1\u10d0\u10ec\u10d5\u10d3\u10dd\u10db\u10d8", reserved: "\u10d3\u10d0\u10e0\u10d4\u10d6\u10d4\u10e0\u10d5\u10d4\u10d1\u10e3\u10da\u10d8",
+  topupCta: "\u10d0\u10dc\u10d2\u10d0\u10e0\u10d8\u10e8\u10d8\u10e1 \u10e8\u10d4\u10d5\u10e1\u10d4\u10d1\u10d0", movements: "\u10dd\u10de\u10d4\u10e0\u10d0\u10ea\u10d8\u10d4\u10d1\u10d8",
+  back: "\u10e3\u10d9\u10d0\u10dc", topupTitle: "\u10d0\u10dc\u10d2\u10d0\u10e0\u10d8\u10e8\u10d8\u10e1 \u10e8\u10d4\u10d5\u10e1\u10d4\u10d1\u10d0",
+  copy: "\u10d9\u10dd\u10de\u10d8\u10e0\u10d4\u10d1\u10d0", open: "\u10d2\u10d0\u10ee\u10e1\u10dc\u10d0",
+  secTitle: "\u10e3\u10e1\u10d0\u10e4\u10e0\u10d7\u10ee\u10dd\u10d4\u10d1\u10d0",
+  secBody: "\u10e9\u10d5\u10d4\u10dc \u10d0\u10e0\u10d0\u10e1\u10dd\u10d3\u10d4\u10e1 \u10d5\u10d0\u10ec\u10d5\u10d3\u10d8\u10d7 \u10e0\u10d4\u10d9\u10d5\u10d8\u10d6\u10d8\u10e2\u10d4\u10d1\u10e1 \u10e2\u10d4\u10da\u10d4\u10e4\u10dd\u10dc\u10d8\u10d7, \u10d4\u10da\u10e4\u10dd\u10e1\u10e2\u10d8\u10d7 \u10d0\u10dc \u10db\u10d4\u10e1\u10d4\u10dc\u10ef\u10d4\u10e0\u10d8\u10d7. \u10d4\u10e0\u10d7\u10d0\u10d3\u10d4\u10e0\u10d7\u10d8 \u10d0\u10d3\u10d2\u10d8\u10da\u10d8 \u2014 \u10d4\u10e1 \u10d9\u10d0\u10d1\u10d8\u10dc\u10d4\u10e2\u10d8.",
+  reportCta: "\u10e1\u10d0\u10d4\u10ed\u10d5\u10dd \u10d9\u10dd\u10dc\u10e2\u10d0\u10e5\u10e2\u10d8\u10e1 \u10e8\u10d4\u10e1\u10d0\u10ee\u10d4\u10d1"
+});
+
+const ADD_RU = {
+  navDeals: "Мои сделки", addDeal: "Заявка на сделку",
+  dealsIntro: "Кабинет один, сделок сколько угодно. Роль — свойство сделки, а не режим кабинета: вы нигде не выбираете, кем сейчас являетесь, сделка сама знает, платите вы по ней или получаете.",
+  asBuyer: "вы плательщик", asSeller: "вы получатель",
+  deal2Addr: "Церетели 88, кв. 11", deal2Meta: "Батуми · 41,6 м²",
+  needRequisites: "Нужны реквизиты",
+  roleNoteTitle: "кабинет один, роль — свойство сделки",
+  roleNoteBody: "Вы нигде не выбираете, кем сейчас являетесь, и нигде не «входите как получатель». Продав квартиру в Батуми и купив в Тбилиси, вы остаётесь одним клиентом с одной проверкой личности и одним счётом. Различается только экран сделки: плательщик видит реквизиты для пополнения, получатель — реквизиты для выплаты, и никогда наоборот.",
+  roleQuestion: "Кем вы выступаете в этой сделке?",
+  roleQuestionSub: "На пилоте сделку заводит наш оператор — так меньше риск и мы видим реальный процесс. Вы оставляете заявку, дальше с вами связывается менеджер сделки.",
+  buyerTitle: "Я вношу деньги", buyerBody: "Пополняете счёт, видите реквизиты для перевода, подтверждаете курс. Деньги резервируются под сделку с вашей стороны.",
+  sellerTitle: "Я получаю деньги", sellerBody: "Вносите реквизиты выплаты, видите уровень подтверждения средств плательщика. Реквизиты защищены периодом охлаждения 48 часов.",
+  dealForm: "Данные сделки",
+  fCadastral: "Кадастровый код объекта", fCadastralHint: "Проверим по реестру до того, как принимать деньги.",
+  fAmount: "Сумма сделки", fAmountHint: "Валюта сделки. Платить можно в другой — сконвертируем.",
+  fCounterparty: "Почта второй стороны", fCounterpartyHint: "Отправим приглашение. Реквизитов в письме не будет.",
+  fCondition: "Условие расчёта", fConditionValue: "Подтверждённая регистрация в реестре",
+  fConditionHint: "Условие проверяется по внешнему факту, не по воле сторон.",
+  newDealWarn: "Сделку заводит оператор, а не вы: он проверяет объект по реестру и обе стороны до того, как система запросит деньги. Заявка — это начало разговора, а не созданная сделка.",
+  sendToCheck: "Оставить заявку", sendNote: "Менеджер сделки свяжется в течение рабочего дня.",
+  emptyCtaSpec: "Оставить заявку на сделку"
+};
+
+const ADD_EN = {
+  navDeals: "My deals", addDeal: "Request a deal",
+  dealsIntro: "One cabinet, any number of deals. The role belongs to the deal, not to the cabinet: you never choose who you are right now — the deal knows whether you pay or receive.",
+  asBuyer: "you pay", asSeller: "you receive",
+  deal2Addr: "88 Tsereteli St, apt. 11", deal2Meta: "Batumi · 41.6 m²",
+  needRequisites: "Payout details needed",
+  roleNoteTitle: "why the role belongs to the deal",
+  roleNoteBody: "You never choose who you are right now, and you never «sign in as a recipient». Selling in Batumi and buying in Tbilisi, you remain one client with one identity check and one account. Only the deal screen differs: a payer sees top-up details, a recipient sees payout details, never the other way round.",
+  roleQuestion: "What is your role in this deal?",
+  roleQuestionSub: "It defines what you do: pay in or receive. The role cannot be changed once the other side confirms the deal.",
+  buyerTitle: "I pay in", buyerBody: "You top up, see the transfer details and confirm the rate. Funds are reserved for the deal on your side.",
+  sellerTitle: "I receive", sellerBody: "You enter payout details and see the payer's level of funds assurance. Details are protected by a 48-hour cooling period.",
+  dealForm: "Deal details",
+  fCadastral: "Cadastral code", fCadastralHint: "We check it against the registry before accepting any money.",
+  fAmount: "Deal amount", fAmountHint: "Deal currency. You may pay in another — we will convert.",
+  fCounterparty: "Other party's email", fCounterpartyHint: "We send an invitation. It contains no account details.",
+  fCondition: "Settlement condition", fConditionValue: "Confirmed registration in the registry",
+  fConditionHint: "The condition is verified by an external fact, not by the parties' will.",
+  newDealWarn: "A deal is not created instantly: we check the property against the registry and both parties. We ask for no money before that.",
+  sendToCheck: "Send for review", sendNote: "An answer within one business day."
+};
+
+const ADD_KA = {
+  navDeals: "ჩემი გარიგებები", addDeal: "გარიგების დამატება",
+  asBuyer: "თქვენ იხდით", asSeller: "თქვენ იღებთ",
+  roleQuestion: "რა როლში ხართ ამ გარიგებაში?",
+  buyerTitle: "თანხას შევიტან", sellerTitle: "თანხას მივიღებ",
+  dealForm: "გარიგების მონაცემები", sendToCheck: "შემოწმებაზე გაგზავნა"
+};
+
+const P2_RU = {
+  navInbox: "Уведомления", navProfile: "Профиль", markRead: "Отметить прочитанным", logout: "Выйти",
+  inboxIntro: "Всё, что мы вам сообщали, лежит здесь. Письмо могло не дойти или быть подделано — этот список настоящий.",
+  nt1: "Средства зарезервированы под сделку",
+  nt1b: "248 000,00 ₾ зарезервированы до 18 июня. От вас ничего не требуется.",
+  nt2: "По сделке в Батуми нужны реквизиты выплаты",
+  nt2b: "По этой сделке вы получатель. Внесите реквизиты заранее: после изменения действует охлаждение 48 часов.",
+  nt3: "Перевод зачислен и сконвертирован",
+  nt3b: "92 400,00 USD зачислены, сконвертированы по курсу 2,6842.",
+  inboxRuleTitle: "чего здесь никогда не будет",
+  inboxRuleBody: "Уведомление не содержит реквизитов и не ведёт прямо в действие — только на экран сделки. Если письмо или сообщение просит перевести деньги на другой счёт, это не мы.",
+  pDoc: "Документ", pDocVal: "паспорт DE · •••• 4417", pResidency: "Налоговое резидентство",
+  pSource: "Источник средств", pSourceVal: "принят 10.06.2026",
+  pReview: "Следующий пересмотр данных",
+  pReviewNote: "Раз в год мы обязаны пересматривать данные о клиенте. Мы напомним заранее — сделка из-за этого не остановится, если ответите в срок.",
+  pDevices: "Устройства и сессии", pCurrent: "текущая сессия", pClose: "Закрыть",
+  pData: "Ваши данные",
+  pDataBody: "Вы можете выгрузить всё, что мы о вас храним, и запросить удаление. Данные по закрытым сделкам мы обязаны хранить установленный срок — удалим по его истечении.",
+  pExport: "Выгрузить мои данные", pDelete: "Запросить удаление"
+};
+
+const P2_EN = {
+  navInbox: "Notifications", navProfile: "Profile", markRead: "Mark as read", logout: "Sign out",
+  inboxIntro: "Everything we told you is here. An email may not arrive or may be forged — this list is the real one.",
+  nt1: "Funds reserved for the deal",
+  nt1b: "248,000.00 ₾ reserved until 18 June. Nothing is required from you.",
+  nt2: "The Batumi deal needs payout details",
+  nt2b: "You are the recipient in that deal. Add the details in advance: after a change a 48-hour cooling period applies.",
+  nt3: "Transfer credited and converted",
+  nt3b: "92,400.00 USD credited, converted at 2.6842.",
+  inboxRuleTitle: "what will never be here",
+  inboxRuleBody: "A notification never contains account details and never leads straight into an action — only to the deal screen. If a message asks you to send money to a different account, it is not us.",
+  pDoc: "Document", pDocVal: "DE passport · •••• 4417", pResidency: "Tax residency",
+  pSource: "Source of funds", pSourceVal: "accepted 10.06.2026",
+  pReview: "Next data review",
+  pReviewNote: "Once a year we must review client data. We remind you in advance — a deal will not stop over it if you answer in time.",
+  pDevices: "Devices and sessions", pCurrent: "current session", pClose: "Close",
+  pData: "Your data",
+  pDataBody: "You can export everything we hold about you and request deletion. Data on closed deals must be kept for a set period — we delete it once that expires.",
+  pExport: "Export my data", pDelete: "Request deletion"
+};
+
+const P3_RU = {
+  sellerDealTitle: "Церетели 88, кв. 11", sellerDealMeta: "Батуми · 41,6 м² · D-24-0931",
+  sellerNeed: "Что требуется от вас",
+  sellerNeedTitle: "Внесите реквизиты выплаты",
+  sellerNeedBody: "Без реквизитов расчёт по сделке невозможен. Внесите их заранее: после любого изменения действует период охлаждения 48 часов, в течение которого выплата запрещена — это защита от подмены реквизитов.",
+  assuranceTitle: "Подтверждение средств плательщика", assuranceLevel: "A1 · плательщик проверен",
+  assuranceBody: "Личность плательщика подтверждена, источник средств принят. Денег на счёте ещё нет — вы увидите это здесь, когда они поступят.",
+  assuranceNote: "Ни один уровень не называется гарантией. Уровень A3 — зарезервировано под сделку — единственный, при котором можно подавать документы.",
+  reqFormTitle: "Реквизиты для получения",
+  fIban: "IBAN получателя", fIbanHint: "Счёт на ваше имя. Проверим владельца перед первой выплатой.",
+  fHolder: "Владелец счёта", fHolderHint: "Должен совпадать с вашим именем в документе.",
+  saveReq: "Сохранить реквизиты", saveReqNote: "После сохранения начнётся охлаждение 48 часов.",
+  revocationLabel: "ваше право ⚖",
+  revocationBody: "Отозвать средства вы всё ещё вправе — до тех пор, пока регистрация не подтверждена. Отзыв оформляется через нас, и получатель узнаёт о нём сразу.",
+  howCounted: "как считается",
+  sameCcyNote: "Валюта перевода совпадает с валютой сделки — конвертации нет, комиссия за конвертацию не взимается.",
+  byCurrencyNote: "Каждая валюта — отдельный счёт и отдельная сверка. Остатки не суммируются в один итог: единой суммы «всего у вас» не существует, и показывать её было бы вымыслом.",
+  reserveLockNote: "Средства зарезервированы до {deadline} — вывод недоступен до конца окна. Это то, что делает их подтверждением для получателя.",
+  cancelRequest: "Отменить заявку",
+  lariHiddenLabel: "сумма в лари скрыта",
+  lariHiddenBody: "Показывать сумму по истёкшему или неизвестному курсу нельзя: клиент примет решение по цифре, которой уже нет. Появится после пересчёта.",
+  payMethods: "способ пополнения",
+  pmBank: "Банковский перевод", pmBankSub: "1–3 банковских дня · основной способ", pmAvailable: "доступно",
+  pmApp: "Оплата из банковского приложения", pmAppSub: "там, где банк это поддерживает", pmChecking: "проверяем банк",
+  pmCard: "Картой", pmCardSub: "Только для сумм до 5 000 ₾. На сумме этой сделки картой платить нельзя: эквайринг съел бы её целиком.", pmUnsuitable: "не подходит",
+  ballHint: "Плашка справа от шага говорит, от кого зависит движение. Пока там не «вы», от вас ничего не требуется.",
+  showFreeze: "Показать заморозку",
+  freezeLabel: "сделка заморожена · freeze.ts",
+  freezeH: "Операции по сделке приостановлены",
+  freezeB: "Деньги не двигаются ни в одну сторону и остаются на счёте номинального держания в Банке Грузии. Ни получатель, ни плательщик распорядиться ими сейчас не может.",
+  freezeWho: "Решение принимаем", freezeWhoVal: "мы, двумя сотрудниками",
+  freezeTerm: "Ожидаемый срок разбора", freezeTicket: "Обращение",
+  freezeNote: "Мы сообщим итог обеим сторонам одновременно. Если понадобится документ, попросим отдельно — реквизитов в письме не будет.",
+  writeUs: "Написать нам",
+  ballUs: "мы", ballYou: "вы", ballSeller: "получатель", ballBuyer: "плательщик", ballRegistry: "реестр и мы",
+  whoActs: "кто действует"
+};
+const P3_EN = {
+  sellerDealTitle: "88 Tsereteli St, apt. 11",
+  sellerDealMeta: "Batumi · 41.6 m² · D-24-0931", sellerNeed: "What we need from you",
+  sellerNeedTitle: "Add your payout details",
+  sellerNeedBody: "Settlement is impossible without them. Add them in advance: after any change a 48-hour cooling period applies during which payout is blocked — this protects you from details being swapped.",
+  assuranceTitle: "Buyer's funds assurance", assuranceLevel: "A1 · buyer verified",
+  assuranceBody: "The buyer's identity is confirmed and the source of funds accepted. The money is not in the account yet — you will see it here when it arrives.",
+  assuranceNote: "No level is called a guarantee. Level A3 — reserved for the deal — is the only one at which documents should be filed.",
+  reqFormTitle: "Payout details",
+  fIban: "Recipient IBAN", fIbanHint: "An account in your name. We verify the holder before the first payout.",
+  fHolder: "Account holder", fHolderHint: "Must match your name in the identity document.",
+  saveReq: "Save details", saveReqNote: "Saving starts the 48-hour cooling period.",
+  revocationLabel: "your right ⚖",
+  revocationBody: "You are still entitled to revoke the funds — until the registration is confirmed. A revocation is arranged through us, and the recipient learns of it at once.",
+  howCounted: "how it is calculated",
+  sameCcyNote: "The transfer currency matches the deal currency — there is no conversion and no conversion fee is charged.",
+  byCurrencyNote: "Each currency is a separate account with its own reconciliation. Balances are not added into one total: a single «everything you hold» figure does not exist, and showing it would be a fiction.",
+  reserveLockNote: "The funds are reserved until {deadline} — withdrawal is unavailable until the window ends. That is what makes them assurance for the recipient.",
+  cancelRequest: "Cancel the request",
+  lariHiddenLabel: "the lari amount is hidden",
+  lariHiddenBody: "An amount at an expired or unknown rate cannot be shown: the client would decide on a figure that no longer exists. It appears after the re-quote.",
+  payMethods: "top-up method",
+  pmBank: "Bank transfer", pmBankSub: "1–3 banking days · the main method", pmAvailable: "available",
+  pmApp: "Payment from your banking app", pmAppSub: "where the bank supports it", pmChecking: "checking your bank",
+  pmCard: "By card", pmCardSub: "Only for amounts up to 5,000 ₾. This deal cannot be paid by card: acquiring would eat the whole amount.", pmUnsuitable: "not suitable",
+  ballHint: "The chip beside a step says whose move it is. While it does not say «you», nothing is required from you.",
+  showFreeze: "Show the freeze",
+  freezeLabel: "deal frozen · freeze.ts",
+  freezeH: "Operations on this deal are suspended",
+  freezeB: "The money moves in neither direction and stays in the nominee account at Bank of Georgia. Neither the recipient nor the payer can dispose of it right now.",
+  freezeWho: "The decision is made by", freezeWhoVal: "us, by two staff members",
+  freezeTerm: "Expected review time", freezeTicket: "Case",
+  freezeNote: "We will tell both sides the outcome at the same time. If a document is needed we will ask separately — the letter will contain no account details.",
+  writeUs: "Write to us",
+  ballUs: "us", ballYou: "you", ballSeller: "recipient", ballBuyer: "payer", ballRegistry: "registry and us",
+  whoActs: "who acts"
+};
+const P4_RU = {
+  emptyTitle: "Здесь появятся ваши сделки",
+  emptyBody: "Сделку заводит наш оператор после вашей заявки — так меньше риск и мы видим реальный процесс. Пока сделки нет, мы не запрашиваем ни денег, ни документов.",
+  emptyCta: "Оставить заявку на сделку",
+  emptyStep1: "Вы сообщаете объект и сумму", emptyStep2: "Оператор заводит сделку и проверяет объект по реестру",
+  emptyStep3: "Обе стороны проходят проверку", emptyStep4: "Только после этого нужны деньги",
+  withdrawTitle: "Вывод средств", withdrawCta: "Вывести",
+  withdrawSourceTitle: "Куда придут деньги",
+  withdrawSourceBody: "Только на счёт, с которого пришли: DE89 •••• 4417, Deutsche Bank. Другой счёт указать нельзя — это правило защищает вас, а не усложняет вывод.",
+  withdrawAmount: "Сумма к выводу", withdrawFee: "Комиссия за перевод",
+  withdrawNote: "Средства, зарезервированные под сделку, вывести нельзя до окончания окна резервирования.",
+  archiveTitle: "Архив сделок", archiveIntro: "Закрытые сделки и документы по ним. Хранятся установленный законом срок.",
+  arch1: "Абашидзе 12, кв. 7", arch1meta: "Батуми · D-24-0704 · расчёт исполнен 04.04.2026",
+  arch2: "Пекини 44, кв. 19", arch2meta: "Тбилиси · D-24-0512 · сделка не состоялась 21.05.2026",
+  archDocs: "Документы", archRollback: "деньги возвращены на счёт-источник",
+  topupFromDeal: "Пополнить под эту сделку",
+  byCurrency: "По валютам", byDeal: "По сделкам"
+};
+const P4_EN = {
+  emptyTitle: "Your deals will appear here",
+  emptyBody: "Either side creates a deal and invites the other by email. Until a deal exists we ask for no money and no documents.",
+  emptyCta: "Request a deal",
+  withdrawTitle: "Withdraw funds", withdrawCta: "Withdraw",
+  withdrawSourceTitle: "Where the money goes",
+  withdrawSourceBody: "Only to the account it came from: DE89 •••• 4417, Deutsche Bank. No other account can be entered — this rule protects you rather than complicating the withdrawal.",
+  withdrawAmount: "Amount", withdrawFee: "Transfer fee",
+  withdrawNote: "Funds reserved for a deal cannot be withdrawn until the reservation window ends.",
+  archiveTitle: "Deal archive", archiveIntro: "Closed deals and their documents, kept for the period required by law.",
+  arch1: "12 Abashidze St, apt. 7", arch1meta: "Batumi · D-24-0704 · settlement executed 04.04.2026",
+  arch2: "44 Pekini Ave, apt. 19", arch2meta: "Tbilisi · D-24-0512 · the deal did not take place 21.05.2026",
+  archDocs: "Documents", archRollback: "money returned to the source account",
+  topupFromDeal: "Top up for this deal", byCurrency: "By currency", byDeal: "By deal"
+};
+Object.assign(ADD_RU, P2_RU, P3_RU, P4_RU);
+Object.assign(ADD_EN, P4_EN);
+Object.assign(ADD_EN, P3_EN);
+Object.assign(ADD_EN, P2_EN);
+Object.assign(RU, ADD_RU);
+Object.assign(EN, ADD_RU, ADD_EN);
+Object.assign(KA, ADD_RU, ADD_KA);
+
+// Состояния транша · единственный источник истины: docs/product/STATE-MACHINES.md §1.1
+// Формулировки платящей стороны — DRAFT-money.md §5 (главред пройден, ⚖-слоты в ревью)
+const RU_TRANCHE = {
+  pending:         { badge: "Готовится",              tone: "gray",   h: "Сделка готовится",                        b: "Реквизиты появятся, когда обе стороны пройдут проверку. Денег мы пока не запрашиваем.", amount: "0,00" },
+  collecting:      { badge: "Нужно внести",           tone: "amber",  h: "Нужно внести деньги",                     b: "Переведите сумму со своего счёта на своё имя, указав референс. Реквизиты — на экране пополнения.", amount: "0,00" },
+  collected:       { badge: "На вашем счёте",         tone: "blue",   h: "На вашем счёте. Забрать можно в любой момент", b: "Резерв под сделку установим в день подачи документов, не раньше. До этого деньги остаются вашими, и вывод доступен без объяснения причин.", amount: "248 000,00" },
+  reserved:        { badge: "Зарезервировано",        tone: "blue",   h: "Зарезервированы под сделку",              b: "Деньги на счёте номинального держания в Банке Грузии: не у получателя и не на нашем балансе. Кнопка вывода на время резерва закрыта.", amount: "248 000,00" },
+  release_pending: { badge: "Готовим перевод",        tone: "blue",   h: "Регистрация подтверждена, готовим перевод", b: "Реестр подтвердил переход права на вас. Формируем поручение — от вас ничего не требуется.", amount: "248 000,00" },
+  release_blocked: { badge: "Требуется проверка",     tone: "amber",  h: "Требуется проверка, мы свяжемся",         b: "Расчёт приостановлен до решения оператора. Деньги не двигаются ни в одну сторону и остаются на номинальном счёте.", amount: "248 000,00" },
+  paying_out:      { badge: "Поручение отправлено",   tone: "blue",   h: "Поручение отправлено, ответа банка нет",  b: "Повторно поручение мы не отправляем — это единственный способ не заплатить дважды. Сверим выписку следующего банковского дня и напишем сами.", amount: "248 000,00" },
+  paid_out:        { badge: "Расчёт исполнен",        tone: "green",  h: "Расчёт исполнен",                         b: "Деньги у получателя, сделка закрыта. Документы по ней остаются доступны в разделе документов.", amount: "0,00" },
+  refund_pending:  { badge: "Возврат назначен",       tone: "violet", h: "Возвращаем средства",                     b: "Возврат пойдёт только на счёт, с которого пришли деньги. Другой счёт указать нельзя.", amount: "248 000,00" },
+  refunding:       { badge: "Возврат отправлен",      tone: "violet", h: "Возврат отправлен",                       b: "Поручение на возврат ушло в банк. Срок зачисления зависит от вашего банка.", amount: "248 000,00" },
+  refunded:        { badge: "Деньги вернулись",       tone: "violet", h: "Деньги вернулись на ваш счёт",            b: "Сделка не состоялась. Комиссия за конвертацию не возвращается — она была удержана в момент обмена валюты.", amount: "0,00" },
+  written_off:     { badge: "Средства не востребованы", tone: "gray", h: "Средства не были востребованы",           b: "Обязательство закрыто по истечении срока хранения. Обратитесь в поддержку — мы поднимем историю сделки.", amount: "0,00" }
+};
+const TONE = {
+  gray:   { bg: "#F7F9FC", bd: "#ECEFF3", fg: "#56637A", dot: "#9AA5B5", chipBg: "#EEF1F6", chipFg: "#56637A" },
+  blue:   { bg: "#EEF3FF", bd: "#B6C8FF", fg: "#172E8C", dot: "#1E3FBF", chipBg: "#D6E0FF", chipFg: "#172E8C" },
+  amber:  { bg: "#FCF2DD", bd: "#F0DFB8", fg: "#916200", dot: "#E8A317", chipBg: "#FCF2DD", chipFg: "#916200" },
+  green:  { bg: "#E7F6EE", bd: "#BFE6CE", fg: "#0E7C3D", dot: "#12A150", chipBg: "#E7F6EE", chipFg: "#0E7C3D" },
+  violet: { bg: "#F5F2FF", bd: "#DDD3FF", fg: "#5B3FD6", dot: "#7C5CFF", chipBg: "#F0EBFF", chipFg: "#5B3FD6" }
+};
+const ORDER = ["pending","collecting","collected","reserved","release_pending","release_blocked","paying_out","paid_out","refund_pending","refunding","refunded","written_off"];
+
+// «Требуется ли что-то от меня прямо сейчас» — главный вопрос экрана, по состоянию
+const RU_NEED = {
+  pending:         { t: "Ничего, готовим сделку",            b: "Ждём, пока обе стороны пройдут проверку. Мы сообщим сами." },
+  collecting:      { t: "Внести деньги",                     b: "Переведите сумму со своего счёта, указав референс в назначении платежа." },
+  collected:       { t: "Ничего, ждём резервирования",       b: "Деньги у вас на счёте. Зарезервируем их под сделку в день подачи документов на регистрацию, не раньше." },
+  reserved:        { t: "Ничего, ждём подачу документов",    b: "Документы на регистрацию подаёт получатель. Мы сообщим сами — заходить и проверять не нужно." },
+  release_pending: { t: "Ничего, готовим перевод",           b: "Регистрация подтверждена. Поручение формируется автоматически." },
+  release_blocked: { t: "Ничего, ждите нашего звонка",       b: "Мы разбираемся сами. Если понадобится документ, попросим отдельно — в письме реквизитов не будет." },
+  paying_out:      { t: "Ничего, перевод в банке",           b: "Итог подтвердится сверкой не позднее следующего банковского дня." },
+  paid_out:        { t: "Ничего, сделка закрыта",            b: "Документы по сделке остались в архиве и доступны в любой момент." },
+  refund_pending:  { t: "Ничего, готовим возврат",           b: "Возврат пойдёт на счёт-источник. Другой счёт указать нельзя." },
+  refunding:       { t: "Ничего, возврат в банке",           b: "Срок зачисления зависит от вашего банка." },
+  refunded:        { t: "Ничего, деньги у вас",              b: "Можете начать новую сделку по другому объекту или оставить средства на счёте." },
+  written_off:     { t: "Обратиться в поддержку",            b: "Срок хранения истёк, обязательство закрыто. Мы поднимем историю сделки по номеру." }
+};
+// Валюта сделки: три, каждая — отдельный номинальный счёт (дизайн-система §5.2)
+const CCY = {
+  GEL: { sign: "₾", code: "GEL", lari: true,  full: "248 000,00", seller: "245 520,00", refund: "245 904,00", feeFx: "2 096,00", feeSrv: "2 480,00" },
+  USD: { sign: "$", code: "USD", lari: false, full: "92 400,00",  seller: "91 476,00",  refund: "91 631,00",  feeFx: "769,00",   feeSrv: "924,00" },
+  EUR: { sign: "€", code: "EUR", lari: false, full: "84 900,00",  seller: "84 051,00",  refund: "84 194,00",  feeFx: "706,00",   feeSrv: "849,00" }
+};
+// Валюта перевода: клиент платит из своего банка. Топ-10 мировых + спрос канала
+const PAY = {
+  USD: { code: "USD", amount: "92 400,00", rate: "1 USD = 2,6842" },
+  EUR: { code: "EUR", amount: "84 900,00", rate: "1 EUR = 2,9211" },
+  GEL: { code: "GEL", amount: "248 000,00", rate: "—" },
+  GBP: { code: "GBP", amount: "72 640,00", rate: "1 GBP = 3,4137" },
+  ILS: { code: "ILS", amount: "343 200,00", rate: "1 ILS = 0,7226" },
+  AED: { code: "AED", amount: "339 400,00", rate: "1 AED = 0,7307" }
+};
+// Машина вывода · packages/domain/src/client-account.ts
+const RU_WD = {
+  requested: { badge: "Заявка создана",    tone: "gray",   h: "Заявка на вывод создана",        b: "Проверяем, что счёт-источник известен и по нему нет активной заявки. Обычно занимает несколько минут." },
+  approved:  { badge: "Утверждено",        tone: "blue",   h: "Вывод утверждён",                 b: "Поручение уйдёт в банк ближайшим рейсом. Отменить заявку после отправки уже нельзя." },
+  paying_out:{ badge: "Отправлено в банк", tone: "blue",   h: "Перевод отправлен",               b: "Итог подтвердится сверкой с выпиской не позднее следующего банковского дня. Повторную заявку в это время создать нельзя." },
+  paid_out:  { badge: "Выплачено",         tone: "green",  h: "Деньги отправлены на ваш счёт",   b: "Срок зачисления зависит от вашего банка. Документ о переводе — в разделе документов." },
+  blocked:   { badge: "Требуется проверка",tone: "amber",  h: "Вывод приостановлен",             b: "Банк отклонил поручение или сработало правило комплаенса. Деньги остались на номинальном счёте — они никуда не двигались." },
+  cancelled: { badge: "Отменено",          tone: "gray",   h: "Заявка отменена",                 b: "Средства остались на вашем счёте. Новую заявку можно создать сразу." }
+};
+const WD_ORDER = ["requested", "approved", "paying_out", "paid_out", "blocked", "cancelled"];
+
+// Проверка получателя · packages/domain/src/beneficiary.ts + compliance/beneficiary.ts
+const RU_BEN = {
+  draft:                 { badge: "Не внесены",        tone: "gray",   h: "Реквизиты не внесены",                b: "Без реквизитов расчёт по сделке невозможен. Внесите их заранее — проверка занимает до одного рабочего дня." },
+  awaiting_verification: { badge: "На проверке",       tone: "amber",  h: "Проверяем владельца счёта",            b: "Сверяем имя владельца счёта с вашим документом. Совпадение обязательно: выплата на счёт другого лица невозможна." },
+  verified:              { badge: "Проверены",         tone: "green",  h: "Реквизиты проверены",                  b: "Владелец счёта совпал с вашим документом. Выплата пойдёт на этот счёт." },
+  cooling:               { badge: "Охлаждение 48 ч",   tone: "amber",  h: "Реквизиты изменены, идёт охлаждение",  b: "До 15.06 в 16:04 выплата запрещена. Обе стороны получили уведомление об изменении — это защита от подмены реквизитов, а не задержка выплаты." },
+  locked:                { badge: "Заблокированы",     tone: "blue",   h: "Реквизиты заблокированы резервом",     b: "Пока средства зарезервированы под сделку, реквизиты изменить нельзя. Чтобы изменить — снимите резерв, и продавец об этом узнает." },
+  rejected:              { badge: "Не приняты",        tone: "gray",   h: "Реквизиты не приняты",                 b: "Имя владельца счёта не совпало с документом. Укажите счёт на своё имя — счёт супруга, компании или знакомого не подходит." }
+};
+const BEN_ORDER = ["draft", "awaiting_verification", "verified", "cooling", "locked", "rejected"];
+
+// Заморозка · packages/domain/src/freeze.ts · UNFREEZE_TARGETS
+const RU_FREEZE_TARGETS = [
+  { id: "suspended_from", l: "вернуть к расчёту",       b: "Разбор закончен, оснований останавливать сделку нет. Возвращаемся туда, где остановились." },
+  { id: "refund_pending", l: "вернуть деньги",          b: "Сделка не будет исполнена. Деньги уходят на счёт-источник плательщика." },
+  { id: "release_blocked", l: "оставить в блокировке",  b: "Разбор продолжается, но заморозка снимается: сделка переходит в обычную очередь оператора." }
+];
+// Котировка и зачисление · CABINETS.md §3.3 · SCREENS.md Q-01…Q-07
+const RU_QUOTE = {
+  fresh:      { badge: "Курс зафиксирован",      tone: "blue",   h: "Курс зафиксирован на 30 минут",        b: "До 16:42 сумма в лари не изменится. Успеете отправить перевод — зачислим по этому курсу, даже если он изменится в банке.", timer: "осталось 27:14", block: false },
+  expiring:   { badge: "Истекает",               tone: "amber",  h: "Окно фиксации истекает через 7 минут", b: "После истечения суммы в лари будут скрыты до подтверждения нового курса. Введённое сохранится.", timer: "осталось 06:48", block: false },
+  expired:    { badge: "Курс истёк",             tone: "amber",  h: "Курс истёк, нужен пересчёт",           b: "Суммы в лари скрыты: показывать старый курс после истечения — обман. Пересчитаем по текущему, вы увидите новую сумму до подтверждения.", timer: "—", block: true },
+  requoting:  { badge: "Пересчёт",               tone: "gray",   h: "Пересчитываем по текущему курсу",      b: "Занимает несколько секунд. Ничего не подтверждайте, пока не увидите новую сумму.", timer: "—", block: true },
+  unavailable:{ badge: "Курс недоступен",        tone: "amber",  h: "Курс временно недоступен",             b: "Поставщик курса не отвечает. Пополнение можно сделать позже — деньги без курса мы не принимаем, чтобы не зачислить по неизвестной ставке. ⚖ решение владельца", timer: "—", block: true },
+  same:       { badge: "Без конвертации",        tone: "green",  h: "Конвертации не будет",                 b: "Валюта перевода совпадает с валютой сделки. Курс не применяется, комиссия за конвертацию не взимается.", timer: "—", block: false }
+};
+const QUOTE_ORDER = ["fresh", "expiring", "expired", "requoting", "unavailable", "same"];
+
+// Зачисление · C-15
+const RU_CREDIT = {
+  none:       { badge: "Перевода нет",        tone: "gray",   h: "Перевод ещё не поступил",              b: "Обычно приходит за 1–3 рабочих дня. Если ваш банк уже списал деньги, а здесь ничего нет — напишите нам, найдём по референсу." },
+  seen:       { badge: "Поступление найдено", tone: "blue",   h: "Поступление найдено, сверяем",         b: "Проверяем сумму и отправителя. Обычно занимает до часа в рабочее время." },
+  credited:   { badge: "Зачислено",           tone: "green",   h: "Зачислено на ваш счёт",               b: "Референс распознан, отправитель совпал с вами. Деньги на вашем счёте и остаются вашими." },
+  short:      { badge: "Недобор",             tone: "amber",  h: "Пришло меньше, чем нужно",             b: "Не хватает 1 240,00 — банки-посредники удержали свою комиссию. Доберите до полной суммы или сделка не будет зарезервирована." },
+  excess:     { badge: "Излишек",             tone: "amber",  h: "Пришло больше, чем нужно",             b: "Излишек 860,00 вернём на счёт-источник после расчёта. Зачесть его в другую сделку нельзя: это разные обязательства." },
+  thirdParty: { badge: "Платёж третьего лица",tone: "gray",   h: "Отправитель не совпал с вами",         b: "Перевод от другого лица на сделку не зачисляется — так требует правило плательщика, названное до перевода. Деньги вернутся отправителю, это займёт до пяти рабочих дней." },
+  noRef:      { badge: "Без референса",       tone: "amber",  h: "Перевод без референса",                b: "Нашли по сумме и отправителю, но подтвердить принадлежность к сделке нужно вручную. Разбор занимает до одного рабочего дня." }
+};
+const CREDIT_ORDER = ["none", "seen", "credited", "short", "excess", "thirdParty", "noRef"];
+const REFUND_BRANCH = { refund_pending: 1, refunding: 1, refunded: 1 };
+const HAS_RESERVE = { reserved: 1, release_pending: 1, release_blocked: 1, paying_out: 1, paid_out: 1 };
+const HAS_DEADLINE = { collecting: 1, collected: 1, reserved: 1, release_pending: 1, release_blocked: 1 };
+
+const DICT = { ru: RU, en: EN, ka: KA };
+
+// Тексты состояний обязаны переключаться языком вместе с остальным интерфейсом:
+// EN-накладка поверх русской базы, KA пока падает на русский осознанно.
+const EN_ST = {
+  TRANCHE: {
+    pending:         { badge: "Preparing",            h: "The deal is being prepared",                 b: "Account details appear once both sides pass verification. We ask for no money yet." },
+    collecting:      { badge: "Payment needed",       h: "Money needs to be paid in",                  b: "Send the amount from your own account in your own name, quoting the reference. Details are on the top-up screen." },
+    collected:       { badge: "In your account",      h: "In your account. You can withdraw at any time", b: "We set the reservation on the day documents are filed, not earlier. Until then the money stays yours and withdrawal needs no explanation." },
+    reserved:        { badge: "Reserved",             h: "Reserved for the deal",                      b: "The money is in a nominee account at Bank of Georgia: not with the recipient and not on our balance sheet. The withdrawal button is closed while the reservation holds." },
+    release_pending: { badge: "Preparing settlement", h: "Registration confirmed, settlement is being executed", b: "The registry confirmed the transfer of title. We are forming the instruction — nothing is required from you." },
+    release_blocked: { badge: "Review required",      h: "Review required, we will contact you",       b: "Settlement is paused pending an operator decision. The money moves in neither direction and stays in the nominee account." },
+    paying_out:      { badge: "Instruction sent",     h: "Instruction sent, no bank response yet",     b: "We do not resend the instruction — that is the only way not to pay twice. We will check the next banking day statement and write to you ourselves." },
+    paid_out:        { badge: "Settlement executed",  h: "Settlement executed",                        b: "The money is with the recipient and the deal is closed. Its documents remain available in the documents section." },
+    refund_pending:  { badge: "Refund scheduled",     h: "Returning your money",                       b: "The refund goes only to the account the money came from. No other account can be entered." },
+    refunding:       { badge: "Refund sent",          h: "Refund sent",                                b: "The refund instruction went to the bank. The crediting time depends on your bank." },
+    refunded:        { badge: "Money returned",       h: "The money is back in your account",          b: "The deal did not take place. The conversion fee is not returned — it was charged at the moment of the currency exchange." },
+    written_off:     { badge: "Funds unclaimed",      h: "The funds were not claimed",                 b: "The obligation was closed after the retention period expired. Contact support — we will pull up the deal history." }
+  },
+  NEED: {
+    pending:         { t: "Nothing, we are preparing the deal", b: "Waiting for both sides to pass verification. We will tell you ourselves." },
+    collecting:      { t: "Pay the money in",                   b: "Send the amount from your own account, quoting the reference in the payment details." },
+    collected:       { t: "Nothing, waiting for reservation",    b: "The money is in your account. We will reserve it for the deal on the day documents are filed, not earlier." },
+    reserved:        { t: "Nothing, waiting for the filing",     b: "The recipient files for registration. We will tell you ourselves — there is no need to check back." },
+    release_pending: { t: "Nothing, preparing the instruction",  b: "Registration is confirmed. The instruction is formed automatically." },
+    release_blocked: { t: "Nothing, wait for our call",          b: "We are sorting it out ourselves. If a document is needed we will ask separately — the letter will contain no account details." },
+    paying_out:      { t: "Nothing, the instruction is with the bank", b: "The outcome is confirmed by reconciliation no later than the next banking day." },
+    paid_out:        { t: "Nothing, the deal is closed",         b: "The deal documents remain in the archive and are available at any time." },
+    refund_pending:  { t: "Nothing, preparing the refund",       b: "The refund goes to the source account. No other account can be entered." },
+    refunding:       { t: "Nothing, the refund is with the bank", b: "The crediting time depends on your bank." },
+    refunded:        { t: "Nothing, the money is yours",         b: "You can start a new deal on another property or leave the funds in your account." },
+    written_off:     { t: "Contact support",                     b: "The retention period expired and the obligation was closed. We will pull up the history by the deal number." }
+  },
+  WD: {
+    requested: { badge: "Request created",  h: "Withdrawal request created",        b: "We are checking that the source account is known and that there is no active request on it. This usually takes a few minutes." },
+    approved:  { badge: "Approved",         h: "Withdrawal approved",               b: "The instruction goes to the bank with the next run. The request can no longer be cancelled once sent." },
+    paying_out:{ badge: "Sent to the bank", h: "Transfer sent",                     b: "The outcome is confirmed against the statement no later than the next banking day. A repeat request cannot be created meanwhile." },
+    paid_out:  { badge: "Paid out",         h: "The money was sent to your account", b: "The crediting time depends on your bank. The transfer document is in the documents section." },
+    blocked:   { badge: "Review required",  h: "Withdrawal paused",                 b: "The bank rejected the instruction or a compliance rule fired. The money stayed in the nominee account — it never moved." },
+    cancelled: { badge: "Cancelled",        h: "Request cancelled",                 b: "The funds stayed in your account. A new request can be created straight away." }
+  },
+  BEN: {
+    draft:                 { badge: "Not provided",     h: "Payout details not provided",              b: "Settlement is impossible without them. Add them in advance — verification takes up to one business day." },
+    awaiting_verification: { badge: "Under review",     h: "Verifying the account holder",             b: "We are matching the account holder against your identity document. A match is mandatory: payout to another person's account is impossible." },
+    verified:              { badge: "Verified",         h: "Payout details verified",                  b: "The account holder matched your identity document. The payout will go to this account." },
+    cooling:               { badge: "48-hour cooling",  h: "Details changed, cooling period is running", b: "Payout is blocked until 15.06 at 16:04. Both sides were notified of the change — this protects you from details being swapped, it is not a payout delay." },
+    locked:                { badge: "Locked",           h: "Details locked by the reservation",        b: "While the funds are reserved for the deal the details cannot be changed. To change them, release the reservation — the other side will know." },
+    rejected:              { badge: "Not accepted",     h: "Payout details not accepted",              b: "The account holder name did not match the document. Provide an account in your own name — a spouse's, a company's or an acquaintance's account will not do." }
+  },
+  QUOTE: {
+    fresh:      { badge: "Rate fixed",       h: "The rate is fixed for 30 minutes",        b: "The lari amount will not change until 16:42. Send the transfer in time and we credit it at this rate, even if it moves at the bank.", timer: "27:14 left" },
+    expiring:   { badge: "Expiring",         h: "The rate window expires in 7 minutes",    b: "After it expires, lari amounts are hidden until you confirm a new rate. Your input is kept.", timer: "06:48 left" },
+    expired:    { badge: "Rate expired",     h: "The rate expired, a re-quote is needed",  b: "Lari amounts are hidden: showing an expired rate would be misleading. We will re-quote at the current rate and you will see the new amount before confirming.", timer: "—" },
+    requoting:  { badge: "Re-quoting",       h: "Re-quoting at the current rate",          b: "This takes a few seconds. Do not confirm anything until you see the new amount.", timer: "—" },
+    unavailable:{ badge: "Rate unavailable", h: "The rate is temporarily unavailable",     b: "The rate provider is not responding. You can top up later — we do not accept money without a rate, so as not to credit it at an unknown one. ⚖ owner decision", timer: "—" },
+    same:       { badge: "No conversion",    h: "There will be no conversion",             b: "The transfer currency matches the deal currency. No rate applies and no conversion fee is charged.", timer: "—" }
+  },
+  CREDIT: {
+    none:       { badge: "No transfer yet",     h: "The transfer has not arrived yet",   b: "It usually takes 1–3 business days. If your bank has already debited you and nothing is here, write to us and we will find it by the reference." },
+    seen:       { badge: "Incoming found",      h: "Incoming payment found, verifying",  b: "We are checking the amount and the sender. This usually takes up to an hour in working hours." },
+    credited:   { badge: "Credited",            h: "Credited to your account",           b: "The reference was recognised and the sender matched you. The money is in your account and remains yours." },
+    short:      { badge: "Short",               h: "Less arrived than needed",           b: "1,240.00 is missing — intermediary banks took their fee. Top up to the full amount or the deal will not be reserved." },
+    excess:     { badge: "Excess",              h: "More arrived than needed",           b: "The excess of 860.00 goes back to the source account after settlement. It cannot be applied to another deal: these are separate obligations." },
+    thirdParty: { badge: "Third-party payment", h: "The sender did not match you",       b: "A transfer from another person is not credited to the deal — that is the payer rule, stated before the transfer. The money returns to the sender within five business days." },
+    noRef:      { badge: "No reference",        h: "Transfer without a reference",       b: "We found it by amount and sender, but its link to the deal must be confirmed manually. The review takes up to one business day." }
+  },
+  FREEZE_TARGETS: {
+    suspended_from:  { l: "Return to settlement",   b: "The review is over and there are no grounds to stop the deal. The tranche returns where it stopped and settlement continues." },
+    refund_pending:  { l: "Return the money",       b: "The deal will not be executed. The refund goes only to the source account — g_source_account_known is mandatory." },
+    release_blocked: { l: "Keep it blocked",        b: "The freeze is lifted but the review continues: the tranche goes into the regular operator queue prioritised by amount." }
+  }
+};
+
+function LOC(base, ov, lang) {
+  if (lang !== "en" || !ov) return base;
+  const out = {};
+  Object.keys(base).forEach((k) => { out[k] = Object.assign({}, base[k], ov[k] || {}); });
+  return out;
+}
+function LOCA(arr, ov, lang) {
+  if (lang !== "en" || !ov) return arr;
+  return arr.map((it) => Object.assign({}, it, ov[it.id] || {}));
+}
+
+class Component extends DCLogic {
+  state = { page: "deals", lang: "ru", role: "buyer", tr: "reserved", ccy: "GEL", pay: "USD" };
+
+  setTr(tr) { return () => this.setState({ tr, page: "deal" }); }
+  setCcy(ccy) { return () => this.setState({ ccy }); }
+  setPay(pay) { return () => this.setState({ pay }); }
+  setWd(wd) { return () => this.setState({ wd, page: "withdraw" }); }
+  setBen(ben) { return () => this.setState({ ben, page: "sellerDeal" }); }
+  setVw(vw) { return () => this.setState({ vw }); }
+  setQ(q) { return () => this.setState({ q, page: "topup" }); }
+  setCr(cr) { return () => this.setState({ cr, page: "topup" }); }
+  toggleFreeze() { return () => this.setState({ frozen: !this.state.frozen }); }
+
+  nav(page) { return () => this.setState({ page, drawer: false, read: page === "inbox" ? true : this.state.read }); }
+  setDrawer(v) { return () => this.setState({ drawer: v }); }
+  setLang(lang) { return () => this.setState({ lang }); }
+  setRole(role) { return () => this.setState({ role }); }
+
+  renderVals() {
+    const p = this.state.page;
+    const lang = this.state.lang;
+    // Локализованные копии затеняют одноязычные константы: все ссылки ниже
+    // автоматически берут строки нужного языка.
+    const TRANCHE = LOC(RU_TRANCHE, EN_ST.TRANCHE, lang);
+    const NEED = LOC(RU_NEED, EN_ST.NEED, lang);
+    const WD = LOC(RU_WD, EN_ST.WD, lang);
+    const BEN = LOC(RU_BEN, EN_ST.BEN, lang);
+    const QUOTE = LOC(RU_QUOTE, EN_ST.QUOTE, lang);
+    const CREDIT = LOC(RU_CREDIT, EN_ST.CREDIT, lang);
+    const FREEZE_TARGETS = LOCA(RU_FREEZE_TARGETS, EN_ST.FREEZE_TARGETS, lang);
+    const role = this.state.role;
+    const n = {
+      deals: (p === "deals" || p === "newDeal") ? "on" : "",
+      deal: p === "deal" ? "on" : "",
+      account: (p === "account" || p === "topup") ? "on" : "",
+      docs: p === "docs" ? "on" : "",
+      help: p === "help" ? "on" : "",
+      vwXs: (this.state.vw || "full") === "xs" ? "on" : "",
+      vwSm: (this.state.vw || "full") === "sm" ? "on" : "",
+      vwMd: (this.state.vw || "full") === "md" ? "on" : "",
+      vwFull: (this.state.vw || "full") === "full" ? "on" : "",
+      inbox: p === "inbox" ? "on" : "",
+      profile: p === "profile" ? "on" : "",
+      ru: lang === "ru" ? "on" : "",
+      en: lang === "en" ? "on" : "",
+      ka: lang === "ka" ? "on" : ""
+    };
+    const go = {
+      deals: this.nav("deals"), newDeal: this.nav("newDeal"),
+      deal: this.nav("deal"), account: this.nav("account"), topup: this.nav("topup"),
+      docs: this.nav("docs"), help: this.nav("help"),
+      inbox: this.nav("inbox"), profile: this.nav("profile"),
+      vwXs: this.setVw("xs"), vwSm: this.setVw("sm"), vwMd: this.setVw("md"), vwFull: this.setVw("full"),
+      toggleDrawer: this.setDrawer(!this.state.drawer), closeDrawer: this.setDrawer(false),
+      sellerDeal: this.nav("sellerDeal"),
+      empty: this.nav("empty"), withdraw: this.nav("withdraw"), archive: this.nav("archive"),
+      ru: this.setLang("ru"), en: this.setLang("en"), ka: this.setLang("ka"),
+      roleBuyer: this.setRole("buyer"), roleSeller: this.setRole("seller")
+    };
+    return {
+      n: n, go: go, t: DICT[lang] || RU,
+      isDeals: p === "deals", isNewDeal: p === "newDeal",
+      isDeal: p === "deal", isAccount: p === "account", isTopup: p === "topup",
+      isDocs: p === "docs", isHelp: p === "help",
+      isInbox: p === "inbox", isProfile: p === "profile",
+      isSellerDeal: p === "sellerDeal", showFooter: p !== "help",
+      isEmpty: p === "empty", isWithdraw: p === "withdraw", isArchive: p === "archive",
+      trList: ORDER.map((k) => ({
+        id: k, label: k, on: this.state.tr === k ? "on" : "", pick: this.setTr(k)
+      })),
+      trId: this.state.tr,
+      showReserve: !!HAS_RESERVE[this.state.tr],
+      showRevocation: this.state.tr === "collecting" || this.state.tr === "collected" || this.state.tr === "reserved",
+      showMoney: this.state.tr !== "pending",
+      wdList: WD_ORDER.map((k) => ({ id: k, on: (this.state.wd || "requested") === k ? "on" : "", pick: this.setWd(k) })),
+      wdId: this.state.wd || "requested",
+      wdBadge: WD[this.state.wd || "requested"].badge,
+      wdH: WD[this.state.wd || "requested"].h,
+      wdB: WD[this.state.wd || "requested"].b,
+      wdBg: TONE[WD[this.state.wd || "requested"].tone].bg,
+      wdBd: TONE[WD[this.state.wd || "requested"].tone].bd,
+      wdFg: TONE[WD[this.state.wd || "requested"].tone].fg,
+      wdDot: TONE[WD[this.state.wd || "requested"].tone].dot,
+      wdChipBg: TONE[WD[this.state.wd || "requested"].tone].chipBg,
+      wdChipFg: TONE[WD[this.state.wd || "requested"].tone].chipFg,
+      wdCanCancel: (this.state.wd || "requested") === "requested",
+      benList: BEN_ORDER.map((k) => ({ id: k, on: (this.state.ben || "draft") === k ? "on" : "", pick: this.setBen(k) })),
+      benId: this.state.ben || "draft",
+      benBadge: BEN[this.state.ben || "draft"].badge,
+      benH: BEN[this.state.ben || "draft"].h,
+      benB: BEN[this.state.ben || "draft"].b,
+      benBg: TONE[BEN[this.state.ben || "draft"].tone].bg,
+      benBd: TONE[BEN[this.state.ben || "draft"].tone].bd,
+      benFg: TONE[BEN[this.state.ben || "draft"].tone].fg,
+      benChipBg: TONE[BEN[this.state.ben || "draft"].tone].chipBg,
+      benChipFg: TONE[BEN[this.state.ben || "draft"].tone].chipFg,
+      benEditable: !(this.state.ben === "locked" || this.state.ben === "awaiting_verification"),
+      unread: !this.state.read,
+      vw: this.state.vw || "full",
+      drawer: this.state.drawer ? "open" : "",
+      drawerAria: this.state.drawer ? "true" : "false",
+      qList: QUOTE_ORDER.map((k) => ({ id: k, on: (this.state.q || "fresh") === k ? "on" : "", pick: this.setQ(k) })),
+      crList: CREDIT_ORDER.map((k) => ({ id: k, on: (this.state.cr || "none") === k ? "on" : "", pick: this.setCr(k) })),
+      qId: this.state.q || "fresh",
+      qBadge: QUOTE[this.state.q || "fresh"].badge,
+      qH: QUOTE[this.state.q || "fresh"].h,
+      qB: QUOTE[this.state.q || "fresh"].b,
+      qTimer: QUOTE[this.state.q || "fresh"].timer,
+      qBg: TONE[QUOTE[this.state.q || "fresh"].tone].bg,
+      qBd: TONE[QUOTE[this.state.q || "fresh"].tone].bd,
+      qFg: TONE[QUOTE[this.state.q || "fresh"].tone].fg,
+      qHideLari: QUOTE[this.state.q || "fresh"].block,
+      qShowLari: !QUOTE[this.state.q || "fresh"].block,
+      crId: this.state.cr || "none",
+      crBadge: CREDIT[this.state.cr || "none"].badge,
+      crH: CREDIT[this.state.cr || "none"].h,
+      crB: CREDIT[this.state.cr || "none"].b,
+      crBg: TONE[CREDIT[this.state.cr || "none"].tone].bg,
+      crBd: TONE[CREDIT[this.state.cr || "none"].tone].bd,
+      crFg: TONE[CREDIT[this.state.cr || "none"].tone].fg,
+      reserveLockNote: ((DICT[lang] || RU).reserveLockNote || "").replace("{deadline}", "18:00"),
+      reserveLock: !!HAS_RESERVE[this.state.tr],
+      canWithdraw: !HAS_RESERVE[this.state.tr],
+      showCur: p === "deal" || p === "sellerDeal" || p === "topup",
+      curCode: p === "sellerDeal" ? "D-24-0931" : "D-24-0917",
+      curAddr: p === "sellerDeal" ? (DICT[lang] || RU).deal2Addr : (DICT[lang] || RU).propAddr,
+      curRole: p === "sellerDeal" ? (DICT[lang] || RU).asSeller : (DICT[lang] || RU).asBuyer,
+      curBadge: p === "sellerDeal" ? BEN[this.state.ben || "draft"].badge : (TRANCHE[this.state.tr] || TRANCHE.reserved).badge,
+      curChipBg: p === "sellerDeal" ? TONE[BEN[this.state.ben || "draft"].tone].chipBg : TONE[(TRANCHE[this.state.tr] || TRANCHE.reserved).tone].chipBg,
+      curChipFg: p === "sellerDeal" ? TONE[BEN[this.state.ben || "draft"].tone].chipFg : TONE[(TRANCHE[this.state.tr] || TRANCHE.reserved).tone].chipFg,
+      frozen: !!this.state.frozen,
+      toggleFreeze: this.toggleFreeze(),
+      freezeTargets: FREEZE_TARGETS,
+      ccyList: ["GEL", "USD", "EUR"].map((k) => ({ code: k, on: this.state.ccy === k ? "on" : "", pick: this.setCcy(k) })),
+      payList: ["USD", "EUR", "GEL", "GBP", "ILS", "AED"].map((k) => ({ code: k, on: this.state.pay === k ? "on" : "", pick: this.setPay(k) })),
+      ccySign: CCY[this.state.ccy].sign,
+      ccyCode: this.state.ccy,
+      lariCls: CCY[this.state.ccy].lari ? "lari" : "",
+      payCode: this.state.pay,
+      payAmount: PAY[this.state.pay].amount,
+      payRate: PAY[this.state.pay].rate,
+      showConversion: this.state.pay !== this.state.ccy && ORDER.indexOf(this.state.tr) >= 2,
+      sameCcy: this.state.pay === this.state.ccy,
+      feeFxVal: CCY[this.state.ccy].feeFx,
+      feeSrvVal: CCY[this.state.ccy].feeSrv,
+      showFeeService: (REFUND_BRANCH[this.state.tr] || this.state.tr === "written_off") ? false : true,
+      totalLabel: this.state.tr === "written_off"
+        ? (lang === "en" ? "Paid in for the deal" : "Внесено по сделке")
+        : (REFUND_BRANCH[this.state.tr]
+            ? (this.state.tr === "refunded"
+                ? (lang === "en" ? "Returned to you" : "Возвращено вам")
+                : (lang === "en" ? "To be refunded" : "К возврату"))
+            : (DICT[lang] || RU).toSeller),
+      totalValue: this.state.tr === "written_off"
+        ? CCY[this.state.ccy].full
+        : (REFUND_BRANCH[this.state.tr] ? CCY[this.state.ccy].refund : CCY[this.state.ccy].seller),
+      moneyFootnote: this.state.tr === "written_off"
+        ? (lang === "en"
+            ? "Historical record: the obligation was closed after the retention period expired, and there is no amount to pay out or refund on this deal. We pull up the history by the deal number."
+            : "Историческая справка: обязательство закрыто по истечении срока хранения, суммы к выплате или возврату по этой сделке нет. Историю поднимаем в поддержке по номеру сделки.")
+        : (REFUND_BRANCH[this.state.tr]
+            ? (lang === "en"
+                ? "The conversion fee was charged at the moment of the currency exchange and is not returned. The settlement arrangement fee is not charged: settlement did not take place."
+                : "Комиссия за конвертацию удержана в момент обмена валюты и не возвращается. Комиссия за организацию расчёта не удерживается: расчёт не состоялся.")
+            : (DICT[lang] || RU).moneyNote),
+      showMoneyFacts: ORDER.indexOf(this.state.tr) >= 2,
+      showTopup: this.state.tr === "collecting" || this.state.tr === "collected",
+      trList2: (function (idx, T) {
+        const steps = [
+          { l: T.tl1, ts: "08.06 · 14:22", need: 1, max: 99, ball: T.ballUs },
+          { l: T.tl2, ts: "10.06 · 11:05", need: 1, max: 99, ball: T.ballUs },
+          { l: T.tl3, ts: "11.06 · 09:41", need: 2, max: 99, ball: T.ballYou },
+          { l: T.tl4, ts: "12.06 · 16:04", need: 3, max: 7, ball: T.ballUs },
+          { l: T.tl5, ts: T.expected, need: 4, max: 7, ball: T.ballSeller },
+          { l: T.tl6, ts: T.expected, need: 7, max: 7, ball: T.ballRegistry }
+        ];
+        return steps.map(function (s, i) {
+          const done = idx >= s.need && idx <= s.max;
+          const cur = !done && idx === s.need - 1;
+          return {
+            l: s.l,
+            ball: s.ball,
+            ballFg: cur ? "#1E3FBF" : "#9AA5B5",
+            ballBg: cur ? "#EEF3FF" : "#F7F9FC",
+            ts: done ? s.ts : T.expected,
+            glyph: done ? "✓" : (cur ? "●" : "○"),
+            color: done ? "#0E7C3D" : (cur ? "#1E3FBF" : "#C2CBD9"),
+            line: done ? "#0E7C3D" : "#ECEFF3",
+            fg: done ? "#0F1729" : (cur ? "#172E8C" : "#9AA5B5"),
+            weight: done || cur ? "700" : "400",
+            last: i === 5 ? "0" : "17px"
+          };
+        });
+      })(ORDER.indexOf(this.state.tr), DICT[lang] || RU),
+      showDeadline: !!HAS_DEADLINE[this.state.tr],
+      needT: (NEED[this.state.tr] || NEED.reserved).t,
+      needB: (NEED[this.state.tr] || NEED.reserved).b,
+      trBadge: (TRANCHE[this.state.tr] || TRANCHE.reserved).badge,
+      trH: (TRANCHE[this.state.tr] || TRANCHE.reserved).h,
+      trB: (TRANCHE[this.state.tr] || TRANCHE.reserved).b,
+      trAmount: (TRANCHE[this.state.tr] || TRANCHE.reserved).amount === "0,00"
+        ? "0,00" : CCY[this.state.ccy].full,
+      trBg: TONE[(TRANCHE[this.state.tr] || TRANCHE.reserved).tone].bg,
+      trBd: TONE[(TRANCHE[this.state.tr] || TRANCHE.reserved).tone].bd,
+      trFg: TONE[(TRANCHE[this.state.tr] || TRANCHE.reserved).tone].fg,
+      trDot: TONE[(TRANCHE[this.state.tr] || TRANCHE.reserved).tone].dot,
+      trChipBg: TONE[(TRANCHE[this.state.tr] || TRANCHE.reserved).tone].chipBg,
+      trChipFg: TONE[(TRANCHE[this.state.tr] || TRANCHE.reserved).tone].chipFg,
+      buyerBd: role === "buyer" ? "#2D5BFF" : "#ECEFF3",
+      buyerBg: role === "buyer" ? "#F7F9FF" : "#fff",
+      sellerBd: role === "seller" ? "#5B3FD6" : "#ECEFF3",
+      sellerBg: role === "seller" ? "#F7F9FF" : "#fff"
+    };
+  }
+}
+</script>
+</body>
+</html>

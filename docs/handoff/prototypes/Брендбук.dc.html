@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+Georgian:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#FAFAFB; color:#0F1729; font-family:"Manrope","Noto Sans Georgian",system-ui,sans-serif; -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; }
+  * { box-sizing:border-box; }
+  a { color:#1E3FBF; text-decoration:none; }
+  a:hover { color:#172E8C; text-decoration:underline; }
+  .m { font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums; }
+  .eb { font-family:"IBM Plex Mono",monospace; font-size:10px; letter-spacing:.2em; text-transform:uppercase; }
+  .lari { display:inline-block; width:.62em; text-align:center; font-family:"IBM Plex Mono","Noto Sans Georgian",monospace; }
+  /* Знак «Сдвиг»: два круга 72%, смещённые по диагонали. --s размер, --on передний, --off задний */
+  .mk { width:var(--s); height:var(--s); position:relative; flex-shrink:0; }
+  .mk i { position:absolute; width:72%; height:72%; border-radius:999px; }
+  .mk i.a { left:0; top:0; background:var(--off); }
+  .mk i.b { right:0; bottom:0; background:var(--on); }
+</style>
+</helmet>
+
+<div style="max-width:1440px; margin:0 auto; padding:40px 40px 160px; display:flex; flex-direction:column; gap:88px;">
+
+  <!-- ══════════ HERO ══════════ -->
+  <section>
+    <div style="border-radius:40px; overflow:hidden; background:#2D5BFF; box-shadow:0 40px 90px -50px rgba(45,91,255,.6);">
+      <div style="padding:52px 56px 0; display:flex; align-items:center; justify-content:space-between; gap:24px; flex-wrap:wrap;">
+        <span class="eb" style="color:rgba(255,255,255,.7);">Brandbook v1.0 · 2026</span>
+        <span class="eb" style="color:rgba(255,255,255,.7);">Тбилиси · GE</span>
+      </div>
+      <div style="padding:56px 56px 72px; display:flex; flex-direction:column; gap:40px;">
+        <div style="display:flex; align-items:center; gap:32px; flex-wrap:wrap;">
+          <div class="mk" style="--s:116px; --on:#0F1729; --off:#fff;"><i class="a"></i><i class="b"></i></div>
+          <span style="font-size:clamp(50px,8vw,110px); line-height:.9; letter-spacing:-.05em; font-weight:800; color:#fff;">Reestra</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <p style="margin:0; max-width:42ch; font-size:22px; line-height:1.3; font-weight:700; color:#fff; text-wrap:pretty;">ფული მოძრაობს უფლებასთან ერთად</p>
+          <p style="margin:0; max-width:42ch; font-size:22px; line-height:1.3; font-weight:700; color:rgba(255,255,255,.82); text-wrap:pretty;">Деньги двигаются вместе с правом</p>
+          <p style="margin:0; max-width:42ch; font-size:22px; line-height:1.3; font-weight:700; color:rgba(255,255,255,.82);">Money moves when ownership does</p>
+        </div>
+      </div>
+      <div style="border-top:1px solid rgba(255,255,255,.18); padding:26px 56px; display:flex; gap:44px; flex-wrap:wrap;">
+        <div style="display:flex; flex-direction:column; gap:3px;"><span class="eb" style="color:rgba(255,255,255,.55);">имя</span><span style="font-size:15px; font-weight:700; color:#fff;">Reestra · რეესტრა</span></div>
+        <div style="display:flex; flex-direction:column; gap:3px;"><span class="eb" style="color:rgba(255,255,255,.55);">знак</span><span style="font-size:15px; font-weight:700; color:#fff;">Сдвиг · переход права</span></div>
+        <div style="display:flex; flex-direction:column; gap:3px;"><span class="eb" style="color:rgba(255,255,255,.55);">фундамент</span><span style="font-size:15px; font-weight:700; color:#fff;">Дизайн-система, 22 раздела</span></div>
+        <div style="display:flex; flex-direction:column; gap:3px;"><span class="eb" style="color:rgba(255,255,255,.55);">акцент</span><span class="m" style="font-size:15px; font-weight:600; color:#fff;">#2D5BFF</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 00 ПОЗИЦИОНИРОВАНИЕ ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">00</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Позиционирование</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">одна страница · с неё начинается любой разговор о бренде</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:20px;">
+      <div style="background:#fff; border-radius:28px; padding:34px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28); display:flex; flex-direction:column; gap:12px;">
+        <span class="eb" style="color:#9AA5B5;">кому</span>
+        <span style="font-size:16px; line-height:1.6; color:#0F1729;">Иностранец, который покупает жильё в Грузии. Часто вне страны, в другом часовом поясе, покупает здесь впервые. Сумма для него значительная.</span>
+      </div>
+      <div style="background:#fff; border-radius:28px; padding:34px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28); display:flex; flex-direction:column; gap:12px;">
+        <span class="eb" style="color:#9AA5B5;">вместо чего</span>
+        <span style="font-size:16px; line-height:1.6; color:#0F1729;">Вместо перелёта, открытия местного счёта и перевода вслепую. Сравнение идёт не со ставкой конкурента, а с полной стоимостью доставки денег продавцу.</span>
+      </div>
+      <div style="background:#fff; border-radius:28px; padding:34px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28); display:flex; flex-direction:column; gap:12px;">
+        <span class="eb" style="color:#9AA5B5;">чем отличаемся</span>
+        <span style="font-size:16px; line-height:1.6; color:#0F1729;">Расчёт привязан к внешнему факту — записи в реестре, а не к нашему усмотрению и не к воле сторон. Средства обособлены на счёте номинального держания в банке.</span>
+      </div>
+      <div style="background:#0F1729; border-radius:28px; padding:34px; display:flex; flex-direction:column; gap:12px;">
+        <span class="eb" style="color:#7C9AFF;">кто приводит клиента</span>
+        <span style="font-size:16px; line-height:1.6; color:#DCE3EE;">Продающая сторона: застройщик, агентство, юрист. Покупатель ищет способ оплаты не раньше, чем выбрал объект, — и спрашивает о нём за столом переговоров.</span>
+      </div>
+    </div>
+
+    <div style="background:#fff; border-radius:28px; padding:34px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28); display:flex; flex-direction:column; gap:20px;">
+      <span class="eb" style="color:#9AA5B5;">как мы себя называем</span>
+      <div style="font-size:19px; line-height:1.55; color:#0F1729; max-width:70ch;">Способ оплаты недвижимости, а не услуга хранения денег. Формулировка обещания продукта пишется штучно и проходит юриста; варианты для носителей берутся только из утверждённого списка.</div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:20px; padding-top:20px; border-top:1px solid #EEF1F6;">
+        <div style="display:flex; flex-direction:column; gap:6px;"><span style="font-size:13.5px; font-weight:700;">Говорим о механизме</span><span style="font-size:13px; line-height:1.6; color:#56637A;">Как именно двигаются деньги и от какого факта это зависит.</span></div>
+        <div style="display:flex; flex-direction:column; gap:6px;"><span style="font-size:13.5px; font-weight:700;">Называем ограничения сами</span><span style="font-size:13px; line-height:1.6; color:#56637A;">Подписание остаётся офлайн, покупатель вправе передумать, срок зависит от реестра и банка.</span></div>
+        <div style="display:flex; flex-direction:column; gap:6px;"><span style="font-size:13.5px; font-weight:700;">Пишем в будущем времени</span><span style="font-size:13px; line-height:1.6; color:#56637A;">Сервис готовится к запуску: «запускаем», «собираем первых участников».</span></div>
+        <div style="display:flex; flex-direction:column; gap:6px;"><span style="font-size:13.5px; font-weight:700;">Указываем юрисдикцию</span><span style="font-size:13px; line-height:1.6; color:#56637A;">Грузия — на каждом публичном носителе, чтобы приходили те, кому мы подходим.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 00.1 АРХИТЕКТУРА ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">00.1</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Архитектура бренда</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">одно имя, продукты описываются, а не называются</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.2fr); gap:20px;">
+      <div style="background:#0F1729; border-radius:32px; padding:36px; display:flex; flex-direction:column; gap:18px;">
+        <span class="eb" style="color:#7C9AFF;">правило</span>
+        <div style="font-size:17px; line-height:1.6; color:#DCE3EE;">У продуктов нет собственных марок. Есть <strong style="font-weight:700; color:#fff;">Reestra</strong> и описание того, что она делает. Второе имя внутри линейки появляется только с отдельной аудиторией и отдельной ценой — на пилоте таких нет.</div>
+        <div style="margin-top:auto; padding-top:20px; border-top:1px solid #232B3D; font-size:12.5px; line-height:1.6; color:#7C8AA3;">Так одно имя набирает узнаваемость вместо трёх, а партнёр объясняет клиенту один сервис, а не портфель.</div>
+      </div>
+
+      <div style="background:#fff; border-radius:32px; padding:12px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28);">
+        <div style="border-radius:22px; overflow:hidden; border:1px solid #ECEFF3;">
+          <div style="display:grid; grid-template-columns:1.1fr 1fr 1fr; background:#F7F9FC; border-bottom:1px solid #ECEFF3;">
+            <div style="padding:12px 18px;" class="eb"><span style="color:#68758B;">продукт</span></div>
+            <div style="padding:12px 18px;" class="eb"><span style="color:#68758B;">как называем</span></div>
+            <div style="padding:12px 18px;" class="eb"><span style="color:#68758B;">кому</span></div>
+          </div>
+          <div style="display:grid; grid-template-columns:1.1fr 1fr 1fr; border-bottom:1px solid #EEF1F6;">
+            <div style="padding:16px 18px; font-size:13.5px; font-weight:700;">Трансграничный вход и первый взнос</div>
+            <div style="padding:16px 18px; font-size:13px; color:#34405A;">«оплата из своей страны»</div>
+            <div style="padding:16px 18px; font-size:13px; color:#56637A;">покупатель, застройщик</div>
+          </div>
+          <div style="display:grid; grid-template-columns:1.1fr 1fr 1fr; border-bottom:1px solid #EEF1F6; background:#F7F9FC;">
+            <div style="padding:16px 18px; font-size:13.5px; font-weight:700;">Сбор платежей по рассрочке</div>
+            <div style="padding:16px 18px; font-size:13px; color:#34405A;">«платежи по графику»</div>
+            <div style="padding:16px 18px; font-size:13px; color:#56637A;">застройщик, покупатель</div>
+          </div>
+          <div style="display:grid; grid-template-columns:1.1fr 1fr 1fr;">
+            <div style="padding:16px 18px; font-size:13.5px; font-weight:700;">Разовый расчёт по регистрации</div>
+            <div style="padding:16px 18px; font-size:13px; color:#34405A;">«расчёт по сделке»</div>
+            <div style="padding:16px 18px; font-size:13px; color:#56637A;">покупатель, продавец, агент</div>
+          </div>
+        </div>
+        <div style="padding:20px 20px 12px; display:flex; flex-direction:column; gap:6px;">
+          <span style="font-size:13px; line-height:1.6; color:#56637A;">Кабинеты называются по роли в сделке, а не по типу аккаунта: кабинет покупателя, получателя, агента, застройщика, консоль операций. Один человек бывает и покупателем, и получателем — роль принадлежит сделке.</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 01 ИМЯ ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">01</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Имя</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">принято · «Сделка» остаётся внутренним именем проекта</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); gap:20px;">
+      <div style="background:#fff; border-radius:32px; padding:44px; box-shadow:0 30px 70px -50px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:26px;">
+        <span class="eb" style="align-self:flex-start; color:#fff; background:#2D5BFF; padding:7px 13px; border-radius:999px;">выбрано</span>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <span style="font-size:clamp(46px,6vw,76px); line-height:.92; letter-spacing:-.055em; font-weight:800;">Reestra</span>
+          <span style="font-size:23px; line-height:1.2; font-weight:700; color:#56637A;">რეესტრა · Реестра</span>
+        </div>
+        <p style="margin:0; max-width:52ch; font-size:16px; line-height:1.65; color:#34405A; text-wrap:pretty;">Указывает на единственный факт, к которому привязан расчёт: запись в государственном реестре. Одинаково читается в трёх языках, не обещает защиты, не выглядит банком и не запирает продукт в недвижимость.</p>
+        <div style="display:flex; flex-wrap:wrap; gap:8px;">
+          <span class="m" style="font-size:11.5px; color:#1E3FBF; background:#EEF3FF; padding:7px 12px; border-radius:8px;">7 знаков · 3 слога</span>
+          <span class="m" style="font-size:11.5px; color:#1E3FBF; background:#EEF3FF; padding:7px 12px; border-radius:8px;">нет слов из стоп-листа</span>
+          <span class="m" style="font-size:11.5px; color:#916200; background:#FCF2DD; padding:7px 12px; border-radius:8px;">юрист: не читается ли как госпринадлежность</span>
+        </div>
+      </div>
+
+      <div style="background:#0F1729; border-radius:32px; padding:36px; display:flex; flex-direction:column; gap:18px;">
+        <span class="eb" style="color:#7C9AFF;">до первых носителей</span>
+        <div style="display:flex; flex-direction:column; gap:13px;">
+          <div style="display:flex; gap:12px;"><span class="m" style="font-size:11px; color:#7C9AFF;">01</span><span style="font-size:13.5px; line-height:1.6; color:#98A4BA;">Реестры марок Грузии и ЕС, домены <span class="m" style="font-size:12px;">reestra.ge</span> и <span class="m" style="font-size:12px;">.com</span>.</span></div>
+          <div style="display:flex; gap:12px;"><span class="m" style="font-size:11px; color:#7C9AFF;">02</span><span style="font-size:13.5px; line-height:1.6; color:#98A4BA;">Заключение юриста по близости к <span class="m" style="font-size:12px;">reestri.gov.ge</span> — блокер, а не замечание.</span></div>
+          <div style="display:flex; gap:12px;"><span class="m" style="font-size:11px; color:#7C9AFF;">03</span><span style="font-size:13.5px; line-height:1.6; color:#98A4BA;">Проверка вслух: носитель грузинского и два иностранца из целевых стран.</span></div>
+          <div style="display:flex; gap:12px;"><span class="m" style="font-size:11px; color:#7C9AFF;">04</span><span style="font-size:13.5px; line-height:1.6; color:#98A4BA;">Грузинское начертание рисуется в кривых, а не набирается шрифтом.</span></div>
+        </div>
+        <div style="margin-top:auto; padding-top:20px; border-top:1px solid #232B3D; font-size:12.5px; line-height:1.6; color:#7C8AA3;">Запас, если имя не пройдёт проверку: <strong style="font-weight:700; color:#DCE3EE;">Setl · Tenor · Vestra</strong>. Знак переносится к любому без переделки идеи.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 01.1 СЛОГАН ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">01.1</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Слоган</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">одна фраза · три языка · пишется, а не переводится</span>
+    </div>
+
+    <div style="border-radius:36px; overflow:hidden; background:#0F1729;">
+      <div style="padding:52px 48px; display:flex; flex-direction:column; gap:34px;">
+        <span class="eb" style="align-self:flex-start; color:#0F1729; background:#fff; padding:7px 13px; border-radius:999px;">выбрано</span>
+        <div style="display:flex; flex-direction:column; gap:24px;">
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <span style="font-size:clamp(24px,3.2vw,42px); line-height:1.18; letter-spacing:-.02em; font-weight:800; color:#fff; text-wrap:pretty;">ფული მოიძრავის უფლებასთაო ერთად</span>
+            <span class="m" style="font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:#5F6C85;">ka · основной на публичных носителях</span>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <span style="font-size:clamp(24px,3.2vw,42px); line-height:1.1; letter-spacing:-.035em; font-weight:800; color:#fff;">Деньги двигаются вместе с правом</span>
+            <span class="m" style="font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:#5F6C85;">ru</span>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <span style="font-size:clamp(24px,3.2vw,42px); line-height:1.1; letter-spacing:-.035em; font-weight:800; color:#fff;">Money moves when ownership does</span>
+            <span class="m" style="font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:#5F6C85;">en</span>
+          </div>
+        </div>
+      </div>
+      <div style="border-top:1px solid #232B3D; padding:32px 48px; display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:26px;">
+        <div style="display:flex; flex-direction:column; gap:7px;"><span class="eb" style="color:#7C9AFF;">что говорит</span><span style="font-size:13px; line-height:1.65; color:#98A4BA;">Механизм, а не обещание: расчёт привязан к переходу права. То, что делает продукт, и то, за что клиент платит.</span></div>
+        <div style="display:flex; flex-direction:column; gap:7px;"><span class="eb" style="color:#7C9AFF;">чего не говорит</span><span style="font-size:13px; line-height:1.65; color:#98A4BA;">Ни «безопасно», ни «гарантируем», ни «эскроу», ни «мгновенно». Ни одного слова из стоп-листа ни в одном из трёх языков.</span></div>
+        <div style="display:flex; flex-direction:column; gap:7px;"><span class="eb" style="color:#7C9AFF;">почему работает в трёх</span><span style="font-size:13px; line-height:1.65; color:#98A4BA;">Одна мысль, а не калька: в каждом языке фраза естественная и одной длины — четыре-пять слов, без придаточных.</span></div>
+        <div style="display:flex; flex-direction:column; gap:7px;"><span class="eb" style="color:#7C9AFF;">где стоит</span><span style="font-size:13px; line-height:1.65; color:#98A4BA;">Под логотипом на носителях и первой строкой на лендинге. В кабинете слогана нет: там работает интерфейс, а не обещание.</span></div>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:20px;">
+      <div style="background:#fff; border-radius:28px; padding:32px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28); display:flex; flex-direction:column; gap:16px;">
+        <span class="eb" style="color:#9AA5B5;">запасной · короче</span>
+        <div style="display:flex; flex-direction:column; gap:11px;">
+          <span style="font-size:21px; line-height:1.2; font-weight:800; letter-spacing:-.03em;">Оплата по записи в реестре</span>
+          <span style="font-size:15px; line-height:1.25; font-weight:700; color:#34405A;">Paid when it is registered</span>
+          <span style="font-size:15px; line-height:1.4; font-weight:700; color:#34405A;">ანგარიშსწორება რეესტრის ჩანაწერით</span>
+        </div>
+        <span style="font-size:12.5px; line-height:1.6; color:#68758B; padding-top:14px; border-top:1px solid #EEF1F6;">Лучше держится на узких носителях. Минус: слово «реестр» рядом с именем Reestra звучит тавтологией.</span>
+      </div>
+
+      <div style="background:#fff; border-radius:28px; padding:32px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28); display:flex; flex-direction:column; gap:16px;">
+        <span class="eb" style="color:#9AA5B5;">запасной · про покупателя</span>
+        <div style="display:flex; flex-direction:column; gap:11px;">
+          <span style="font-size:21px; line-height:1.2; font-weight:800; letter-spacing:-.03em;">Один перевод из своей страны</span>
+          <span style="font-size:15px; line-height:1.25; font-weight:700; color:#34405A;">One transfer from home</span>
+          <span style="font-size:15px; line-height:1.4; font-weight:700; color:#34405A;">ერთი გადარიცხვა სახლიდან</span>
+        </div>
+        <span style="font-size:12.5px; line-height:1.6; color:#68758B; padding-top:14px; border-top:1px solid #EEF1F6;">Говорит о выгоде клиента, а не о механике. Минус: ничего не говорит продавцу и застройщику.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 02 ЗНАК ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">02</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Знак · Сдвиг</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">выбран из десяти вариантов</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.05fr); gap:32px; align-items:start;">
+      <p style="margin:0; font-size:17px; line-height:1.6; color:#34405A; text-wrap:pretty;">Два круга, смещённые по диагонали и перекрывающиеся: <strong style="font-weight:700;">одно состояние переходит в другое</strong>. Это буквально то, что делает продукт — деньги двигаются в момент, когда право переходит. Единственный знак из серии, который читается как движение даже без анимации.</p>
+      <div style="background:#F0F3F8; border-radius:20px; padding:26px; display:flex; flex-direction:column; gap:12px;">
+        <span class="eb" style="color:#68758B;">почему круг</span>
+        <div style="font-size:15px; line-height:1.65; color:#0F1729;">Круг — родная форма продукта: состояния денег в интерфейсе уже обозначаются кругом. Знак не изобретает новый язык, он берёт существующий и показывает в нём переход.</div>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:20px;">
+      <div style="background:#2D5BFF; border-radius:32px; padding:56px; display:flex; align-items:center; justify-content:center; min-height:270px;">
+        <div class="mk" style="--s:150px; --on:#0F1729; --off:#fff;"><i class="a"></i><i class="b"></i></div>
+      </div>
+      <div style="background:#0F1729; border-radius:32px; padding:56px; display:flex; align-items:center; justify-content:center; min-height:270px;">
+        <div class="mk" style="--s:150px; --on:#2D5BFF; --off:#fff;"><i class="a"></i><i class="b"></i></div>
+      </div>
+      <div style="background:#fff; border-radius:32px; padding:56px; box-shadow:0 30px 70px -50px rgba(15,23,41,.3); display:flex; align-items:center; justify-content:center; min-height:270px;">
+        <div class="mk" style="--s:150px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:20px;">
+      <div style="background:#fff; border-radius:28px; padding:36px; box-shadow:0 30px 70px -50px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:24px;">
+        <span class="eb" style="color:#9AA5B5;">построение и размеры</span>
+        <div style="display:flex; align-items:flex-end; gap:32px; flex-wrap:wrap;">
+          <div style="display:flex; flex-direction:column; align-items:center; gap:10px;"><div class="mk" style="--s:64px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div><span class="m" style="font-size:10px; color:#68758B;">64</span></div>
+          <div style="display:flex; flex-direction:column; align-items:center; gap:10px;"><div class="mk" style="--s:40px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div><span class="m" style="font-size:10px; color:#68758B;">40</span></div>
+          <div style="display:flex; flex-direction:column; align-items:center; gap:10px;"><div class="mk" style="--s:24px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div><span class="m" style="font-size:10px; color:#68758B;">24</span></div>
+          <div style="display:flex; flex-direction:column; align-items:center; gap:10px;"><div class="mk" style="--s:16px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div><span class="m" style="font-size:10px; color:#68758B;">16</span></div>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:9px;">
+          <div style="display:flex; justify-content:space-between; gap:12px;"><span style="font-size:12.5px; color:#68758B;">Диаметр круга</span><span class="m" style="font-size:12px;">72% габарита</span></div>
+          <div style="display:flex; justify-content:space-between; gap:12px;"><span style="font-size:12.5px; color:#68758B;">Смещение</span><span class="m" style="font-size:12px;">28% по обеим осям</span></div>
+          <div style="display:flex; justify-content:space-between; gap:12px;"><span style="font-size:12.5px; color:#68758B;">Перекрытие</span><span class="m" style="font-size:12px;">44% диаметра</span></div>
+          <div style="display:flex; justify-content:space-between; gap:12px;"><span style="font-size:12.5px; color:#68758B;">Минимальный размер</span><span class="m" style="font-size:12px;">16 px</span></div>
+          <div style="display:flex; justify-content:space-between; gap:12px;"><span style="font-size:12.5px; color:#68758B;">Охранное поле</span><span class="m" style="font-size:12px;">28% габарита</span></div>
+        </div>
+        <div style="font-size:12.5px; line-height:1.6; color:#56637A; padding-top:18px; border-top:1px solid #EEF1F6;">Передний круг всегда правый нижний — направление перехода не меняется никогда. Верхний круг всегда светлее или нейтральнее: он то, что было, а не то, что стало.</div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:20px;">
+        <div style="background:#fff; border-radius:28px; padding:36px; box-shadow:0 30px 70px -50px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:20px;">
+          <span class="eb" style="color:#9AA5B5;">монохром и иконка</span>
+          <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+            <div class="mk" style="--s:48px; --on:#0F1729; --off:#C2CBD9;"><i class="a"></i><i class="b"></i></div>
+            <div style="width:56px; height:56px; border-radius:15px; background:#0F1729; display:flex; align-items:center; justify-content:center;"><div class="mk" style="--s:30px; --on:#2D5BFF; --off:#fff;"><i class="a"></i><i class="b"></i></div></div>
+            <div style="width:56px; height:56px; border-radius:15px; background:#2D5BFF; display:flex; align-items:center; justify-content:center;"><div class="mk" style="--s:30px; --on:#fff; --off:rgba(255,255,255,.5);"><i class="a"></i><i class="b"></i></div></div>
+            <div style="width:56px; height:56px; border-radius:15px; background:#fff; border:1px solid #E4E7EE; display:flex; align-items:center; justify-content:center;"><div class="mk" style="--s:30px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div></div>
+          </div>
+          <div style="font-size:12.5px; line-height:1.6; color:#56637A;">В один цвет разница задаётся тоном: задний круг 30% плотности, передний — 100%. Форма не теряется ни в печати, ни на штампе.</div>
+        </div>
+
+        <div style="background:#FDECEC; border-radius:28px; padding:32px; display:flex; flex-direction:column; gap:14px;">
+          <span class="eb" style="color:#C8373B;">обязательная проверка</span>
+          <div style="font-size:14px; line-height:1.65; color:#34405A;">Два перекрывающихся круга — <strong style="font-weight:700;">занятая территория в платёжной отрасли</strong>. Наши круги смещены по диагонали, разного размера подложки и разного тона, но это не снимает вопроса. До первого носителя нужен поиск по реестрам марок в классах платёжных услуг и заключение юриста. Если конфликт есть — берём «Сектор» из первой серии: идея перехода в нём сохраняется.</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="background:#fff; border-radius:28px; padding:36px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28); display:flex; flex-direction:column; gap:20px;">
+      <span class="eb" style="color:#9AA5B5;">правила формы</span>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:18px;">
+        <div style="display:flex; flex-direction:column; gap:5px;"><span style="font-size:13.5px; font-weight:700;">Градиенты и свечение</span><span style="font-size:12.5px; line-height:1.6; color:#56637A;">Знак всегда плоский: два тона, без переходов, без тени и без ореола.</span></div>
+        <div style="display:flex; flex-direction:column; gap:5px;"><span style="font-size:13.5px; font-weight:700;">Цвета состояний</span><span style="font-size:12.5px; line-height:1.6; color:#56637A;">Зелёный, красный, янтарный и фиолетовый заняты деньгами в интерфейсе. В знаке только акцент, чернила и белый.</span></div>
+        <div style="display:flex; flex-direction:column; gap:5px;"><span style="font-size:13.5px; font-weight:700;">Поворот и зеркало</span><span style="font-size:12.5px; line-height:1.6; color:#56637A;">Направление перехода фиксировано: передний круг всегда правый нижний.</span></div>
+        <div style="display:flex; flex-direction:column; gap:5px;"><span style="font-size:13.5px; font-weight:700;">Плашка вокруг знака</span><span style="font-size:12.5px; line-height:1.6; color:#56637A;">Знак стоит на поверхности сам. Плитка только в иконке приложения, где её требует платформа.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 03 ЛОГОТИП ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">03</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Логотип</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">грузинский первым на публичных носителях</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:20px;">
+      <div style="background:#fff; border-radius:28px; padding:38px; box-shadow:0 30px 70px -50px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:22px;">
+        <span class="eb" style="color:#9AA5B5;">публичные носители</span>
+        <div style="display:flex; align-items:center; gap:16px;">
+          <div class="mk" style="--s:46px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div>
+          <span style="font-size:31px; line-height:1; letter-spacing:-.025em; font-weight:800;">რეესტრა</span>
+        </div>
+        <div style="font-size:12.5px; line-height:1.6; color:#68758B; margin-top:auto;">Кегль латиницы не больше грузинского — требование закона, не вежливость.</div>
+      </div>
+      <div style="background:#fff; border-radius:28px; padding:38px; box-shadow:0 30px 70px -50px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:22px;">
+        <span class="eb" style="color:#9AA5B5;">продукт и письма</span>
+        <div style="display:flex; align-items:center; gap:16px;">
+          <div class="mk" style="--s:46px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div>
+          <span style="font-size:31px; line-height:1; letter-spacing:-.05em; font-weight:800;">Reestra</span>
+        </div>
+        <div style="font-size:12.5px; line-height:1.6; color:#68758B; margin-top:auto;">Manrope 800, трекинг −.05em. Прописная только первая: капслок в имени платёжного сервиса читается как крик.</div>
+      </div>
+      <div style="background:#fff; border-radius:28px; padding:38px; box-shadow:0 30px 70px -50px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:22px;">
+        <span class="eb" style="color:#9AA5B5;">ко-брендинг с партнёром</span>
+        <div style="display:flex; align-items:center; gap:16px;">
+          <div style="display:flex; align-items:center; gap:11px;"><div class="mk" style="--s:32px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div><span style="font-size:21px; font-weight:800; letter-spacing:-.045em;">Reestra</span></div>
+          <div style="width:1px; height:28px; background:#DCE3EE;"></div>
+          <div style="display:flex; align-items:center; gap:9px;"><div style="width:24px; height:24px; border-radius:7px; background:#0E7C6B;"></div><span style="font-size:16px; font-weight:700; color:#34405A;">Партнёр</span></div>
+        </div>
+        <div style="font-size:12.5px; line-height:1.6; color:#68758B; margin-top:auto;">Наш знак первым и не уменьшается: клиент пришёл от застройщика, но деньги принимает не застройщик.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 04 ФУНДАМЕНТ ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">04</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Фундамент — из дизайн-системы</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">брендбук не дублирует токены</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.25fr); gap:20px;">
+      <div style="background:#0F1729; border-radius:32px; padding:40px; display:flex; flex-direction:column; gap:22px;">
+        <span class="eb" style="color:#7C9AFF;">где что лежит</span>
+        <div style="font-size:16px; line-height:1.65; color:#DCE3EE;">Цвет, типографика, отступы, радиусы, тени, компоненты и правила текста — в дизайн-системе, 22 раздела. Брендбук добавляет к ней четыре вещи: имя, знак, логотип и носители.</div>
+        <div style="display:flex; flex-direction:column; gap:10px; padding-top:20px; border-top:1px solid #232B3D;">
+          <div style="display:flex; justify-content:space-between; gap:14px;"><span style="font-size:13px; color:#98A4BA;">Палитра и нейтральная лестница</span><span class="m" style="font-size:11.5px; color:#7C9AFF;">§1</span></div>
+          <div style="display:flex; justify-content:space-between; gap:14px;"><span style="font-size:13px; color:#98A4BA;">Типошкала, суммы, три языка</span><span class="m" style="font-size:11.5px; color:#7C9AFF;">§2</span></div>
+          <div style="display:flex; justify-content:space-between; gap:14px;"><span style="font-size:13px; color:#98A4BA;">Отступы, радиусы, глубина, фокус</span><span class="m" style="font-size:11.5px; color:#7C9AFF;">§3</span></div>
+          <div style="display:flex; justify-content:space-between; gap:14px;"><span style="font-size:13px; color:#98A4BA;">Голос, стоп-лист, глоссарий</span><span class="m" style="font-size:11.5px; color:#7C9AFF;">§17</span></div>
+        </div>
+      </div>
+
+      <div style="background:#fff; border-radius:32px; padding:40px; box-shadow:0 30px 70px -50px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:24px;">
+        <span class="eb" style="color:#9AA5B5;">единственное правило цвета для марки</span>
+        <div style="font-size:17px; line-height:1.6; color:#34405A; max-width:52ch;">У марки один акцент — <span class="m" style="font-size:15px; font-weight:600;">#2D5BFF</span>. Остальные цвета <strong style="font-weight:700;">заняты деньгами</strong>: восемь семантик означают, где именно находятся чужие средства. На носители они не выходят — иначе внутри продукта обесценятся.</div>
+        <div style="display:flex; flex-wrap:wrap; gap:9px;">
+          <span style="display:inline-flex; align-items:center; gap:7px; background:#EEF1F6; color:#56637A; font-size:12px; font-weight:600; padding:8px 12px; border-radius:9px;"><span class="m">○</span>денег ещё нет</span>
+          <span style="display:inline-flex; align-items:center; gap:7px; background:#EAF0FF; color:#1E3FBF; font-size:12px; font-weight:600; padding:8px 12px; border-radius:9px;"><span class="m">◐</span>в движении</span>
+          <span style="display:inline-flex; align-items:center; gap:7px; background:#D6E0FF; color:#172E8C; font-size:12px; font-weight:700; padding:8px 12px; border-radius:9px;"><span class="m">●</span>зарезервировано</span>
+          <span style="display:inline-flex; align-items:center; gap:7px; background:#FCF2DD; color:#916200; font-size:12px; font-weight:600; padding:8px 12px; border-radius:9px;"><span class="m">▲</span>нужно действие</span>
+          <span style="display:inline-flex; align-items:center; gap:7px; background:#FDECEC; color:#C8373B; font-size:12px; font-weight:600; padding:8px 12px; border-radius:9px;"><span class="m">■</span>приостановлено</span>
+          <span style="display:inline-flex; align-items:center; gap:7px; background:#F0EBFF; color:#5B3FD6; font-size:12px; font-weight:600; padding:8px 12px; border-radius:9px;"><span class="m">◇</span>не состоялась</span>
+          <span style="display:inline-flex; align-items:center; gap:7px; background:#E7F6EE; color:#0E7C3D; font-size:12px; font-weight:600; padding:8px 12px; border-radius:9px;"><span class="m">✓</span>исполнен</span>
+          <span style="display:inline-flex; align-items:center; gap:7px; background:#F7F9FC; color:#56637A; font-size:12px; font-weight:600; padding:8px 12px; border-radius:9px; border:1px dashed #C2CBD9;"><span class="m">◌</span>неизвестно</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 05 НОСИТЕЛИ ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">05</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Носители</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">продукт не запущен — только будущее время</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:20px;">
+
+      <div style="background:#fff; border-radius:32px; padding:12px; box-shadow:0 30px 70px -50px rgba(15,23,41,.3);">
+        <div style="border-radius:22px; overflow:hidden; background:#2D5BFF; min-height:400px; display:flex; flex-direction:column;">
+          <div style="padding:28px 28px 0; display:flex; align-items:center; gap:12px;">
+            <div class="mk" style="--s:32px; --on:#0F1729; --off:#fff;"><i class="a"></i><i class="b"></i></div>
+            <span style="font-size:17px; font-weight:800; letter-spacing:-.03em; color:#fff;">რეესტრა</span>
+            <span style="font-size:14px; font-weight:700; letter-spacing:-.04em; color:rgba(255,255,255,.6);">Reestra</span>
+          </div>
+          <div style="padding:32px 28px; display:flex; flex-direction:column; gap:16px; flex:1;">
+            <div style="font-size:25px; line-height:1.22; font-weight:800; letter-spacing:-.025em; color:#fff; text-wrap:pretty;">ბინის ღირებულებას გადაიხდით საზღვარგარეთიდან — ერთი გადარიცხვით</div>
+            <div style="font-size:16px; line-height:1.4; font-weight:700; color:rgba(255,255,255,.82); text-wrap:pretty;">Оплата квартиры в Грузии из-за рубежа — одним переводом</div>
+          </div>
+          <div style="padding:0 28px 28px; display:flex; flex-direction:column; gap:12px;">
+            <div style="align-self:flex-start; background:#fff; color:#1E3FBF; font-size:14px; font-weight:700; padding:13px 20px; border-radius:12px;">reestra.ge</div>
+            <div class="m" style="font-size:10.5px; line-height:1.6; color:rgba(255,255,255,.65);">ვამზადებთ გაშვებას · Готовим запуск · Georgia</div>
+          </div>
+        </div>
+        <div style="padding:22px 20px 12px; display:flex; flex-direction:column; gap:5px;">
+          <span style="font-size:14px; font-weight:700;">Наружный носитель</span>
+          <span style="font-size:12.5px; line-height:1.55; color:#68758B;">Грузинский сверху и крупнее. Один посыл, одно действие, юрисдикция названа.</span>
+        </div>
+      </div>
+
+      <div style="background:#fff; border-radius:32px; padding:12px; box-shadow:0 30px 70px -50px rgba(15,23,41,.3);">
+        <div style="border-radius:22px; border:1px solid #ECEFF3; background:#fff; min-height:400px; padding:26px; display:flex; flex-direction:column; gap:16px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding-bottom:16px; border-bottom:2px solid #0F1729;">
+            <div style="display:flex; align-items:center; gap:11px;"><div class="mk" style="--s:26px; --on:#0F1729; --off:#C2CBD9;"><i class="a"></i><i class="b"></i></div><span style="font-size:15px; font-weight:800; letter-spacing:-.045em;">Reestra</span></div>
+            <span class="m" style="font-size:10px; color:#68758B;">RSV-24-0917</span>
+          </div>
+          <div style="font-size:17px; font-weight:800; letter-spacing:-.025em;">Подтверждение резервирования средств</div>
+          <div style="display:flex; flex-direction:column; gap:9px;">
+            <div style="display:flex; justify-content:space-between; gap:12px;"><span style="font-size:12px; color:#68758B;">Сумма</span><span class="m" style="font-size:13px; font-weight:600;">248 000,00 <span class="lari">₾</span></span></div>
+            <div style="display:flex; justify-content:space-between; gap:12px;"><span style="font-size:12px; color:#68758B;">Объект</span><span class="m" style="font-size:12.5px;">01.14.06.043.021</span></div>
+            <div style="display:flex; justify-content:space-between; gap:12px;"><span style="font-size:12px; color:#68758B;">Резерв до</span><span class="m" style="font-size:12.5px;">18.06.2026 18:00 (+04)</span></div>
+            <div style="display:flex; justify-content:space-between; gap:12px;"><span style="font-size:12px; color:#68758B;">Счёт держания</span><span class="m" style="font-size:12.5px;">Банк Грузии</span></div>
+          </div>
+          <div style="margin-top:auto; padding-top:16px; border-top:1px solid #ECEFF3; font-size:10.5px; line-height:1.55; color:#68758B;">Документ не является гарантией платежа. Резерв снимается, если условие расчёта не наступит в указанный срок. ⚖ формулировка через юриста.</div>
+        </div>
+        <div style="padding:22px 20px 12px; display:flex; flex-direction:column; gap:5px;">
+          <span style="font-size:14px; font-weight:700;">Документ по сделке</span>
+          <span style="font-size:12.5px; line-height:1.55; color:#68758B;">Знак в один цвет: задний круг 30% плотности. Суммы моноширинным.</span>
+        </div>
+      </div>
+
+      <div style="background:#fff; border-radius:32px; padding:12px; box-shadow:0 30px 70px -50px rgba(15,23,41,.3);">
+        <div style="border-radius:22px; background:#F5F5F7; min-height:400px; padding:26px; display:flex; flex-direction:column; gap:18px;">
+          <div style="background:#fff; border-radius:14px; padding:20px; display:flex; flex-direction:column; gap:12px; box-shadow:0 12px 28px -22px rgba(15,23,41,.3);">
+            <div style="display:flex; align-items:center; gap:11px;"><div class="mk" style="--s:26px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div><span style="font-size:15px; font-weight:800; letter-spacing:-.045em;">Reestra</span></div>
+            <div style="display:flex; flex-direction:column; gap:2px;">
+              <span style="font-size:15px; font-weight:700;">თამარ აბაშიძე</span>
+              <span style="font-size:12.5px; color:#56637A;">Tamar Abashidze · операции</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:2px; padding-top:12px; border-top:1px solid #ECEFF3;">
+              <span class="m" style="font-size:11px; color:#34405A;">t.abashidze@reestra.ge</span>
+              <span class="m" style="font-size:11px; color:#68758B;">Тбилиси · Asia/Tbilisi</span>
+            </div>
+          </div>
+          <div style="background:#fff; border-radius:14px; padding:18px; display:flex; flex-direction:column; gap:8px; box-shadow:0 12px 28px -22px rgba(15,23,41,.3);">
+            <span class="eb" style="color:#9AA5B5;">подпись в письме</span>
+            <span style="font-size:11.5px; line-height:1.6; color:#34405A;">Мы не сообщаем реквизиты по телефону, почте и в мессенджере. Единственное место, где вы видите реквизиты, — кабинет.</span>
+          </div>
+        </div>
+        <div style="padding:22px 20px 12px; display:flex; flex-direction:column; gap:5px;">
+          <span style="font-size:14px; font-weight:700;">Визитка и подпись</span>
+          <span style="font-size:12.5px; line-height:1.55; color:#68758B;">Строка безопасности — в подписи каждого сотрудника. Носитель без неё удобно подделать.</span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ══════════ 05.1 ВИЗИТКА ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">05.1</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Визитка</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">90 × 50 мм · две стороны · три языка</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:20px;">
+
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <div style="aspect-ratio:90/50; border-radius:16px; background:#fff; box-shadow:0 30px 70px -50px rgba(15,23,41,.35); border:1px solid #ECEFF3; padding:26px; display:flex; flex-direction:column;">
+          <div style="display:flex; align-items:center; gap:11px;">
+            <div class="mk" style="--s:28px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div>
+            <span style="font-size:16px; font-weight:800; letter-spacing:-.045em;">Reestra</span>
+          </div>
+          <div style="margin-top:auto; display:flex; flex-direction:column; gap:3px;">
+            <span style="font-size:17px; font-weight:700; letter-spacing:-.02em;">თამარ აბაშიძე</span>
+            <span style="font-size:13.5px; color:#56637A;">Tamar Abashidze</span>
+            <span class="m" style="font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#68758B; padding-top:5px;">операции · Operations</span>
+          </div>
+        </div>
+        <span style="font-size:12.5px; line-height:1.55; color:#68758B;">Лицо. Имя первым в мхедрули, латиницей ниже и мельче. Должность моноширинным в разрядку — на двух языках.</span>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <div style="aspect-ratio:90/50; border-radius:16px; background:#0F1729; box-shadow:0 30px 70px -50px rgba(15,23,41,.5); padding:26px; display:flex; flex-direction:column;">
+          <div style="display:flex; flex-direction:column; gap:5px;">
+            <span class="m" style="font-size:11.5px; color:#DCE3EE;">t.abashidze@reestra.ge</span>
+            <span class="m" style="font-size:11.5px; color:#DCE3EE;">+995 32 000 00 00</span>
+            <span class="m" style="font-size:11.5px; color:#7C9AFF;">reestra.ge</span>
+          </div>
+          <div style="margin-top:auto; display:flex; flex-direction:column; gap:6px;">
+            <span class="eb" style="color:#5F6C85;">безопасность</span>
+            <span style="font-size:10.5px; line-height:1.5; color:#98A4BA;">Мы не сообщаем реквизиты по телефону, почте и в мессенджере. Единственное место, где вы видите реквизиты, — кабинет.</span>
+          </div>
+        </div>
+        <span style="font-size:12.5px; line-height:1.55; color:#68758B;">Оборот. Контакты моноширинным, блок безопасности обязателен: визитка — тот носитель, которым удобнее всего притворяться.</span>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <div style="aspect-ratio:90/50; border-radius:16px; background:#2D5BFF; box-shadow:0 30px 70px -50px rgba(45,91,255,.6); padding:26px; display:flex; align-items:center; justify-content:center;">
+          <div class="mk" style="--s:64px; --on:#0F1729; --off:#fff;"><i class="a"></i><i class="b"></i></div>
+        </div>
+        <span style="font-size:12.5px; line-height:1.55; color:#68758B;">Версия для партнёрских встреч: знак по центру, без текста. Печать в один цвет — задний круг 30% плотности.</span>
+      </div>
+    </div>
+
+    <div style="background:#fff; border-radius:24px; padding:28px; box-shadow:0 24px 56px -46px rgba(15,23,41,.3); display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:22px;">
+      <div style="display:flex; flex-direction:column; gap:5px;"><span class="eb" style="color:#9AA5B5;">формат</span><span style="font-size:13.5px; color:#34405A;">90 × 50 мм, скругление 3 мм</span></div>
+      <div style="display:flex; flex-direction:column; gap:5px;"><span class="eb" style="color:#9AA5B5;">бумага</span><span style="font-size:13.5px; color:#34405A;">плотность от 350 г/м², матовая, без ламинации</span></div>
+      <div style="display:flex; flex-direction:column; gap:5px;"><span class="eb" style="color:#9AA5B5;">поля</span><span style="font-size:13.5px; color:#34405A;">6 мм со всех сторон, знак не ближе 8 мм к краю</span></div>
+      <div style="display:flex; flex-direction:column; gap:5px;"><span class="eb" style="color:#9AA5B5;">печать</span><span style="font-size:13.5px; color:#34405A;">одноцветная или двухцветная, без постобработки</span></div>
+    </div>
+  </section>
+
+  <!-- ══════════ 05.2 ПОДПИСЬ В ПОЧТЕ ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">05.2</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Электронная подпись</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">одна на всех сотрудников, без исключений</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:minmax(0,1.25fr) minmax(0,1fr); gap:20px;">
+      <div style="background:#fff; border-radius:32px; padding:12px; box-shadow:0 30px 70px -50px rgba(15,23,41,.3);">
+        <div style="border-radius:22px; border:1px solid #ECEFF3; overflow:hidden;">
+          <div style="background:#F7F9FC; padding:16px 22px; border-bottom:1px solid #ECEFF3; display:flex; flex-direction:column; gap:4px;">
+            <span class="m" style="font-size:11px; color:#68758B;">Кому: m.schulz@example.de</span>
+            <span style="font-size:13.5px; font-weight:700;">Сделка D-24-0917: есть обновление</span>
+          </div>
+          <div style="background:#fff; padding:24px 22px; display:flex; flex-direction:column; gap:22px;">
+            <div style="font-size:13.5px; line-height:1.65; color:#34405A;">Здравствуйте, Martin.<br><br>По вашей сделке изменилось состояние средств. Подробности — в кабинете; заходить по ссылке из письма не нужно, откройте кабинет сами.<br><br>Тамар</div>
+
+            <div style="border-top:1px solid #ECEFF3; padding-top:20px; display:flex; flex-direction:column; gap:14px;">
+              <div style="display:flex; align-items:center; gap:12px;">
+                <div class="mk" style="--s:30px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div>
+                <div style="width:1px; height:32px; background:#ECEFF3;"></div>
+                <div style="display:flex; flex-direction:column; gap:1px;">
+                  <span style="font-size:14px; font-weight:700; letter-spacing:-.01em;">Tamar Abashidze</span>
+                  <span style="font-size:12px; color:#56637A;">Операции · Reestra</span>
+                </div>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:3px;">
+                <span class="m" style="font-size:11px; color:#34405A;">t.abashidze@reestra.ge · +995 32 000 00 00</span>
+                <span class="m" style="font-size:11px; color:#68758B;">Тбилиси · Asia/Tbilisi (GMT+4) · <span style="color:#1E3FBF;">reestra.ge</span></span>
+              </div>
+              <div style="background:#F7F9FC; border-left:2px solid #2D5BFF; padding:12px 14px; display:flex; flex-direction:column; gap:5px;">
+                <span class="eb" style="font-size:9px; color:#68758B;">безопасность</span>
+                <span style="font-size:11px; line-height:1.55; color:#34405A;">Мы не сообщаем реквизиты по телефону, почте и в мессенджере. Единственное место, где вы видите реквизиты, — ваш кабинет. Мы никогда не просим перевести деньги на другой счёт.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="padding:22px 20px 12px; display:flex; flex-direction:column; gap:5px;">
+          <span style="font-size:14px; font-weight:700;">Как это выглядит в письме</span>
+          <span style="font-size:12.5px; line-height:1.55; color:#68758B;">Подпись отделена линией, знак и имя в одной строке, блок безопасности всегда последним.</span>
+        </div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:20px;">
+        <div style="background:#fff; border-radius:28px; padding:32px; box-shadow:0 30px 70px -50px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:16px;">
+          <span class="eb" style="color:#9AA5B5;">правила</span>
+          <div style="display:flex; flex-direction:column; gap:11px;">
+            <div style="display:flex; gap:11px;"><span class="m" style="font-size:12px; color:#12A150;">✓</span><span style="font-size:13px; line-height:1.6; color:#34405A;">Знак — картинкой 60 × 60 px с alt-текстом; при отключённых изображениях подпись остаётся читаемой.</span></div>
+            <div style="display:flex; gap:11px;"><span class="m" style="font-size:12px; color:#12A150;">✓</span><span style="font-size:13px; line-height:1.6; color:#34405A;">Часовой пояс указывается всегда: половина адресатов в другой зоне.</span></div>
+            <div style="display:flex; gap:11px;"><span class="m" style="font-size:12px; color:#12A150;">✓</span><span style="font-size:13px; line-height:1.6; color:#34405A;">Блок безопасности — в подписи каждого сотрудника, включая продажи и партнёрства.</span></div>
+            <div style="display:flex; gap:11px;"><span class="m" style="font-size:12px; color:#12A150;">✓</span><span style="font-size:13px; line-height:1.6; color:#34405A;">Три языка: русская, английская и грузинская версия подписи, язык по адресату.</span></div>
+          </div>
+        </div>
+
+        <div style="background:#F7F9FC; border-radius:28px; padding:32px; display:flex; flex-direction:column; gap:14px;">
+          <span class="eb" style="color:#9AA5B5;">в подписи только</span>
+          <div style="display:flex; flex-direction:column; gap:9px;">
+            <span style="font-size:13px; line-height:1.6; color:#34405A;">Знак, имя, должность.</span>
+            <span style="font-size:13px; line-height:1.6; color:#34405A;">Рабочая почта и рабочая линия.</span>
+            <span style="font-size:13px; line-height:1.6; color:#34405A;">Город и часовой пояс.</span>
+            <span style="font-size:13px; line-height:1.6; color:#34405A;">Адрес сайта — одной строкой.</span>
+            <span style="font-size:13px; line-height:1.6; color:#34405A;">Блок безопасности последним и целиком.</span>
+          </div>
+          <span style="font-size:12.5px; line-height:1.6; color:#68758B; padding-top:12px; border-top:1px solid #E4E7EE;">Всё остальное — реквизиты, ссылки на действия, иконки соцсетей, длинные дисклеймеры и личные номера — в подпись не входит: они оттесняют блок безопасности.</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 05.3 ГОЛОС ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">05.3</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Голос</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">выжимка · полная версия в §17 дизайн-системы</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:20px;">
+      <div style="background:#fff; border-radius:28px; padding:32px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28); display:flex; flex-direction:column; gap:11px;">
+        <span style="font-size:16px; font-weight:800; letter-spacing:-.025em;">Спокойно</span>
+        <span style="font-size:13.5px; line-height:1.65; color:#56637A;">Человек отдаёт сумму, которую копил годами. Ровный тон и в ошибке, и в успехе.</span>
+      </div>
+      <div style="background:#fff; border-radius:28px; padding:32px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28); display:flex; flex-direction:column; gap:11px;">
+        <span style="font-size:16px; font-weight:800; letter-spacing:-.025em;">Фактами</span>
+        <span style="font-size:13.5px; line-height:1.65; color:#56637A;">«Регистрация не подтвердилась до 18 июня, 18:00» — вместо оценок и предположений.</span>
+      </div>
+      <div style="background:#fff; border-radius:28px; padding:32px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28); display:flex; flex-direction:column; gap:11px;">
+        <span style="font-size:16px; font-weight:800; letter-spacing:-.025em;">От себя, активно</span>
+        <span style="font-size:13.5px; line-height:1.65; color:#56637A;">«Мы проверим по выписке следующего дня» — видно, кто отвечает за действие.</span>
+      </div>
+      <div style="background:#fff; border-radius:28px; padding:32px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28); display:flex; flex-direction:column; gap:11px;">
+        <span style="font-size:16px; font-weight:800; letter-spacing:-.025em;">Без чьей-либо вины</span>
+        <span style="font-size:13.5px; line-height:1.65; color:#56637A;">Стороны продолжат разговаривать друг с другом после нашего сообщения.</span>
+      </div>
+    </div>
+
+    <div style="background:#fff; border-radius:28px; padding:12px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28);">
+      <div style="border-radius:22px; overflow:hidden; border:1px solid #ECEFF3;">
+        <div style="display:grid; grid-template-columns:1fr 1.2fr; background:#F7F9FC; border-bottom:1px solid #ECEFF3;">
+          <div style="padding:12px 18px;" class="eb"><span style="color:#68758B;">вместо</span></div>
+          <div style="padding:12px 18px;" class="eb"><span style="color:#68758B;">говорим</span></div>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1.2fr; border-bottom:1px solid #EEF1F6;"><div style="padding:15px 18px; font-size:13px; color:#9AA5B5;">эскроу</div><div style="padding:15px 18px; font-size:13.5px; font-weight:600;">расчёт по сделке · резервирование средств</div></div>
+        <div style="display:grid; grid-template-columns:1fr 1.2fr; border-bottom:1px solid #EEF1F6; background:#F7F9FC;"><div style="padding:15px 18px; font-size:13px; color:#9AA5B5;">спред</div><div style="padding:15px 18px; font-size:13.5px; font-weight:600;">комиссия за конвертацию</div></div>
+        <div style="display:grid; grid-template-columns:1fr 1.2fr; border-bottom:1px solid #EEF1F6;"><div style="padding:15px 18px; font-size:13px; color:#9AA5B5;">ваши деньги у нас</div><div style="padding:15px 18px; font-size:13.5px; font-weight:600;">на счёте номинального держания в банке</div></div>
+        <div style="display:grid; grid-template-columns:1fr 1.2fr; border-bottom:1px solid #EEF1F6; background:#F7F9FC;"><div style="padding:15px 18px; font-size:13px; color:#9AA5B5;">средства заморожены</div><div style="padding:15px 18px; font-size:13.5px; font-weight:600;">зарезервированы под сделку до срока</div></div>
+        <div style="display:grid; grid-template-columns:1fr 1.2fr;"><div style="padding:15px 18px; font-size:13px; color:#9AA5B5;">гарантируем, полная защита</div><div style="padding:15px 18px; font-size:13.5px; font-weight:600;">формулировки через факты и сроки</div></div>
+      </div>
+      <div style="padding:20px; font-size:12.5px; line-height:1.6; color:#68758B;">Проверка тона физическая: текст читается вслух и звучит как человек. Не прошёл — переписывается, сколько бы раз его ни согласовали.</div>
+    </div>
+  </section>
+
+  <!-- ══════════ 05.4 НОСИТЕЛИ ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">05.4</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Остальные носители</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">соцсети · презентация · печать · вывеска · мерч</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:20px;">
+
+      <div style="background:#fff; border-radius:32px; padding:12px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28);">
+        <div style="border-radius:22px; background:#F5F5F7; min-height:300px; padding:24px; display:flex; flex-direction:column; gap:16px;">
+          <div style="border-radius:14px; overflow:hidden; background:#2D5BFF; height:96px; display:flex; align-items:center; justify-content:space-between; padding:0 20px;">
+            <div class="mk" style="--s:44px; --on:#0F1729; --off:#fff;"><i class="a"></i><i class="b"></i></div>
+            <span style="font-size:14px; font-weight:700; color:rgba(255,255,255,.85); text-align:right; max-width:16ch; line-height:1.3;">ფული მოძრაობს უფლებასთან ერთად</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:14px;">
+            <div style="width:58px; height:58px; border-radius:999px; background:#0F1729; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><div class="mk" style="--s:30px; --on:#2D5BFF; --off:#fff;"><i class="a"></i><i class="b"></i></div></div>
+            <div style="display:flex; flex-direction:column; gap:2px;">
+              <span style="font-size:14px; font-weight:800; letter-spacing:-.03em;">Reestra</span>
+              <span class="m" style="font-size:11px; color:#68758B;">@reestra_ge · Тбилиси</span>
+            </div>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;">
+            <div style="aspect-ratio:1; border-radius:8px; background:#fff; display:flex; align-items:center; justify-content:center;"><div class="mk" style="--s:22px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div></div>
+            <div style="aspect-ratio:1; border-radius:8px; background:#0F1729; display:flex; align-items:flex-end; padding:8px;"><span style="font-size:9px; line-height:1.3; font-weight:700; color:#fff;">Как работает расчёт</span></div>
+            <div style="aspect-ratio:1; border-radius:8px; background:#2D5BFF;"></div>
+          </div>
+        </div>
+        <div style="padding:22px 20px 12px; display:flex; flex-direction:column; gap:5px;">
+          <span style="font-size:14px; font-weight:700;">Соцсети</span>
+          <span style="font-size:12.5px; line-height:1.55; color:#68758B;">Аватар — знак на чернилах, обложка — слоган по-грузински. Сетка постов чередует три типа: знак, тезис на чернилах, чистый акцент.</span>
+        </div>
+      </div>
+
+      <div style="background:#fff; border-radius:32px; padding:12px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28);">
+        <div style="border-radius:22px; background:#F5F5F7; min-height:300px; padding:24px; display:flex; flex-direction:column; gap:12px;">
+          <div style="border-radius:12px; background:#0F1729; aspect-ratio:16/9; padding:20px; display:flex; flex-direction:column; justify-content:space-between;">
+            <div class="mk" style="--s:26px; --on:#2D5BFF; --off:#fff;"><i class="a"></i><i class="b"></i></div>
+            <div style="display:flex; flex-direction:column; gap:6px;">
+              <span style="font-size:18px; line-height:1.2; font-weight:800; letter-spacing:-.03em; color:#fff;">Как принимать оплату от иностранных покупателей</span>
+              <span class="m" style="font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:#5F6C85;">для застройщика · 2026</span>
+            </div>
+          </div>
+          <div style="border-radius:12px; background:#fff; aspect-ratio:16/9; padding:18px; display:flex; flex-direction:column; gap:10px;">
+            <span class="m" style="font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:#9AA5B5;">01 · что меняется для вас</span>
+            <div style="display:flex; flex-direction:column; gap:6px;">
+              <div style="height:7px; width:78%; border-radius:3px; background:#ECEFF3;"></div>
+              <div style="height:7px; width:64%; border-radius:3px; background:#ECEFF3;"></div>
+              <div style="height:7px; width:70%; border-radius:3px; background:#ECEFF3;"></div>
+            </div>
+            <div style="margin-top:auto; display:flex; gap:8px; align-items:center;"><div class="mk" style="--s:16px; --on:#2D5BFF; --off:#0F1729;"><i class="a"></i><i class="b"></i></div><span class="m" style="font-size:8.5px; color:#9AA5B5;">reestra.ge</span></div>
+          </div>
+        </div>
+        <div style="padding:22px 20px 12px; display:flex; flex-direction:column; gap:5px;">
+          <span style="font-size:14px; font-weight:700;">Презентация</span>
+          <span style="font-size:12.5px; line-height:1.55; color:#68758B;">Титул на чернилах, содержательные слайды на белом. Знак в подвале каждого слайда, 16 px. Главный носитель партнёрского канала.</span>
+        </div>
+      </div>
+
+      <div style="background:#fff; border-radius:32px; padding:12px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28);">
+        <div style="border-radius:22px; background:#F5F5F7; min-height:300px; padding:24px; display:flex; flex-direction:column; gap:18px; align-items:center; justify-content:center;">
+          <div style="width:132px; height:132px; border-radius:999px; border:2px solid #0F1729; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px; background:#fff;">
+            <div class="mk" style="--s:34px; --on:#0F1729; --off:#C2CBD9;"><i class="a"></i><i class="b"></i></div>
+            <span class="m" style="font-size:8px; letter-spacing:.18em; color:#0F1729; padding-left:.18em;">REESTRA</span>
+            <div style="width:38px; height:1px; background:#C2CBD9;"></div>
+            <span class="m" style="font-size:7px; letter-spacing:.14em; color:#56637A; padding-left:.14em;">TBILISI · GE</span>
+          </div>
+          <div style="width:100%; border-radius:10px; background:#fff; padding:14px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+            <span class="m" style="font-size:10px; color:#68758B;">папка под документы</span>
+            <div class="mk" style="--s:18px; --on:#0F1729; --off:#C2CBD9;"><i class="a"></i><i class="b"></i></div>
+          </div>
+        </div>
+        <div style="padding:22px 20px 12px; display:flex; flex-direction:column; gap:5px;">
+          <span style="font-size:14px; font-weight:700;">Печать и папка</span>
+          <span style="font-size:12.5px; line-height:1.55; color:#68758B;">Печать в один цвет: знак, имя в разрядку, город. Диаметр 40 мм. На папке знак один, без имени.</span>
+        </div>
+      </div>
+
+      <div style="background:#fff; border-radius:32px; padding:12px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28);">
+        <div style="border-radius:22px; background:#F5F5F7; min-height:300px; padding:24px; display:flex; flex-direction:column; gap:16px;">
+          <div style="border-radius:12px; background:#0F1729; padding:22px; display:flex; align-items:center; gap:14px;">
+            <div class="mk" style="--s:34px; --on:#2D5BFF; --off:#fff;"><i class="a"></i><i class="b"></i></div>
+            <div style="display:flex; flex-direction:column; gap:2px;">
+              <span style="font-size:17px; font-weight:800; letter-spacing:-.03em; color:#fff;">რეესტრა</span>
+              <span style="font-size:13px; font-weight:700; letter-spacing:-.03em; color:rgba(255,255,255,.6);">Reestra</span>
+            </div>
+          </div>
+          <div style="display:flex; gap:12px; align-items:center;">
+            <div style="width:64px; height:64px; border-radius:12px; background:#2D5BFF; display:flex; align-items:center; justify-content:center;"><div class="mk" style="--s:28px; --on:#fff; --off:rgba(255,255,255,.5);"><i class="a"></i><i class="b"></i></div></div>
+            <div style="flex:1; display:flex; flex-direction:column; gap:4px;">
+              <span style="font-size:12.5px; font-weight:700;">Вывеска у входа</span>
+              <span style="font-size:11.5px; line-height:1.5; color:#68758B;">Грузинское начертание сверху, латиница ниже и мельче. Только чернила и белый, без подсветки.</span>
+            </div>
+          </div>
+        </div>
+        <div style="padding:22px 20px 12px; display:flex; flex-direction:column; gap:5px;">
+          <span style="font-size:14px; font-weight:700;">Вывеска и мерч</span>
+          <span style="font-size:12.5px; line-height:1.55; color:#68758B;">На мерче только знак и только в один цвет: имя на футболке читается как реклама услуги, а мы не рекламируем услугу сотрудникам.</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 05.5 ДВИЖЕНИЕ ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">05.5</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Движение марки</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">знак спроектирован под движение с самого начала</span>
+    </div>
+
+    <div style="background:#0F1729; border-radius:32px; padding:40px; display:flex; flex-direction:column; gap:30px;">
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:1px; background:#232B3D; border-radius:18px; overflow:hidden;">
+        <div style="background:#151E33; padding:26px; display:flex; flex-direction:column; gap:14px;">
+          <div class="mk" style="--s:40px; --on:#151E33; --off:#fff;"><i class="a"></i><i class="b"></i></div>
+          <div style="display:flex; flex-direction:column; gap:5px;"><span style="font-size:14.5px; font-weight:700; color:#fff;">Запуск</span><span class="m" style="font-size:11px; color:#7C9AFF;">360 ms · cubic-bezier(.2,.8,.2,1)</span></div>
+          <span style="font-size:12.5px; line-height:1.6; color:#98A4BA;">Задний круг на месте, передний догоняет его из точки. Один раз, при входе в кабинет.</span>
+        </div>
+        <div style="background:#151E33; padding:26px; display:flex; flex-direction:column; gap:14px;">
+          <div class="mk" style="--s:40px; --on:#7C9AFF; --off:#fff;"><i class="a"></i><i class="b"></i></div>
+          <div style="display:flex; flex-direction:column; gap:5px;"><span style="font-size:14.5px; font-weight:700; color:#fff;">Ожидание</span><span class="m" style="font-size:11px; color:#7C9AFF;">2200 ms · ease-in-out · петля</span></div>
+          <span style="font-size:12.5px; line-height:1.6; color:#98A4BA;">Передний круг медленно дышит по прозрачности. Дыхание, а не вращение: деньги в пути, но ничего не срочно.</span>
+        </div>
+        <div style="background:#151E33; padding:26px; display:flex; flex-direction:column; gap:14px;">
+          <div class="mk" style="--s:40px; --on:#2D5BFF; --off:#fff;"><i class="a"></i><i class="b"></i></div>
+          <div style="display:flex; flex-direction:column; gap:5px;"><span style="font-size:14.5px; font-weight:700; color:#fff;">Резерв</span><span class="m" style="font-size:11px; color:#7C9AFF;">240 ms · плотность до 100%</span></div>
+          <span style="font-size:12.5px; line-height:1.6; color:#98A4BA;">Передний круг набирает полный цвет и замирает. Самое сильное состояние продукта — самая спокойная анимация.</span>
+        </div>
+        <div style="background:#151E33; padding:26px; display:flex; flex-direction:column; gap:14px;">
+          <div class="mk" style="--s:40px; --on:#12A150; --off:#fff;"><i class="a"></i><i class="b"></i></div>
+          <div style="display:flex; flex-direction:column; gap:5px;"><span style="font-size:14.5px; font-weight:700; color:#fff;">Расчёт исполнен</span><span class="m" style="font-size:11px; color:#7C9AFF;">180 ms · однократно</span></div>
+          <span style="font-size:12.5px; line-height:1.6; color:#98A4BA;">Круги совмещаются в один. Без салютов: закрытая сделка на шестизначную сумму — не повод для праздника в интерфейсе.</span>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:20px; padding-top:26px; border-top:1px solid #232B3D;">
+        <div style="display:flex; flex-direction:column; gap:7px;"><span class="eb" style="color:#5F6C85;">характер</span><span style="font-size:13px; line-height:1.65; color:#98A4BA;">Спокойный и весомый: ничего не подпрыгивает, пружин с перелётом нет. Тон движения совпадает с тоном текста.</span></div>
+        <div style="display:flex; flex-direction:column; gap:7px;"><span class="eb" style="color:#5F6C85;">чем делается</span><span style="font-size:13px; line-height:1.65; color:#98A4BA;">Только <span class="m" style="font-size:12px;">transform</span> и <span class="m" style="font-size:12px;">opacity</span>. При <span class="m" style="font-size:12px;">prefers-reduced-motion</span> остаются четыре статичных состояния.</span></div>
+        <div style="display:flex; flex-direction:column; gap:7px;"><span class="eb" style="color:#5F6C85;">границы</span><span style="font-size:13px; line-height:1.65; color:#98A4BA;">Марка участвует в четырёх состояниях выше и остаётся статичной во всех остальных: тревогу показывает интерфейс.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 05.6 ФАЙЛЫ ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">05.6</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Файлы и выдача</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">что кому отдаём</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:minmax(0,1.15fr) minmax(0,1fr); gap:20px;">
+      <div style="background:#fff; border-radius:32px; padding:12px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28);">
+        <div style="border-radius:22px; overflow:hidden; border:1px solid #ECEFF3;">
+          <div style="display:grid; grid-template-columns:1.3fr 1fr; background:#F7F9FC; border-bottom:1px solid #ECEFF3;">
+            <div style="padding:12px 18px;" class="eb"><span style="color:#68758B;">файл</span></div>
+            <div style="padding:12px 18px;" class="eb"><span style="color:#68758B;">где применяется</span></div>
+          </div>
+          <div style="display:grid; grid-template-columns:1.3fr 1fr; border-bottom:1px solid #EEF1F6;"><div style="padding:14px 18px;" class="m"><span style="font-size:12.5px; color:#0F1729;">reestra-lockup.svg</span></div><div style="padding:14px 18px; font-size:12.5px; color:#56637A;">сайт, письма, презентации</div></div>
+          <div style="display:grid; grid-template-columns:1.3fr 1fr; border-bottom:1px solid #EEF1F6; background:#F7F9FC;"><div style="padding:14px 18px;" class="m"><span style="font-size:12.5px; color:#0F1729;">reestra-mark.svg</span></div><div style="padding:14px 18px; font-size:12.5px; color:#56637A;">знак без имени</div></div>
+          <div style="display:grid; grid-template-columns:1.3fr 1fr; border-bottom:1px solid #EEF1F6;"><div style="padding:14px 18px;" class="m"><span style="font-size:12.5px; color:#0F1729;">reestra-mono.svg</span></div><div style="padding:14px 18px; font-size:12.5px; color:#56637A;">печать, штамп, факс</div></div>
+          <div style="display:grid; grid-template-columns:1.3fr 1fr; border-bottom:1px solid #EEF1F6; background:#F7F9FC;"><div style="padding:14px 18px;" class="m"><span style="font-size:12.5px; color:#0F1729;">favicon 16 · 32 · 180 · 512</span></div><div style="padding:14px 18px; font-size:12.5px; color:#56637A;">браузер, iOS, Android</div></div>
+          <div style="display:grid; grid-template-columns:1.3fr 1fr; border-bottom:1px solid #EEF1F6;"><div style="padding:14px 18px;" class="m"><span style="font-size:12.5px; color:#0F1729;">reestra-signature.html</span></div><div style="padding:14px 18px; font-size:12.5px; color:#56637A;">подпись в почте, три языка</div></div>
+          <div style="display:grid; grid-template-columns:1.3fr 1fr;"><div style="padding:14px 18px;" class="m"><span style="font-size:12.5px; color:#0F1729;">reestra-social.zip</span></div><div style="padding:14px 18px; font-size:12.5px; color:#56637A;">аватар, обложки, шаблоны постов</div></div>
+        </div>
+        <div style="padding:20px; font-size:12.5px; line-height:1.6; color:#68758B;">Векторы — источник правды. Растр генерируется из них, а не правится отдельно. Версия знака указывается в имени файла при каждом изменении геометрии.</div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:20px;">
+        <div style="background:#0F1729; border-radius:28px; padding:32px; display:flex; flex-direction:column; gap:16px;">
+          <span class="eb" style="color:#7C9AFF;">партнёру отдаём</span>
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <span style="font-size:13.5px; line-height:1.6; color:#DCE3EE;">Лок-ап, знак, монохром и правила ко-брендинга — этого достаточно, чтобы поставить нас рядом с собой.</span>
+            <span style="font-size:13.5px; line-height:1.6; color:#98A4BA;">Шаблоны носителей, шрифтовые файлы и палитра состояний остаются у нас: партнёр меняет свой акцент, а не наш язык денег.</span>
+          </div>
+        </div>
+
+        <div style="background:#fff; border-radius:28px; padding:32px; box-shadow:0 24px 56px -46px rgba(15,23,41,.28); display:flex; flex-direction:column; gap:16px;">
+          <span class="eb" style="color:#9AA5B5;">приёмка носителя · семь проверок</span>
+          <div style="display:flex; flex-direction:column; gap:9px;">
+            <div style="display:flex; gap:11px;"><span class="m" style="font-size:11px; color:#2D5BFF;">1</span><span style="font-size:13px; line-height:1.6; color:#34405A;">Грузинский текст стоит первым, кегль не меньше латиницы.</span></div>
+            <div style="display:flex; gap:11px;"><span class="m" style="font-size:11px; color:#2D5BFF;">2</span><span style="font-size:13px; line-height:1.6; color:#34405A;">Знак не мельче 16 px, охранное поле соблюдено.</span></div>
+            <div style="display:flex; gap:11px;"><span class="m" style="font-size:11px; color:#2D5BFF;">3</span><span style="font-size:13px; line-height:1.6; color:#34405A;">Цвета только акцент, чернила и белый; цвета состояний остались в продукте.</span></div>
+            <div style="display:flex; gap:11px;"><span class="m" style="font-size:11px; color:#2D5BFF;">4</span><span style="font-size:13px; line-height:1.6; color:#34405A;">Сервис описан в будущем времени, юрисдикция названа.</span></div>
+            <div style="display:flex; gap:11px;"><span class="m" style="font-size:11px; color:#2D5BFF;">5</span><span style="font-size:13px; line-height:1.6; color:#34405A;">Один посыл и одно действие на носитель.</span></div>
+            <div style="display:flex; gap:11px;"><span class="m" style="font-size:11px; color:#2D5BFF;">6</span><span style="font-size:13px; line-height:1.6; color:#34405A;">Каждая цифра подтверждена владельцем.</span></div>
+            <div style="display:flex; gap:11px;"><span class="m" style="font-size:11px; color:#2D5BFF;">7</span><span style="font-size:13px; line-height:1.6; color:#34405A;">Текст прочитан вслух и звучит как человек.</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 06 ЗАПРЕТЫ ══════════ -->
+  <section style="display:flex; flex-direction:column; gap:32px;">
+    <div style="display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; border-bottom:1px solid #E4E7EE; padding-bottom:20px;">
+      <span class="eb" style="color:#9AA5B5;">06</span>
+      <h2 style="margin:0; font-size:clamp(30px,3.4vw,46px); line-height:1; letter-spacing:-.04em; font-weight:800;">Чем марка остаётся</h2>
+      <span style="font-size:14px; color:#68758B; margin-left:auto;">правила правовые, а не стилистические</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px;">
+      <div style="background:#fff; border-radius:24px; padding:28px; box-shadow:0 24px 56px -46px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:10px;">
+        <span class="m" style="font-size:15px; color:#2D5BFF;">01</span>
+        <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">Говорит фактами и сроками</span>
+        <span style="font-size:13px; line-height:1.6; color:#56637A;">Обещание заменяется проверяемым утверждением: что произойдёт, при каком условии и в какой срок. Геометрия знака живёт по тому же правилу.</span>
+      </div>
+      <div style="background:#fff; border-radius:24px; padding:28px; box-shadow:0 24px 56px -46px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:10px;">
+        <span class="m" style="font-size:15px; color:#2D5BFF;">02</span>
+        <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">Называет вещи своими именами</span>
+        <span style="font-size:13px; line-height:1.6; color:#56637A;">«Расчёт по сделке» и «резервирование средств» — во всех трёх языках и во всех каналах. Эскроу-агентом по закону может быть только банк или микробанк.</span>
+      </div>
+      <div style="background:#fff; border-radius:24px; padding:28px; box-shadow:0 24px 56px -46px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:10px;">
+        <span class="m" style="font-size:15px; color:#2D5BFF;">03</span>
+        <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">Показывает только своё</span>
+        <span style="font-size:13px; line-height:1.6; color:#56637A;">Собственный знак, типографика и два цвета. Фото объекта — из листинга партнёра, с указанием источника и даты: за сам объект отвечает продавец.</span>
+      </div>
+      <div style="background:#fff; border-radius:24px; padding:28px; box-shadow:0 24px 56px -46px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:10px;">
+        <span class="m" style="font-size:15px; color:#2D5BFF;">04</span>
+        <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">Говорит в будущем времени</span>
+        <span style="font-size:13px; line-height:1.6; color:#56637A;">«Запускаем» и «готовим», пока сервис не запущен. Каждая цифра на носителе подтверждена владельцем.</span>
+      </div>
+      <div style="background:#fff; border-radius:24px; padding:28px; box-shadow:0 24px 56px -46px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:10px;">
+        <span class="m" style="font-size:15px; color:#2D5BFF;">05</span>
+        <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">Остаётся частным сервисом</span>
+        <span style="font-size:13px; line-height:1.6; color:#56637A;">На носителях только наш знак. Государственная символика создаёт регуляторный риск, а не доверие.</span>
+      </div>
+      <div style="background:#fff; border-radius:24px; padding:28px; box-shadow:0 24px 56px -46px rgba(15,23,41,.3); display:flex; flex-direction:column; gap:10px;">
+        <span class="m" style="font-size:15px; color:#2D5BFF;">06</span>
+        <span style="font-size:15px; font-weight:700; letter-spacing:-.02em;">Держит язык денег за собой</span>
+        <span style="font-size:13px; line-height:1.6; color:#56637A;">Партнёр ставит рядом свой логотип и свой акцент. Восемь семантик состояний денег остаются нашими всегда.</span>
+      </div>
+    </div>
+
+    <div style="background:#0F1729; border-radius:32px; padding:40px; display:flex; flex-direction:column; gap:22px;">
+      <span class="eb" style="color:#7C9AFF;">следующий шаг</span>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:22px;">
+        <div style="display:flex; flex-direction:column; gap:7px;"><span style="font-size:15px; font-weight:700; color:#fff;">Проверка знака в реестрах</span><span style="font-size:13px; line-height:1.6; color:#98A4BA;">Классы платёжных услуг, Грузия и ЕС. Два перекрывающихся круга — занятая территория, это блокер до носителей.</span></div>
+        <div style="display:flex; flex-direction:column; gap:7px;"><span style="font-size:15px; font-weight:700; color:#fff;">Отрисовка в кривых</span><span style="font-size:13px; line-height:1.6; color:#98A4BA;">Оптические компенсации перекрытия и посадка знака по высоте прописной — в векторе, не в CSS.</span></div>
+        <div style="display:flex; flex-direction:column; gap:7px;"><span style="font-size:15px; font-weight:700; color:#fff;">Грузинское начертание</span><span style="font-size:13px; line-height:1.6; color:#98A4BA;">რეესტრა рисуется вручную: у мхедрули в 800 своя оптика, стандартный шрифт в марке выглядит шрифтом.</span></div>
+        <div style="display:flex; flex-direction:column; gap:7px;"><span style="font-size:15px; font-weight:700; color:#fff;">Хореография марки</span><span style="font-size:13px; line-height:1.6; color:#98A4BA;">Знак спроектирован под движение: круг догоняет круг при переходе состояния. Тайминги — вместе с анимацией продукта.</span></div>
+      </div>
+    </div>
+  </section>
+
+</div>
+</x-dc>
+</body>
+</html>
