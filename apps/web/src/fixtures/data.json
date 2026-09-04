@@ -10,7 +10,9 @@
     "payoutIbanMasked": "GE•• •••• •••• 4417",
     "payoutBank": "TBC Bank",
     "sourceAccountMasked": "DE•• •••• •••• 8821",
-    "sourceBank": "Commerzbank"
+    "sourceBank": "Commerzbank",
+    "email": "m.weiss@example.de",
+    "documentMasked": "•••• 4417"
   },
   "counterparties": {
     "kikvadze": {
@@ -129,12 +131,18 @@
   "bank": {
     "custodian": "Bank of Georgia",
     "payinReference": "SD-7K42-2026",
-    "payinIban": "GE29 BG00 0000 0119 4711 00"
+    "payinIban": "GE29 BG00 0000 0119 4711 00",
+    "payinBeneficiary": "REESTRA OPERATIONS LLC",
+    "payinSwift": "BAGAGE22"
   },
   "operators": {
     "one": "op-1",
     "two": "op-2",
     "approverOne": "approver-1",
     "approverTwo": "approver-2"
+  },
+  "site": {
+    "verifyUrl": "reestra.ge/check",
+    "supportHours": "09:00–19:00 (+04)"
   }
 }

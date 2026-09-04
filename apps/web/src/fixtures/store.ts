@@ -79,6 +79,22 @@ export interface TimelineMark {
   readonly at: number;
 }
 
+/**
+ * Конвертационный слой. `null` означает не «курс единица», а «слоя нет вовсе»:
+ * валюта перевода совпала с валютой сделки, и тогда исчезают строка курса,
+ * комиссия за конвертацию и сам разговор о них (`IMPLEMENTATION.md` §3).
+ * Курс 1:1 не показывается никогда.
+ */
+export interface ConversionView {
+  /** Сколько клиент отправил из своего банка, в валюте перевода. */
+  readonly transfer: Money<CurrencyCode>;
+  /** Курс сделки и рыночный курс — десятичными строками, формат даёт `Intl`. */
+  readonly rate: string;
+  readonly marketRate: string;
+  /** Комиссия за конвертацию — в валюте сделки, невозвратная. */
+  readonly fxFee: Money<CurrencyCode>;
+}
+
 export interface DealSnapshot {
   readonly id: string;
   readonly ref: string;
@@ -92,6 +108,10 @@ export interface DealSnapshot {
   readonly assurance: AssuranceLevel;
   readonly property: PropertyView;
   readonly counterpartyName: string;
+  /** Валюта сделки: отдельный счёт номинального держания и отдельная сверка. */
+  readonly dealCurrency: CurrencyCode;
+  /** Валюта перевода независима от валюты сделки; совпали — слоя нет. */
+  readonly conversion: ConversionView | null;
   readonly required: Money<CurrencyCode>;
   readonly credited: Money<CurrencyCode>;
   readonly locked: Money<CurrencyCode>;
@@ -125,6 +145,40 @@ const DEADLINE_KIND: Readonly<Record<TrancheStatus, DeadlineKind | null>> = Obje
   written_off: null,
   frozen: null,
 });
+
+/**
+ * Валюта перевода по сделке. Отсутствие записи означает совпадение с валютой
+ * сделки — и тогда конвертационного слоя нет вовсе, а не «курс 1:1».
+ *
+ * Курсы и суммы заданы целыми минорными единицами и десятичными строками:
+ * плавающей точки в деньгах нет ни одной (красная линия №4).
+ */
+const TRANSFER: Readonly<
+  Record<string, { readonly currency: CurrencyCode; readonly minor: bigint; readonly rate: string; readonly market: string }>
+> = Object.freeze({
+  m05: { currency: 'USD', minor: 8_084_560n, rate: '2.6842', market: '2.7104' },
+  m06: { currency: 'USD', minor: 8_084_560n, rate: '2.6842', market: '2.7104' },
+  m09: { currency: 'USD', minor: 8_084_560n, rate: '2.6842', market: '2.7104' },
+  m11: { currency: 'EUR', minor: 7_428_710n, rate: '2.9211', market: '2.9502' },
+  m14: { currency: 'USD', minor: 8_084_560n, rate: '2.6842', market: '2.7104' },
+  r03: { currency: 'USD', minor: 8_084_560n, rate: '2.6842', market: '2.7104' },
+});
+
+/** Комиссия за конвертацию: 0,8% от суммы сделки, целыми минорными единицами. */
+function conversionFee(required: Money<CurrencyCode>): Money<CurrencyCode> {
+  return money(required.currency, (required.minor * 8n) / 1000n);
+}
+
+function conversionOf(scenarioId: string, required: Money<CurrencyCode>): ConversionView | null {
+  const item = TRANSFER[scenarioId];
+  if (item === undefined || item.currency === required.currency) return null;
+  return {
+    transfer: money(item.currency, item.minor),
+    rate: item.rate,
+    marketRate: item.market,
+    fxFee: conversionFee(required),
+  };
+}
 
 function propertyView(key: PropertyKey): PropertyView {
   const item = FIXTURE_DATA.properties[key];
@@ -232,6 +286,8 @@ function build(scenario: Scenario): BuiltDeal {
     assurance: projectAssuranceLevel(moneyState),
     property: propertyView(scenario.property),
     counterpartyName: counterpartyName(scenario.counterparty),
+    dealCurrency: required.currency,
+    conversion: conversionOf(scenario.id, required),
     required,
     credited,
     locked,
@@ -273,6 +329,21 @@ export function viewerName(): string {
   return FIXTURE_DATA.viewer.displayName;
 }
 
+/** Карточка клиента в панели: имя, почта и инициалы — данные, а не текст. */
+export function viewerCard(): { readonly name: string; readonly email: string; readonly initials: string } {
+  const name = FIXTURE_DATA.viewer.displayName;
+  const initials = name
+    .split(' ')
+    .map((part) => part.slice(0, 1))
+    .join('')
+    .slice(0, 2);
+  return { name, email: FIXTURE_DATA.viewer.email, initials };
+}
+
+export function verifyUrl(): string {
+  return FIXTURE_DATA.site.verifyUrl;
+}
+
 export async function listDeals(): Promise<readonly DealSnapshot[]> {
   // Порядок — по срочности: сначала то, у чего срок ближе, затем по сумме.
   return [...BUILT.map((item) => item.snapshot)].sort((left, right) => {
@@ -295,7 +366,19 @@ export interface LockedPart {
   readonly address: string;
 }
 
+/**
+ * Остаток в одной валюте. Валют несколько, и они **не суммируются**: единой
+ * суммы «всего у вас» не существует, показывать её было бы вымыслом
+ * (`IMPLEMENTATION.md` §3). Поэтому здесь список, а не итог.
+ */
+export interface CurrencyBalance {
+  readonly currency: CurrencyCode;
+  readonly free: Money<CurrencyCode>;
+  readonly locked: Money<CurrencyCode>;
+}
+
 export interface AccountView {
+  readonly balances: readonly CurrencyBalance[];
   readonly free: Money<CurrencyCode>;
   readonly freeForeign: Money<CurrencyCode> | null;
   readonly lockedTotal: Money<CurrencyCode>;
@@ -394,7 +477,22 @@ export async function getAccount(): Promise<AccountView> {
       ? 'W-01'
       : 'W-04';
 
+  // Валюта сделки — одна из трёх, у каждой свой счёт номинального держания и
+  // своя сверка. Строка показывается, даже когда остаток нулевой: отсутствие
+  // строки читается как «такой валюты у вас нет», а счёт есть.
+  const balances: CurrencyBalance[] = (['GEL', 'USD', 'EUR'] as const).map((currency) => ({
+    currency,
+    free: accountBalance(WORLD_JOURNAL, clientFreeAccount(owner), currency),
+    locked: money(
+      currency,
+      lockedParts
+        .filter((part) => part.amount.currency === currency)
+        .reduce((total, part) => total + part.amount.minor, 0n),
+    ),
+  }));
+
   return {
+    balances,
     free,
     freeForeign: isPositive(freeForeign) ? freeForeign : null,
     lockedTotal,
@@ -485,6 +583,8 @@ export type TaskType = (typeof TASK_TYPES)[number];
 export interface OpsTask {
   readonly id: string;
   readonly type: TaskType;
+  /** Положение денег по сделке: третий текст состояния — операторский. */
+  readonly moneyState: MoneyState;
   readonly dealId: string;
   readonly dealRef: string;
   readonly address: string;
@@ -530,6 +630,12 @@ export interface OpsView {
   readonly coverage: readonly CoverageByCurrency[];
   readonly liveDeals: number;
   readonly withoutDeadline: number;
+  /** Доля сделок, прошедших без человека: консоль — стол исключений. */
+  readonly automatedShare: number;
+  readonly automatedOf: number;
+  readonly automatedTotal: number;
+  /** Мест, где человек обязателен: `release_blocked`, второе утверждение, разморозка. */
+  readonly humanRequired: number;
 }
 
 export async function getOpsQueue(): Promise<OpsView> {
@@ -543,6 +649,7 @@ export async function getOpsQueue(): Promise<OpsView> {
       tasks.push({
         id: `${snapshot.id}-${type}`,
         type,
+        moneyState: snapshot.moneyState,
         dealId: snapshot.id,
         dealRef: snapshot.ref,
         address: snapshot.property.addressLatin,
@@ -567,6 +674,10 @@ export async function getOpsQueue(): Promise<OpsView> {
     coverage: coverage(WORLD_JOURNAL),
     liveDeals: live.length,
     withoutDeadline: live.filter((item) => item.snapshot.deadline === null).length,
+    automatedShare: 24 / 29,
+    automatedOf: 24,
+    automatedTotal: 29,
+    humanRequired: 3,
   };
 }
 

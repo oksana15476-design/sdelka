@@ -1,11 +1,24 @@
 import type { ReactNode } from 'react';
+import type { CurrencyCode, Money } from '@sdelka/money';
+import { money } from '@sdelka/money';
 import type { DealSnapshot } from '@/fixtures/store';
 import { type RequiredAction, requiredAction } from '@/view/action';
-import { buildTimeline } from '@/view/timeline';
-import { formatDate, formatDateTime, formatMoney } from '@/i18n/format';
+import { buildTimeline, stateDate } from '@/view/timeline';
+import { formatDate, formatDateTime, formatMoney, formatRate } from '@/i18n/format';
 import { t } from '@/i18n/translate';
 import type { L10n } from './l10n';
-import { Amount, AmountSkeleton, Badge, BlockedAction, DeadlineTimer, Disclosure, Row, StatusDot } from './primitives';
+import {
+  Amount,
+  AmountSkeleton,
+  Badge,
+  BlockedAction,
+  DeadlineTimer,
+  Disclosure,
+  Eyebrow,
+  LegalSlot,
+  Row,
+  StatusDot,
+} from './primitives';
 
 interface DealProps {
   readonly l: L10n;
@@ -15,74 +28,202 @@ interface DealProps {
   readonly viewerZone: string;
 }
 
+/* ------------------------------------------------------------------------ */
+/*  Поведение экрана по состоянию транша (`IMPLEMENTATION.md` §2.1).         */
+/*  Признаки читаются из статуса транша, а не из положения денег: положений   */
+/*  восемнадцать, а решает здесь автомат, у которого их тринадцать.           */
+/* ------------------------------------------------------------------------ */
+
+const WITH_RESERVE_PROOF = new Set(['reserved', 'release_pending', 'release_blocked', 'paying_out', 'paid_out']);
+const WITH_DEADLINE = new Set(['collecting', 'collected', 'reserved', 'release_pending', 'release_blocked']);
+const WITH_TOPUP = new Set(['collecting', 'collected']);
+const BEFORE_COLLECTED = new Set(['pending', 'collecting']);
+const REFUND_MODEL = new Set(['refund_pending', 'refunding', 'refunded']);
+
+/**
+ * ⚖-слот о праве отзыва. Ключи — из `DRAFT-money.md` §5, формулировка — из
+ * `LEGAL-REVIEW.md` Ю-03 (одна на все точки границы, слово в слово).
+ *
+ * Слот `…releasePending.revocation` ревью **не прошёл** (Ю-01, ⛔): «нельзя» —
+ * это утверждение об отсутствии права, которого по ст. 720.1 отнять нельзя.
+ * Пока юрист не дал формулировку, на его месте стоит заглушка, а не черновик.
+ */
+function revocationSlot(deal: DealSnapshot): { readonly key: string; readonly review: 'passed' | 'pending' } | null {
+  switch (deal.trancheStatus) {
+    case 'collecting':
+    case 'collected':
+      return { key: 'deal.paying.revocation.beforeReserve', review: 'passed' };
+    case 'reserved':
+      return deal.moneyState === 'submitted'
+        ? { key: 'deal.paying.where.submitted.revocation', review: 'passed' }
+        : { key: 'deal.paying.where.reserved.revocation', review: 'passed' };
+    case 'release_pending':
+    case 'paying_out':
+      return { key: 'deal.paying.where.releasePending.revocation', review: 'pending' };
+    default:
+      return null;
+  }
+}
+
+/** Сумма, которую показывает карточка положения денег, и её метка. */
+function heroAmount(deal: DealSnapshot): Money<CurrencyCode> {
+  if (deal.moneyState === 'onAccountFx' && deal.conversion !== null) return deal.conversion.transfer;
+  if (deal.moneyState === 'partiallyFunded') return deal.credited;
+  return deal.required;
+}
+
 /**
  * `C-01` «Где мои деньги» — самый верх экрана, всегда виден, не сворачивается.
- * Восемнадцать положений, у каждого свой заголовок, своё тело и своя сумма;
- * формулировки различаются по роли, состояние одно (`SCREENS.md` §2.2).
+ * Одна карточка вместо трёх: положение денег, требуемое действие и срок — один
+ * ответ, а не три равнозначных блока.
+ *
+ * Порядок внутри карточки задан приёмкой: ответ на «требуется ли что-то от
+ * меня» стоит **выше** суммы по важности и читается первым в белом блоке,
+ * сумма — крупной строкой над текстом, а не внутри предложения (согласование с
+ * числительным ломается на «1 000 ₾ уйдут»).
  */
-export function MoneyLocation({ l, deal }: { readonly l: L10n; readonly deal: DealSnapshot }): ReactNode {
-  const base = `deal.${deal.role}.where.${deal.moneyState}`;
+export function MoneyStateCard({ l, deal, now, operationsZone, viewerZone }: DealProps): ReactNode {
+  const base = `deal.paying.where.${deal.moneyState}`;
+  const action: RequiredAction = requiredAction(deal);
+  const revocation = revocationSlot(deal);
   const unavailable =
     deal.moneyState === 'frozen' || deal.moneyState === 'heldThirdParty' || deal.moneyState === 'unidentified';
-  // Скрывается только сумма в лари: она пересчитывается. Сумма в валюте
-  // перевода известна точно и прячется зря — клиент должен видеть, что его
-  // деньги на месте, даже когда курс пересчитывается.
-  const hidden = deal.modifiers.quoteExpired && deal.foreignBalance === null;
+  // Скрывается только сумма в валюте сделки: она пересчитывается. Сумма в
+  // валюте перевода известна точно, и прятать её значит прятать деньги клиента.
+  const hidden = deal.modifiers.quoteExpired && deal.conversion === null;
+  const params = {
+    bank: t(l.dict, 'glossary.custodian'),
+    counterparty: deal.counterpartyName,
+    shortfall: deal.shortfall === null ? '' : formatMoney(l.locale, deal.shortfall),
+    excess: deal.excess === null ? '' : formatMoney(l.locale, deal.excess),
+    amount: formatMoney(l.locale, deal.required),
+  };
   return (
-    <section className={`card where where--${deal.tone}`} aria-labelledby="where-money">
-      <div className="where__head">
-        <StatusDot tone={deal.tone} />
-        <div>
-          <h2 className="where__title" id="where-money">
-            {t(l.dict, `${base}.title`)}
-          </h2>
-          <p className="where__body">{t(l.dict, `${base}.body`, { bank: t(l.dict, 'glossary.custodian') })}</p>
+    <section className={`state-card state-card--${deal.tone}`} aria-labelledby="where-money">
+      <div className="state-card__head">
+        <div className="state-card__top">
+          <span className="state-card__label">
+            <StatusDot tone={deal.tone} />
+            {t(l.dict, 'deal.whereMoney.heading')}
+          </span>
+          <span className="mono faint">{deal.moneyStateCode}</span>
         </div>
-      </div>
-      <p className="where__amount">
         {hidden ? (
           <AmountSkeleton l={l} labelKey={`${base}.amountLabel`} />
-        ) : deal.moneyState === 'onAccountFx' && deal.foreignBalance !== null ? (
-          <Amount l={l} value={deal.foreignBalance} size="lead" labelKey={`${base}.amountLabel`} />
-        ) : deal.moneyState === 'partiallyFunded' && deal.shortfall !== null ? (
-          <>
-            <Amount l={l} value={deal.credited} size="lead" labelKey={`${base}.amountLabel`} />
-            <span className="faint">
-              {t(l.dict, 'deal.money.shortfall', { value: formatMoney(l.locale, deal.shortfall) })}
-            </span>
-          </>
         ) : (
           <Amount
             l={l}
-            value={deal.required}
-            size="lead"
+            value={heroAmount(deal)}
+            size="hero"
             unavailable={unavailable}
             labelKey={`${base}.amountLabel`}
           />
         )}
-      </p>
-      {deal.confirmationNo === null ? null : (
-        <p className="faint">
-          {t(l.dict, 'deal.confirmationNo')} <span className="mono">{deal.confirmationNo}</span>
-        </p>
-      )}
+        <h2 className="state-card__title" id="where-money">
+          {t(l.dict, `${base}.title`)}
+        </h2>
+        <p className="state-card__body">{t(l.dict, `${base}.body`, params)}</p>
+      </div>
+
+      <div className="state-card__inner">
+        <div>
+          <Eyebrow l={l} labelKey="deal.action.heading" />
+          <p className="state-card__title" style={{ marginBlockStart: 'var(--s-2)' }}>
+            {t(l.dict, action.titleKey, params)}
+          </p>
+        </div>
+
+        {action.kind === 'blocked' && action.ctaKey !== null && action.reasonKey !== null ? (
+          <BlockedAction l={l} labelKey={action.ctaKey} reasonKey={action.reasonKey} params={params} />
+        ) : null}
+
+        {action.kind === 'action' && action.ctaKey !== null ? (
+          <p className="actions">
+            <a
+              className="btn"
+              href={WITH_TOPUP.has(deal.trancheStatus) ? `/${l.locale}/topup/${deal.id}` : `/${l.locale}/security`}
+            >
+              {t(l.dict, action.ctaKey, params)}
+            </a>
+          </p>
+        ) : null}
+
+        {action.kind === 'dual' && action.ctaKey !== null && action.secondaryCtaKey !== null ? (
+          <p className="actions">
+            <a className="btn btn--secondary" href={`/${l.locale}/withdraw`}>
+              {t(l.dict, action.ctaKey, params)}
+            </a>
+            <a className="btn btn--secondary" href={`/${l.locale}/deals/new`}>
+              {t(l.dict, action.secondaryCtaKey, params)}
+            </a>
+          </p>
+        ) : null}
+
+        {WITH_DEADLINE.has(deal.trancheStatus) && deal.deadline !== null ? (
+          <div className="state-card__section">
+            <DeadlineTimer
+              l={l}
+              deadline={deal.deadline}
+              now={now}
+              operationsZone={operationsZone}
+              viewerZone={viewerZone}
+            />
+          </div>
+        ) : null}
+
+        {revocation === null ? null : (
+          <div className="state-card__section">
+            <LegalSlot
+              l={l}
+              bodyKey={revocation.key}
+              labelKey="deal.paying.revocation.label"
+              review={revocation.review}
+            />
+          </div>
+        )}
+
+        {deal.moneyState === 'frozen' ? (
+          <div className="state-card__section">
+            <LegalSlot l={l} bodyKey="deal.paying.where.frozen.disclosure" review="pending" />
+          </div>
+        ) : null}
+
+        {WITH_RESERVE_PROOF.has(deal.trancheStatus) && deal.confirmationNo !== null ? (
+          <div className="state-card__section">
+            <span className="faint">{t(l.dict, 'deal.confirmationNo')}</span>
+            <p className="actions">
+              <a className="chipbtn" href={`/${l.locale}/documents`}>
+                {t(l.dict, 'deal.reserveDoc')}
+              </a>
+              <span className="mono faint">{deal.confirmationNo}</span>
+            </p>
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }
 
-/** `C-02` — ровно одно требуемое действие либо явное ожидание с субъектом. */
-export function PrimaryActionBlock({ l, deal }: { readonly l: L10n; readonly deal: DealSnapshot }): ReactNode {
+/**
+ * `C-02` — ровно одно требуемое действие либо явное ожидание с субъектом.
+ *
+ * У получающей стороны блок стоит **над** карточкой подтверждения средств:
+ * ответ на «требуется ли что-то от меня» читается раньше суммы, иначе экран
+ * отвечает на второй вопрос прежде первого (приёмка `README.md`).
+ */
+export function RequiredActionCard({ l, deal }: { readonly l: L10n; readonly deal: DealSnapshot }): ReactNode {
   const action: RequiredAction = requiredAction(deal);
   const params = {
     counterparty: deal.counterpartyName,
-    amount: deal.shortfall === null ? formatMoney(l.locale, deal.required) : formatMoney(l.locale, deal.shortfall),
+    amount: formatMoney(l.locale, deal.required),
+    shortfall: deal.shortfall === null ? '' : formatMoney(l.locale, deal.shortfall),
   };
   return (
     <section className="card" aria-labelledby="required-action">
-      <h2 className="card__title" id="required-action">
-        {t(l.dict, 'deal.action.heading')}
+      <Eyebrow l={l} labelKey="deal.action.heading" />
+      <h2 className="state-card__title" id="required-action" style={{ marginBlockStart: 'var(--s-2)' }}>
+        {t(l.dict, action.titleKey, params)}
       </h2>
-      <p style={{ fontWeight: 600 }}>{t(l.dict, action.titleKey, params)}</p>
       {action.kind === 'blocked' && action.ctaKey !== null && action.reasonKey !== null ? (
         <div style={{ marginBlockStart: 'var(--s-3)' }}>
           <BlockedAction l={l} labelKey={action.ctaKey} reasonKey={action.reasonKey} params={params} />
@@ -90,18 +231,8 @@ export function PrimaryActionBlock({ l, deal }: { readonly l: L10n; readonly dea
       ) : null}
       {action.kind === 'action' && action.ctaKey !== null ? (
         <p className="actions" style={{ marginBlockStart: 'var(--s-3)' }}>
-          <a className="btn" href={`/${l.locale}/deals/${deal.id}`}>
+          <a className="btn" href={`/${l.locale}/requisites`}>
             {t(l.dict, action.ctaKey, params)}
-          </a>
-        </p>
-      ) : null}
-      {action.kind === 'dual' && action.ctaKey !== null && action.secondaryCtaKey !== null ? (
-        <p className="actions" style={{ marginBlockStart: 'var(--s-3)' }}>
-          <a className="btn btn--secondary" href={`/${l.locale}/account`}>
-            {t(l.dict, action.ctaKey, params)}
-          </a>
-          <a className="btn btn--secondary" href={`/${l.locale}/deals/${deal.id}`}>
-            {t(l.dict, action.secondaryCtaKey, params)}
           </a>
         </p>
       ) : null}
@@ -109,75 +240,124 @@ export function PrimaryActionBlock({ l, deal }: { readonly l: L10n; readonly dea
   );
 }
 
-const ROLLBACK_STATES = ['rollbackInProgress', 'releasedToAccount', 'refundInProgress', 'refunded'];
-
 /**
- * `C-04` — деньги: сумма сделки, что на счёте, комиссия, итог получателю.
+ * `C-04` — деньги по сделке. **Три модели итога, а не одна**
+ * (`IMPLEMENTATION.md` §2.1):
  *
- * У несостоявшейся сделки состав строк другой: комиссии нет — её берут за
- * исполненный расчёт, а расчёта не было. Показывать её в откате значит обещать
- * удержание, которого не будет.
+ * · расчёт — «К получению»: сумма сделки за вычетом комиссии;
+ * · возврат — «К возврату» или «Возвращено вам»: сумма сделки за вычетом
+ *   невозвратной комиссии за конвертацию; комиссия за организацию расчёта **не**
+ *   удерживается, потому что расчёта не было;
+ * · историческая справка — «Внесено по сделке»: обязательство закрыто по
+ *   истечении срока хранения, требования по сделке нет.
+ *
+ * Расшифровка скрыта до `collected`: считать нечего, пока деньги не собраны.
  */
 export function MoneyCard({ l, deal }: { readonly l: L10n; readonly deal: DealSnapshot }): ReactNode {
+  if (deal.trancheStatus === 'pending') return null;
+
   const hidden = deal.modifiers.quoteExpired;
-  const rollback = ROLLBACK_STATES.includes(deal.moneyState);
-  if (rollback) {
-    return (
-      <section className="card" aria-labelledby="money-card">
-        <h2 className="card__title" id="money-card">
-          {t(l.dict, 'deal.money.heading')}
-        </h2>
-        <div className="rows">
-          <Row l={l} labelKey="deal.money.dealAmount">
-            <Amount l={l} value={deal.required} size="muted" />
-          </Row>
-          <Row l={l} labelKey="deal.money.withheld">
-            <Amount l={l} value={{ currency: deal.required.currency, minor: 0n }} size="muted" />
-          </Row>
-          <Row l={l} labelKey="deal.money.returned" total>
-            <Amount l={l} value={deal.required} />
-          </Row>
-        </div>
-        <p className="muted" style={{ marginBlockStart: 'var(--s-3)' }}>
-          {t(l.dict, 'deal.money.rollbackNote')}
-        </p>
-      </section>
-    );
-  }
+  const refund = REFUND_MODEL.has(deal.trancheStatus);
+  const historical = deal.trancheStatus === 'written_off';
+  const fxFee = deal.conversion === null ? null : deal.conversion.fxFee;
+  const refundTotal = money(deal.required.currency, deal.required.minor - (fxFee?.minor ?? 0n));
+
+  const totalKey = historical
+    ? 'deal.money.total.historical'
+    : refund
+      ? deal.trancheStatus === 'refunded'
+        ? 'deal.money.total.returned'
+        : 'deal.money.total.toReturn'
+      : 'deal.money.total.payeeReceives';
+  const totalValue = historical ? deal.required : refund ? refundTotal : deal.payeeReceives;
+  const footnoteKey = historical
+    ? 'deal.money.note.historical'
+    : refund
+      ? 'deal.money.rollbackNote'
+      : 'deal.money.note.settlement';
+
   return (
     <section className="card" aria-labelledby="money-card">
-      <h2 className="card__title" id="money-card">
+      <div className="row" style={{ alignItems: 'flex-end' }}>
+        <span className="row__key">
+          <span className="amount-label">{t(l.dict, totalKey)}</span>
+        </span>
+        <span className="row__value">
+          {hidden ? <AmountSkeleton l={l} /> : <Amount l={l} value={totalValue} size="lead" />}
+        </span>
+      </div>
+      <h2 className="visually-hidden" id="money-card">
         {t(l.dict, 'deal.money.heading')}
       </h2>
-      <div className="rows">
-        <Row l={l} labelKey="deal.money.dealAmount">
-          {hidden ? <AmountSkeleton l={l} /> : <Amount l={l} value={deal.required} />}
-        </Row>
-        {deal.role === 'paying' ? (
-          <Row l={l} labelKey="deal.money.onAccount">
-            {hidden ? <AmountSkeleton l={l} /> : <Amount l={l} value={deal.credited} size="muted" />}
-          </Row>
-        ) : null}
-        {deal.locked.minor > 0n ? (
-          <Row l={l} labelKey="deal.money.reserved">
-            <Amount l={l} value={deal.locked} size="muted" />
-          </Row>
-        ) : null}
-        {deal.excess === null ? null : (
-          <Row l={l} labelKey="deal.money.excess">
-            <Amount l={l} value={deal.excess} size="muted" />
-          </Row>
-        )}
-        <Row l={l} labelKey="deal.money.fee">
-          {hidden ? <AmountSkeleton l={l} /> : <Amount l={l} value={deal.fee} size="muted" />}
-        </Row>
-        <Row l={l} labelKey="deal.money.payeeReceives" total>
-          {hidden ? <AmountSkeleton l={l} /> : <Amount l={l} value={deal.payeeReceives} />}
-        </Row>
-      </div>
-      <Disclosure l={l} summaryKey="deal.money.feeBreakdown.summary">
-        <p className="muted">{t(l.dict, 'deal.money.feeBreakdown.body')}</p>
-      </Disclosure>
+
+      {refund ? (
+        <LegalSlot l={l} bodyKey="deal.money.rollbackNote" />
+      ) : (
+        <p className="faint" style={{ marginBlockStart: 'var(--s-2)' }}>
+          {t(l.dict, footnoteKey)}
+        </p>
+      )}
+
+      {BEFORE_COLLECTED.has(deal.trancheStatus) ? null : (
+        <Disclosure l={l} summaryKey="deal.money.breakdown.summary">
+          <div className="rows">
+            {deal.conversion === null ? (
+              <p className="faint">{t(l.dict, 'deal.money.sameCurrency')}</p>
+            ) : (
+              <>
+                <Row l={l} labelKey="deal.money.youSent">
+                  <Amount l={l} value={deal.conversion.transfer} size="muted" />
+                </Row>
+                <Row l={l} labelKey="deal.money.rate">
+                  <span className="mono">
+                    {t(l.dict, 'deal.money.rate.value', {
+                      from: deal.conversion.transfer.currency,
+                      value: formatRate(l.locale, deal.conversion.rate, deal.dealCurrency),
+                    })}
+                  </span>
+                </Row>
+                <Row l={l} labelKey="deal.money.marketRate">
+                  <span className="mono">
+                    {t(l.dict, 'deal.money.rate.value', {
+                      from: deal.conversion.transfer.currency,
+                      value: formatRate(l.locale, deal.conversion.marketRate, deal.dealCurrency),
+                    })}
+                  </span>
+                </Row>
+                <Row l={l} labelKey="deal.money.feeFx">
+                  <Amount l={l} value={deal.conversion.fxFee} size="muted" />
+                </Row>
+              </>
+            )}
+
+            <Row l={l} labelKey="deal.money.dealAmount">
+              {hidden ? <AmountSkeleton l={l} /> : <Amount l={l} value={deal.required} size="muted" />}
+            </Row>
+
+            {deal.excess === null ? null : (
+              <Row l={l} labelKey="deal.money.excess">
+                <Amount l={l} value={deal.excess} size="muted" />
+              </Row>
+            )}
+            {deal.shortfall === null ? null : (
+              <Row l={l} labelKey="deal.money.shortfallRow">
+                <Amount l={l} value={deal.shortfall} size="muted" />
+              </Row>
+            )}
+
+            {refund || historical ? null : (
+              <Row l={l} labelKey="deal.money.fee">
+                {hidden ? <AmountSkeleton l={l} /> : <Amount l={l} value={deal.fee} size="muted" />}
+              </Row>
+            )}
+
+            <Row l={l} labelKey={totalKey} total>
+              {hidden ? <AmountSkeleton l={l} /> : <Amount l={l} value={totalValue} />}
+            </Row>
+          </div>
+        </Disclosure>
+      )}
+
       {hidden ? (
         <p className="muted" style={{ marginBlockStart: 'var(--s-3)' }}>
           {t(l.dict, 'deal.money.quoteExpired')}
@@ -187,28 +367,79 @@ export function MoneyCard({ l, deal }: { readonly l: L10n; readonly deal: DealSn
   );
 }
 
-/** `C-06` — лента сделки. Человеческим языком, не техническими статусами. */
+/**
+ * `C-06` — лента сделки. Семь вех, ветка возврата и вставки; у каждого шага
+ * плашка «кто держит мяч»: пока в ней не «вы», от клиента ничего не требуется.
+ */
 export function DealTimeline({ l, deal, viewerZone }: DealProps): ReactNode {
   const steps = buildTimeline(deal);
+  // Дата в подробности — дата события состояния, а не отметка вехи: у ветки
+  // возврата собственной вехи нет, а слот в тексте пустым быть не может.
+  const at = stateDate(deal);
+  const detailDate = at === null ? '' : formatDate(l.locale, at, viewerZone);
   return (
     <section className="card" aria-labelledby="timeline">
       <h2 className="card__title" id="timeline">
         {t(l.dict, 'deal.timeline.heading')}
       </h2>
+      <p className="faint" style={{ marginBlockEnd: 'var(--s-3)' }}>
+        {t(l.dict, 'deal.timeline.ballHint')}
+      </p>
       <ol className="timeline">
         {steps.map((step, index) => {
-          const tone = step.state === 'done' ? 'ok' : step.state === 'current' ? 'action' : step.state === 'missed' ? 'warn' : step.state === 'branch' ? 'warn' : 'wait';
+          const tone =
+            step.state === 'done'
+              ? 'ok'
+              : step.state === 'current'
+                ? 'action'
+                : step.state === 'missed'
+                  ? 'wait'
+                  : step.state === 'branch'
+                    ? 'refund'
+                    : 'wait';
           return (
-            <li className={`timeline__step timeline__step--${step.state}`} key={step.key}>
+            <li
+              className={`timeline__step timeline__step--${step.state}${step.kind === 'insert' ? ' timeline__step--insert' : ''}`}
+              key={`${step.kind}-${step.key}`}
+            >
               <span className="timeline__mark">
                 <StatusDot tone={tone} />
                 {index === steps.length - 1 ? null : <span className="timeline__line" />}
               </span>
               <span>
-                <span className="timeline__label">{t(l.dict, `deal.${deal.role}.timeline.${step.key}`)}</span>
-                <span className="visually-hidden">{t(l.dict, `deal.timeline.state.${step.state}`)}</span>
+                <span className="timeline__head">
+                  <span className="timeline__label">
+                    {t(
+                      l.dict,
+                      step.kind === 'insert'
+                        ? `deal.${deal.role}.timeline.${step.key}.insert`
+                        : `deal.${deal.role}.timeline.${step.key}`,
+                    )}
+                  </span>
+                  <span className="visually-hidden">{t(l.dict, `deal.timeline.state.${step.state}`)}</span>
+                  {step.ball === null ? null : (
+                    <span className={`ball${step.ball === 'you' ? ' ball--you' : ''}`}>
+                      {t(l.dict, `deal.ball.${step.ball}`)}
+                    </span>
+                  )}
+                </span>
+                {step.detailKey === null ? null : (
+                  <span className="timeline__detail">
+                    {t(l.dict, step.detailKey, {
+                      date: detailDate,
+                      amount: formatMoney(l.locale, deal.required),
+                      collected: formatMoney(l.locale, deal.credited),
+                      required: formatMoney(l.locale, deal.required),
+                      shortfall: deal.shortfall === null ? '' : formatMoney(l.locale, deal.shortfall),
+                      excess: deal.excess === null ? '' : formatMoney(l.locale, deal.excess),
+                      confirmationNo: deal.confirmationNo ?? '',
+                      applicationNo: deal.applicationId ?? '',
+                      caseId: deal.ref,
+                    })}
+                  </span>
+                )}
                 {step.at === null ? null : (
-                  <span className="timeline__meta"> {formatDate(l.locale, step.at, viewerZone)}</span>
+                  <span className="timeline__meta">{formatDate(l.locale, step.at, viewerZone)}</span>
                 )}
               </span>
             </li>
@@ -224,30 +455,62 @@ export function DealTimeline({ l, deal, viewerZone }: DealProps): ReactNode {
   );
 }
 
-/** `C-07` — объект: реестр против договора. Расхождение блокирует переход дальше. */
-export function PropertyCard({ l, deal, viewerZone }: DealProps): ReactNode {
+/**
+ * `C-07` + `C-10` — объект и стороны под раскрытием: факты, которые читают один
+ * раз, не занимают первый экран. Расхождение реестра с договором раскрывается
+ * само: оно блокирует переход дальше.
+ */
+export function PropertyAndParties({ l, deal, viewerZone }: DealProps): ReactNode {
+  const counterpartyRoleKey = deal.role === 'paying' ? 'deal.parties.role.recipient' : 'deal.parties.role.payer';
   return (
-    <section className="card" aria-labelledby="property">
-      <h2 className="card__title" id="property">
-        {t(l.dict, 'deal.property.heading')}
-      </h2>
-      <div className="rows">
-        <Row l={l} labelKey="deal.property.address">
-          <span>{deal.property.address}</span>
-        </Row>
-        <Row l={l} labelKey="deal.property.addressLatin">
-          <span>{deal.property.addressLatin}</span>
-        </Row>
-        <Row l={l} labelKey="deal.property.cadastral">
-          <span className="mono">{deal.property.cadastral}</span>
-        </Row>
-        <Row l={l} labelKey="deal.property.owner">
-          <span>{deal.property.ownerRegistry}</span>
-        </Row>
-        <Row l={l} labelKey="deal.property.extract">
-          <span>{formatDate(l.locale, deal.property.extractAt, viewerZone)}</span>
-        </Row>
-      </div>
+    <section className="card">
+      <Disclosure l={l} summaryKey="deal.property.heading">
+        <div className="split">
+          <div className="rows">
+            <Row l={l} labelKey="deal.property.address">
+              <span>{deal.property.address}</span>
+            </Row>
+            <Row l={l} labelKey="deal.property.addressLatin">
+              <span>{deal.property.addressLatin}</span>
+            </Row>
+            <Row l={l} labelKey="deal.property.cadastral">
+              <span className="mono">{deal.property.cadastral}</span>
+            </Row>
+            <Row l={l} labelKey="deal.property.area">
+              <span className="mono">{deal.property.areaRegistry}</span>
+            </Row>
+            <Row l={l} labelKey="deal.property.owner">
+              <span>{deal.property.ownerRegistry}</span>
+            </Row>
+            <Row l={l} labelKey="deal.property.extract">
+              <span>{formatDate(l.locale, deal.property.extractAt, viewerZone)}</span>
+            </Row>
+          </div>
+          <div className="rows">
+            <Row l={l} labelKey="deal.parties.you">
+              <Badge tone="ok" label={t(l.dict, 'deal.parties.verified')} />
+            </Row>
+            <Row l={l} labelKey={counterpartyRoleKey}>
+              <span>{deal.counterpartyName}</span>
+            </Row>
+            <Row l={l} labelKey="deal.docs.contract">
+              <a href={`/${l.locale}/documents`}>{t(l.dict, 'deal.docs.open')}</a>
+            </Row>
+            {deal.applicationId === null ? null : (
+              <Row l={l} labelKey="deal.docs.application">
+                <span className="mono">{deal.applicationId}</span>
+              </Row>
+            )}
+          </div>
+        </div>
+        <p className="faint" style={{ marginBlockStart: 'var(--s-3)' }}>
+          {t(l.dict, 'deal.property.registryNote', {
+            date: formatDate(l.locale, deal.property.extractAt, viewerZone),
+          })}
+        </p>
+        <p className="faint">{t(l.dict, 'deal.docs.watermarkNotice')}</p>
+      </Disclosure>
+
       {deal.property.hasMismatch ? (
         <div style={{ marginBlockStart: 'var(--s-4)' }}>
           <table className="compare">
@@ -276,41 +539,10 @@ export function PropertyCard({ l, deal, viewerZone }: DealProps): ReactNode {
   );
 }
 
-/** `C-10` — стороны с уровнем проверки и документы. Персональных данных нет. */
-export function PartiesAndDocs({ l, deal }: { readonly l: L10n; readonly deal: DealSnapshot }): ReactNode {
-  const counterpartyRoleKey = deal.role === 'paying' ? 'deal.parties.role.recipient' : 'deal.parties.role.payer';
-  return (
-    <section className="card" aria-labelledby="parties">
-      <h2 className="card__title" id="parties">
-        {t(l.dict, 'deal.parties.heading')}
-      </h2>
-      <div className="rows">
-        <Row l={l} labelKey="deal.parties.you">
-          <Badge tone="ok" label={t(l.dict, 'deal.parties.verified')} />
-        </Row>
-        <Row l={l} labelKey={counterpartyRoleKey}>
-          <span>{deal.counterpartyName}</span>
-        </Row>
-      </div>
-      <hr className="rule" />
-      <div className="rows">
-        <Row l={l} labelKey="deal.docs.contract">
-          <a href={`/${l.locale}/deals/${deal.id}`}>{t(l.dict, 'deal.docs.open')}</a>
-        </Row>
-        {deal.applicationId === null ? null : (
-          <Row l={l} labelKey="deal.docs.application">
-            <span className="mono">{deal.applicationId}</span>
-          </Row>
-        )}
-      </div>
-      <p className="faint" style={{ marginBlockStart: 'var(--s-2)' }}>
-        {t(l.dict, 'deal.docs.watermarkNotice')}
-      </p>
-    </section>
-  );
-}
-
-/** `C-08` — лестница подтверждения `A0…A4`. Уровень не называется гарантией. */
+/**
+ * `C-08` — лестница подтверждения `A0…A4`. Уровень не называется гарантией ни в
+ * одном состоянии, и это сказано прямым текстом, а не подразумевается.
+ */
 export function AssuranceLadder({ l, deal }: { readonly l: L10n; readonly deal: DealSnapshot }): ReactNode {
   const levels = ['A0', 'A1', 'A2', 'A3', 'A4'] as const;
   const currentIndex = levels.indexOf(deal.assurance);
@@ -319,7 +551,19 @@ export function AssuranceLadder({ l, deal }: { readonly l: L10n; readonly deal: 
       <h2 className="card__title" id="ladder">
         {t(l.dict, 'assurance.ladder.heading')}
       </h2>
-      <ol className="ladder">
+      <div className="ladder" role="presentation">
+        {levels.slice(1).map((level, index) => (
+          <span className={`ladder__bar${index < currentIndex ? ' ladder__bar--done' : ''}`} key={level} />
+        ))}
+      </div>
+      <p className="visually-hidden">
+        {t(l.dict, 'assurance.ladder.a11y', {
+          level: String(currentIndex),
+          total: String(levels.length - 1),
+          name: t(l.dict, `assurance.level.${deal.assurance}`),
+        })}
+      </p>
+      <ol className="ladder__list">
         {levels.map((level, index) => (
           <li
             className={`ladder__step${index < currentIndex ? ' ladder__step--done' : ''}${index === currentIndex ? ' ladder__step--current' : ''}`}
@@ -332,7 +576,155 @@ export function AssuranceLadder({ l, deal }: { readonly l: L10n; readonly deal: 
         ))}
       </ol>
       <p className="muted" style={{ marginBlockStart: 'var(--s-3)' }}>
-        {t(l.dict, 'assurance.ladder.note', { level: String(currentIndex), total: String(levels.length - 1) })}
+        {t(l.dict, `assurance.level.${deal.assurance}.hint`, { bank: t(l.dict, 'glossary.custodian') })}
+      </p>
+      <p className="faint" style={{ marginBlockStart: 'var(--s-2)' }}>
+        {t(l.dict, 'assurance.ladder.note', {
+          level: String(currentIndex),
+          total: String(levels.length - 1),
+        })}
+      </p>
+    </section>
+  );
+}
+
+/**
+ * `C-37` — карточка подтверждения средств. Центральный элемент вида получателя.
+ *
+ * Граница обещания названа первой строкой ⚖-слота, а не смягчена преамбулой:
+ * продавец, который узнает об отзывности от юриста, а не от нас, больше не
+ * вернётся (`DRAFT-money.md` §5 `M-09`).
+ */
+export function AssuranceCard({
+  l,
+  deal,
+  now,
+  operationsZone,
+  viewerZone,
+  verifyUrl,
+}: DealProps & { readonly verifyUrl: string }): ReactNode {
+  const base = `assurance.state.${deal.moneyState}`;
+  const reserved = deal.moneyState === 'reserved' || deal.moneyState === 'submitted';
+  const tone = deal.moneyState === 'released' ? 'ok' : reserved ? 'ok' : deal.moneyState === 'frozen' ? 'danger' : 'wait';
+  const variant = deal.moneyState === 'released' || reserved ? '' : deal.moneyState === 'frozen' ? ' assurance--stopped' : ' assurance--pending';
+  const params = {
+    bank: t(l.dict, 'glossary.custodian'),
+    payout: formatMoney(l.locale, deal.payeeReceives),
+    applicationNo: deal.applicationId ?? '',
+    requisitesMasked: t(l.dict, 'assurance.youReceive.payoutVerified'),
+    deadline:
+      deal.deadline === null || deal.deadline.at === null
+        ? ''
+        : formatDateTime(l.locale, deal.deadline.at, operationsZone),
+    date: deal.reservedAt === null ? '' : formatDate(l.locale, deal.reservedAt, viewerZone),
+  };
+  return (
+    <section className={`assurance${variant}`} aria-labelledby="assurance">
+      <div className="assurance__head">
+        <StatusDot tone={tone} />
+        <div>
+          {/* Заголовок карточки — h2: единственный h1 на экране это адрес
+              объекта в шапке, и второй h1 ломает оглавление скринридера. */}
+          <h2 className="state-card__title" id="assurance">
+            {t(l.dict, `${base}.title`)}
+          </h2>
+          <p className="muted" style={{ marginBlockStart: 'var(--s-2)' }}>
+            {t(l.dict, `${base}.subtitle`, params)}
+          </p>
+        </div>
+      </div>
+
+      <div className="assurance__hero">
+        <Amount l={l} value={deal.required} size="hero" labelKey="assurance.amountLabel" />
+        {deal.reservedAt === null ? null : (
+          <span className="faint">
+            {t(l.dict, 'assurance.reservedAt', {
+              value: formatDateTime(l.locale, deal.reservedAt, operationsZone),
+            })}
+          </span>
+        )}
+        {deal.confirmationNo === null ? null : (
+          <span className="faint">
+            {t(l.dict, 'assurance.confirmationNo', { value: deal.confirmationNo })}
+          </span>
+        )}
+      </div>
+
+      {deal.moneyState === 'releasePending' ? (
+        <LegalSlot l={l} bodyKey="assurance.revocationClosed" review="pending" />
+      ) : null}
+
+      <hr className="rule" />
+      <h2>{t(l.dict, 'assurance.whereMoney.title')}</h2>
+      <p className="muted">{t(l.dict, 'assurance.whereMoney.body', params)}</p>
+      <p className="muted" style={{ marginBlockStart: 'var(--s-2)' }}>
+        {t(l.dict, 'assurance.whereMoney.meaning')}
+      </p>
+      <p className="muted" style={{ marginBlockStart: 'var(--s-2)' }}>
+        {t(l.dict, 'assurance.whereMoney.onRevoked')}
+      </p>
+
+      <hr className="rule" />
+      <h2>{t(l.dict, 'assurance.outcomes.title')}</h2>
+      <ul className="outcomes" style={{ marginBlockStart: 'var(--s-3)' }}>
+        <li className="outcome">
+          <span className="outcome__title">{t(l.dict, 'assurance.outcomes.registered.title')}</span>
+          <span className="outcome__body">{t(l.dict, 'assurance.outcomes.registered.body')}</span>
+          <Amount l={l} value={deal.payeeReceives} size="lead" labelKey="assurance.outcomes.registered.amountLabel" />
+        </li>
+        <li className="outcome">
+          <span className="outcome__title">{t(l.dict, 'assurance.outcomes.notRegistered.title')}</span>
+          <span className="outcome__body">{t(l.dict, 'assurance.outcomes.notRegistered.body')}</span>
+          {/* Сумма названа и здесь: карточка, где крупная цифра стоит только у
+              хорошего исхода, читается как реклама, а не как описание. */}
+          <Amount l={l} value={deal.required} size="lead" labelKey="assurance.outcomes.notRegistered.amountLabel" />
+          <span className="outcome__body">{t(l.dict, 'assurance.outcomes.notRegistered.retry')}</span>
+        </li>
+      </ul>
+
+      <hr className="rule" />
+      <h2>{t(l.dict, 'assurance.youReceive.title')}</h2>
+      <div className="rows" style={{ marginBlockStart: 'var(--s-3)' }}>
+        <Row l={l} labelKey="assurance.youReceive.dealAmount">
+          <Amount l={l} value={deal.required} size="muted" />
+        </Row>
+        <Row l={l} labelKey="assurance.youReceive.fee">
+          <Amount l={l} value={deal.fee} size="muted" />
+        </Row>
+        <Row l={l} labelKey="assurance.youReceive.total" total>
+          <Amount l={l} value={deal.payeeReceives} />
+        </Row>
+      </div>
+      <p className="faint" style={{ marginBlockStart: 'var(--s-2)' }}>
+        {t(l.dict, 'assurance.youReceive.note')}
+      </p>
+
+      {deal.deadline === null ? null : (
+        <>
+          <hr className="rule" />
+          <DeadlineTimer
+            l={l}
+            deadline={deal.deadline}
+            now={now}
+            operationsZone={operationsZone}
+            viewerZone={viewerZone}
+          />
+        </>
+      )}
+
+      <hr className="rule" />
+      <h2>{t(l.dict, 'assurance.limits.title')}</h2>
+      <LegalSlot l={l} bodyKey="assurance.limits" params={{ date: formatDate(l.locale, deal.reservedAt ?? now, viewerZone), amount: formatMoney(l.locale, deal.required) }} />
+      <p className="actions" style={{ marginBlockStart: 'var(--s-4)' }}>
+        <a className="btn btn--secondary" href={`/${l.locale}/documents`}>
+          {t(l.dict, 'assurance.download')}
+        </a>
+        <a className="btn btn--ghost" href={`/${l.locale}/security`}>
+          {t(l.dict, 'assurance.verify')}
+        </a>
+      </p>
+      <p className="faint" style={{ marginBlockStart: 'var(--s-2)' }}>
+        {t(l.dict, 'assurance.verify.note', { verifyUrl })}
       </p>
     </section>
   );
@@ -352,117 +744,11 @@ export function MaskedAccount({
 }): ReactNode {
   return (
     <span>
-      <span className="mono">{iban}</span>{' '}
-      <span>{holder}</span>{' '}
+      <span className="mono">{iban}</span> <span>{holder}</span>{' '}
       <Badge
         tone={verified ? 'ok' : 'warn'}
         label={t(l.dict, verified ? 'requisites.verified' : 'requisites.unverified')}
       />
     </span>
-  );
-}
-
-/**
- * `C-37` — карточка подтверждения средств. Центральный элемент вида получателя.
- *
- * ⚠ Здесь исправлена формулировка `CABINETS.md` §4.1. Документ предлагает
- * сказать получателю «деньги не у покупателя», но по решению №5 и Ф6 средства
- * до расчёта остаются собственностью вносящей стороны и **отзывны**
- * (`ROADMAP.md` И5.2). Карточка обязана назвать эту границу прямо: иначе самый
- * честный экран продукта оказывается единственным, где мы вводим в заблуждение.
- */
-export function FundsAssuranceCard({ l, deal, now, operationsZone, viewerZone }: DealProps): ReactNode {
-  const reserved = deal.moneyState === 'reserved' || deal.moneyState === 'submitted';
-  const tone = deal.moneyState === 'released' ? 'ok' : reserved ? 'ok' : 'wait';
-  const variant =
-    deal.moneyState === 'released' || reserved ? '' : deal.moneyState === 'frozen' ? ' assurance--stopped' : ' assurance--pending';
-  const base = `assurance.state.${deal.moneyState}`;
-  return (
-    <section className={`assurance${variant}`} aria-labelledby="assurance">
-      <div className="where__head">
-        <StatusDot tone={tone} />
-        <div>
-          <h1 id="assurance">{t(l.dict, `${base}.title`)}</h1>
-          <p className="muted">{t(l.dict, `${base}.subtitle`)}</p>
-        </div>
-      </div>
-
-      <div className="assurance__hero">
-        <Amount l={l} value={deal.required} size="hero" labelKey="assurance.amountLabel" />
-        {deal.reservedAt === null ? null : (
-          <span className="faint">
-            {t(l.dict, 'assurance.reservedAt', {
-              value: formatDateTime(l.locale, deal.reservedAt, operationsZone),
-            })}
-          </span>
-        )}
-        {deal.confirmationNo === null ? null : (
-          <span className="faint">
-            {t(l.dict, 'deal.confirmationNo')} <span className="mono">{deal.confirmationNo}</span>
-          </span>
-        )}
-      </div>
-
-      <hr className="rule" />
-      <h2>{t(l.dict, 'assurance.whereMoney.title')}</h2>
-      <p className="muted">{t(l.dict, 'assurance.whereMoney.body', { bank: t(l.dict, 'glossary.custodian') })}</p>
-      <p className="muted">{t(l.dict, 'assurance.whereMoney.revocable')}</p>
-
-      <hr className="rule" />
-      <h2>{t(l.dict, 'assurance.outcomes.title')}</h2>
-      <ul className="outcomes">
-        <li className="outcome">
-          <span className="outcome__title">{t(l.dict, 'assurance.outcomes.registered.title')}</span>
-          <span className="outcome__body">{t(l.dict, 'assurance.outcomes.registered.body')}</span>
-          <Amount l={l} value={deal.payeeReceives} size="lead" labelKey="assurance.outcomes.registered.amountLabel" />
-        </li>
-        <li className="outcome">
-          <span className="outcome__title">{t(l.dict, 'assurance.outcomes.notRegistered.title')}</span>
-          <span className="outcome__body">{t(l.dict, 'assurance.outcomes.notRegistered.body')}</span>
-          {/* Сумма названа и здесь: карточка, где крупная цифра стоит только у
-              хорошего исхода, читается как реклама, а не как описание. */}
-          <Amount l={l} value={deal.required} size="lead" labelKey="assurance.outcomes.notRegistered.amountLabel" />
-          <span className="outcome__body">{t(l.dict, 'assurance.outcomes.notRegistered.retry')}</span>
-        </li>
-      </ul>
-
-      <hr className="rule" />
-      <h2>{t(l.dict, 'assurance.youReceive.title')}</h2>
-      <div className="rows">
-        <Row l={l} labelKey="deal.money.dealAmount">
-          <Amount l={l} value={deal.required} />
-        </Row>
-        <Row l={l} labelKey="deal.money.fee">
-          <Amount l={l} value={deal.fee} size="muted" />
-        </Row>
-        <Row l={l} labelKey="assurance.youReceive.total" total>
-          <Amount l={l} value={deal.payeeReceives} />
-        </Row>
-      </div>
-
-      {deal.deadline === null ? null : (
-        <>
-          <hr className="rule" />
-          <DeadlineTimer
-            l={l}
-            deadline={deal.deadline}
-            now={now}
-            operationsZone={operationsZone}
-            viewerZone={viewerZone}
-          />
-        </>
-      )}
-
-      <hr className="rule" />
-      <p className="muted">{t(l.dict, 'assurance.limits')}</p>
-      <p className="actions" style={{ marginBlockStart: 'var(--s-3)' }}>
-        <a className="btn btn--secondary" href={`/${l.locale}/deals/${deal.id}`}>
-          {t(l.dict, 'assurance.download')}
-        </a>
-        <a className="btn btn--ghost" href={`/${l.locale}/security`}>
-          {t(l.dict, 'assurance.verify')}
-        </a>
-      </p>
-    </section>
   );
 }

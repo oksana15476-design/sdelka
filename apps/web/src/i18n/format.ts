@@ -152,6 +152,17 @@ export function formatPercent(locale: Locale, value: number): string {
   }).format(value);
 }
 
+/**
+ * Покрытие — отношение, а не процент: цель ровно единица, и четыре знака после
+ * запятой здесь несут смысл (`FUNCTIONAL.md`, красная линия №3).
+ */
+export function formatRatio(locale: Locale, value: number): string {
+  return new Intl.NumberFormat(LOCALE_TAG[locale], {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  }).format(value);
+}
+
 export function formatNumber(locale: Locale, value: number): string {
   return new Intl.NumberFormat(LOCALE_TAG[locale]).format(value);
 }

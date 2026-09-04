@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@sdelka/domain": "workspace:*",
+    "@sdelka/intake": "workspace:*",
     "@sdelka/ledger": "workspace:*",
     "@sdelka/money": "workspace:*",
     "next": "15.1.3",

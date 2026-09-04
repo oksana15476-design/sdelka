@@ -4,8 +4,9 @@ import { isLocale } from '@/i18n/locales';
 import { dictionaryOf, t } from '@/i18n/translate';
 import { formatDate, formatDateTime, formatRemaining } from '@/i18n/format';
 import { type PerimeterState, PERIMETER_STATES, getRequisites, now, viewerTimeZone } from '@/fixtures/store';
+import { beneficiaryFacts } from '@/fixtures/screens';
 import { OPERATIONS_TIME_ZONE } from '@/fixtures/engine';
-import { Badge, BlockedAction, SecurityBlock, StatusDot } from '@/ui/primitives';
+import { Badge, BlockedAction, Eyebrow, Row, SecurityBlock, StatusDot } from '@/ui/primitives';
 
 function perimeterOf(value: string | undefined): PerimeterState {
   return PERIMETER_STATES.find((state) => state === value) ?? 'P-07';
@@ -15,11 +16,17 @@ function perimeterOf(value: string | undefined): PerimeterState {
  * Экран 5 — реквизиты выплаты. Защитный периметр, а не форма.
  *
  * Здесь трение — функция, а не дефект: подмена реквизитов самый вероятный
- * сценарий атаки (`CABINETS.md` §0.3). Отсюда три решения экрана:
- * имя владельца счёта **не вводится** — оно берётся из проверки личности и
- * показывается нередактируемым; экран всегда говорит, что сейчас запрещено и
- * почему, а не только показывает поля; блок безопасности стоит над реквизитами,
- * а не в подвале.
+ * сценарий атаки (`CABINETS.md` §0.3). Отсюда три решения экрана: имя владельца
+ * счёта **не вводится** — оно берётся из проверки личности; экран всегда
+ * говорит, что сейчас запрещено и почему; блок безопасности стоит над
+ * реквизитами, а не в подвале.
+ *
+ * Состояния периметра `P-*` — экранные. Рядом с ними показан статус из
+ * `packages/domain/src/beneficiary.ts` (`draft · name_consistent · verified ·
+ * blocked`) и два отдельных факта — «заперто» и «идёт охлаждение». В макете
+ * они сведены в один перечень из шести значений; расхождение разрешено в пользу
+ * кода, потому что заперты бывают и проверенные реквизиты, а охлаждение идёт
+ * поверх любого статуса.
  */
 export default async function RequisitesPage({
   params,
@@ -34,15 +41,22 @@ export default async function RequisitesPage({
   const state = perimeterOf(typeof query.state === 'string' ? query.state : undefined);
   const l = { dict: dictionaryOf(locale), locale };
   const view = await getRequisites(state);
+  const facts = beneficiaryFacts(state);
   const viewerZone = viewerTimeZone();
   const currentTime = now();
 
   const tone =
-    state === 'P-03' || state === 'P-10' ? 'danger' : state === 'P-09' || state === 'P-07' ? 'warn' : state === 'P-06' ? 'ok' : 'info';
+    state === 'P-03' || state === 'P-10'
+      ? 'danger'
+      : state === 'P-09' || state === 'P-07'
+        ? 'warn'
+        : state === 'P-06'
+          ? 'ok'
+          : 'info';
   const editable = state === 'P-01' || state === 'P-06';
 
   return (
-    <div className="shell stack--loose stack">
+    <>
       <div className="pagehead">
         <h1>{t(l.dict, 'requisites.title')}</h1>
         <p className="pagehead__note">{t(l.dict, 'requisites.subtitle')}</p>
@@ -50,29 +64,65 @@ export default async function RequisitesPage({
 
       <SecurityBlock l={l} variant="inline" />
 
-      <section className={`card where where--${tone}`} aria-labelledby="perimeter">
-        <div className="where__head">
-          <StatusDot tone={tone} />
-          <div>
-            <h2 className="where__title" id="perimeter">
-              {t(l.dict, `requisites.state.${state}.title`)}
-            </h2>
-            <p className="where__body">
-              {t(l.dict, `requisites.state.${state}.body`, {
-                deal: view.lockedByDealRef ?? '',
-                attempts: view.attemptsLeft,
-              })}
-            </p>
+      <section className={`state-card state-card--${tone}`} aria-labelledby="perimeter">
+        <div className="state-card__head">
+          <div className="state-card__top">
+            <span className="state-card__label">
+              <StatusDot tone={tone} />
+              {t(l.dict, 'requisites.perimeter')}
+            </span>
+            <span className="mono faint">{state}</span>
           </div>
-        </div>
-        {view.coolingUntil === null ? null : (
-          <p className="faint" style={{ marginBlockStart: 'var(--s-3)' }}>
-            {t(l.dict, 'requisites.cooling.until', {
-              value: formatDateTime(locale, view.coolingUntil, OPERATIONS_TIME_ZONE),
-              remaining: formatRemaining(locale, view.coolingUntil - currentTime),
+          <h2 className="state-card__title" id="perimeter">
+            {t(l.dict, `requisites.state.${state}.title`)}
+          </h2>
+          <p className="state-card__body">
+            {t(l.dict, `requisites.state.${state}.body`, {
+              deal: view.lockedByDealRef ?? '',
+              attempts: view.attemptsLeft,
             })}
           </p>
-        )}
+        </div>
+        <div className="state-card__inner">
+          <div className="rows">
+            <Row l={l} labelKey="requisites.domainStatus">
+              <span className="mono">{facts.status}</span>
+            </Row>
+            <Row l={l} labelKey="requisites.domainLocked">
+              <Badge
+                tone={facts.locked ? 'warn' : 'ok'}
+                label={t(l.dict, facts.locked ? 'common.yes' : 'common.no')}
+              />
+            </Row>
+            <Row l={l} labelKey="requisites.domainCooling">
+              <Badge
+                tone={facts.cooling ? 'warn' : 'ok'}
+                label={t(l.dict, facts.cooling ? 'common.yes' : 'common.no')}
+              />
+            </Row>
+          </div>
+          {view.coolingUntil === null ? null : (
+            <p className="faint">
+              {t(l.dict, 'requisites.cooling.until', {
+                value: formatDateTime(locale, view.coolingUntil, OPERATIONS_TIME_ZONE),
+                remaining: formatRemaining(locale, view.coolingUntil - currentTime),
+              })}
+            </p>
+          )}
+        </div>
+      </section>
+
+      <section className="card card--quiet">
+        <Eyebrow l={l} labelKey="requisites.why.title" />
+        <p className="muted" style={{ marginBlockStart: 'var(--s-2)' }}>
+          {t(l.dict, 'requisites.why.body')}
+        </p>
+        <p className="muted" style={{ marginBlockStart: 'var(--s-2)' }}>
+          {t(l.dict, 'requisites.why.symmetry', { hours: 48 })}
+        </p>
+        <p className="faint" style={{ marginBlockStart: 'var(--s-2)' }}>
+          {t(l.dict, 'requisites.why.note')}
+        </p>
       </section>
 
       <section className="card" aria-labelledby="current">
@@ -143,6 +193,9 @@ export default async function RequisitesPage({
           <p className="faint" aria-live="polite" style={{ marginBlockStart: 'var(--s-3)' }}>
             {t(l.dict, 'requisites.test.attemptsLeft', { attempts: view.attemptsLeft })}
           </p>
+          <p className="muted" style={{ marginBlockStart: 'var(--s-2)' }}>
+            {t(l.dict, 'requisites.test.notArrived')}
+          </p>
         </section>
       ) : null}
 
@@ -150,6 +203,9 @@ export default async function RequisitesPage({
         <section className="card">
           <h2 className="card__title">{t(l.dict, 'requisites.notMe.title')}</h2>
           <p className="muted">{t(l.dict, 'requisites.notMe.body')}</p>
+          <p className="faint" style={{ marginBlockStart: 'var(--s-2)' }}>
+            {t(l.dict, 'requisites.notified')}
+          </p>
           <p className="actions" style={{ marginBlockStart: 'var(--s-3)' }}>
             <a className="btn" href={`/${locale}/security`}>
               {t(l.dict, 'requisites.notMe.cta')}
@@ -188,6 +244,6 @@ export default async function RequisitesPage({
           </a>
         ))}
       </nav>
-    </div>
+    </>
   );
 }

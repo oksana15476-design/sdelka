@@ -1916,9 +1916,15 @@ a:hover {
 
 @container (min-width: 720px) {
   .cmp__row {
-    grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr) 84px;
+    /* Вердикт не обрезается: колонка растёт по слову, а не режет его. */
+    grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr) minmax(84px, auto);
     align-items: baseline;
   }
+}
+
+.cmp__row > * {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
 }
 
 .cmp__row--head {

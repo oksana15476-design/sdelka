@@ -96,6 +96,33 @@ function ballOf(deal: DealSnapshot, step: (typeof MAIN_STEPS)[number]): BallHold
   }
 }
 
+/**
+ * Дата, которую подставляет подробность шага.
+ *
+ * Берётся по **состоянию**, а не по номеру вехи: подробность говорит о том, что
+ * произошло с деньгами, и её дата — дата этого события. Если отметки по состоянию
+ * нет, берётся последняя известная; пустой слот в подстановке недопустим —
+ * «Зачислено  · 217 000,00» выглядит как потерянные данные.
+ */
+export function stateDate(deal: DealSnapshot): number | null {
+  const byState: Readonly<Partial<Record<MoneyState, TrancheMarkStatus>>> = {
+    onAccountFx: 'collected',
+    onAccount: 'collected',
+    partiallyFunded: 'collecting',
+    overfunded: 'collected',
+    reserved: 'reserved',
+    submitted: 'reserved',
+    releasePending: 'release_pending',
+    payoutUnknown: 'paying_out',
+    released: 'paid_out',
+  };
+  const wanted = byState[deal.moneyState];
+  const own = wanted === undefined ? undefined : deal.marks.find((mark) => mark.status === wanted);
+  return own?.at ?? deal.marks.at(-1)?.at ?? null;
+}
+
+type TrancheMarkStatus = DealSnapshot['marks'][number]['status'];
+
 function markAt(deal: DealSnapshot, index: number): number | null {
   const order = ['collected', 'reserved', 'release_pending', 'paid_out'] as const;
   const status = order[index];
@@ -123,7 +150,10 @@ export function buildTimeline(deal: DealSnapshot): readonly TimelineStep[] {
               ? markAt(deal, 3)
               : null;
     const ball = ballOf(deal, key);
-    if (rollback && index >= 5) {
+    // В ветке возврата вехи после резерва не пройдены и текущими не становятся:
+    // движение ушло в ветку, и «текущий шаг» живёт там. Иначе лента говорит,
+    // что документы подаются, а рядом — что деньги возвращаются.
+    if (rollback && index >= 4) {
       return { key, kind: 'step', state: 'missed', at: null, ball: null, detailKey: null };
     }
     if (index < reached) {
