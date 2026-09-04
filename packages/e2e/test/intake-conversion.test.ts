@@ -46,6 +46,13 @@ const TRANCHE = 'tranche-fx-quote';
 const MARKET_MOVED = rational(262n, 100n);
 
 /**
+ * Наблюдённый рынок — голая дробь: у котировки и у наблюдения `@sdelka/intake`
+ * сравнивает **множители** одной и той же пары, а пару держит сам курс
+ * (`FX_RATES.reference.base`/`.quote`). Отсюда `.value` на границе с котировкой.
+ */
+const REFERENCE_RATE = FX_RATES.reference.value;
+
+/**
  * Сценарий — конвертация с сорванной котировкой.
  *
  * Разрыв, ради которого он написан, лежит между двумя обещаниями: экран
@@ -88,7 +95,7 @@ describe('конвертация с сорванной котировкой', ()
     expect(disclosedMarkupBp(FX_RATES)).toBeGreaterThan(0);
 
     // --- Рынок ушёл ---
-    expect(marketDriftBp(FX_RATES.reference, MARKET_MOVED)).toBeGreaterThanOrEqual(
+    expect(marketDriftBp(REFERENCE_RATE, MARKET_MOVED)).toBeGreaterThanOrEqual(
       POLICY.quote.driftThreshold.valueBp,
     );
     const voided = quoteStatus(first, MARKET_MOVED, NOW);
@@ -135,7 +142,7 @@ describe('конвертация с сорванной котировкой', ()
       },
       POLICY,
     );
-    const staleConsent = decideConversion(second, FX_RATES.reference, confirmationForFirst, later, 'trunc');
+    const staleConsent = decideConversion(second, REFERENCE_RATE, confirmationForFirst, later, 'trunc');
     // Ровно тот молчаливый пересчёт, который §4.5 называет прямым путём к спору:
     // согласие «вообще» позволило бы применить прежний ответ к новому курсу.
     expect(staleConsent.allowed).toBe(false);
@@ -143,7 +150,7 @@ describe('конвертация с сорванной котировкой', ()
 
     const decision = decideConversion(
       second,
-      FX_RATES.reference,
+      REFERENCE_RATE,
       { quoteId: 'quote-2', confirmedAt: later, partyId: BUYER.partyId },
       later,
       'trunc',
@@ -152,7 +159,10 @@ describe('конвертация с сорванной котировкой', ()
     expect(decision.converted?.target.minor).toBe(20_000_000n);
 
     // --- Только теперь деньги двигаются ---
-    const converted = convertBalance(world, opened.buyerKey, DEAL_AMOUNT_USD, GEL, FX_RATES, CREATED_ON);
+    // Целевой валюты в аргументах нет: её несёт курс. И это **два шага мира**,
+    // а не один: между ними доллары клиента лежат на `fx:settlement` — у
+    // валютного контрагента, — и промежуток обязан проходить инварианты.
+    const converted = convertBalance(world, opened.buyerKey, DEAL_AMOUNT_USD, FX_RATES, CREATED_ON);
     world = converted.world;
     expect(accountBalance(world.journal, clientFreeAccount(opened.buyerKey), USD).minor).toBe(0n);
     expect(accountBalance(world.journal, clientFreeAccount(opened.buyerKey), GEL).minor).toBe(20_000_000n);

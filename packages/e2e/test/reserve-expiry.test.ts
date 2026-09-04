@@ -1,16 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { dueTrancheEvent, evaluateWithdrawalGuard } from '@sdelka/domain';
-import type { ClientAccountFacts } from '@sdelka/domain';
+import { dueTrancheEvent } from '@sdelka/domain';
 import {
   type ClientKey,
-  type Journal,
   accountBalance,
   bankNominal,
   clientFreeAccount,
   clientLockedAccount,
-  freeBalance,
 } from '@sdelka/ledger';
 import {
+  OPERATOR_ACTOR,
   advance,
   applyTrancheEvent,
   rejectTrancheEvent,
@@ -18,8 +16,17 @@ import {
   trancheOptions,
   trancheStatusOf,
 } from '../src/index';
-import { DAY_MS, DEAL_AMOUNT, GEL, POLICY_VERSION } from './support/fixtures';
+import { DAY_MS, DEAL_AMOUNT, GEL, POLICY_VERSION, STATEMENT_SOURCE } from './support/fixtures';
 import { toReserved } from './support/paths';
+import {
+  type WithdrawalStepOptions,
+  type WithdrawalWorld,
+  applyWithdrawalEvent,
+  approveWithdrawal,
+  rejectWithdrawalEvent,
+  requestWithdrawal,
+  withWithdrawals,
+} from './support/withdrawal';
 
 const OPTIONS = trancheOptions(POLICY_VERSION);
 /** Деньги уже на счёте клиента: откат резерва их туда возвращает, а не зачисляет. */
@@ -27,20 +34,34 @@ const ROLLBACK = trancheOptions(POLICY_VERSION, { creditRoute: 'already_on_clien
 const DEAL = 'deal-reserve-expiry';
 const TRANCHE = 'tranche-reserve-expiry';
 
+const WITHDRAWAL_STEP: WithdrawalStepOptions = {
+  actor: OPERATOR_ACTOR,
+  policy: POLICY_VERSION,
+  evidence: [STATEMENT_SOURCE],
+};
+
 /**
- * Факты счёта клиента для guard'а вывода. Читаются из журнала: свободный
- * остаток считает учёт, домен его только сравнивает.
+ * Вывод всей суммы транша, подготовленный и подписанный двумя.
+ *
+ * Раньше здесь стоял прямой вызов `evaluateWithdrawalGuard(…)` из тела теста, и
+ * он не проверял ничего: guard можно было снять со всех рёбер
+ * `reduceWithdrawal`, и тест остался бы зелёным, потому что смотрел на
+ * функцию, а не на дверь. Теперь И12.2 проверяется там, где клиент её и
+ * встретит — на переходе машины вывода.
  */
-function withdrawalFacts(journal: Journal, owner: ClientKey): ClientAccountFacts {
-  return {
-    free: freeBalance(journal, owner, GEL),
-    locked: [],
-    requestedAmount: DEAL_AMOUNT,
-    sourceAccount: null,
-    preparedBy: null,
-    approvals: [],
-    activeWithdrawals: 0,
-  };
+function preparedWithdrawal(
+  world: Parameters<typeof withWithdrawals>[0],
+  owner: ClientKey,
+  id: string,
+): WithdrawalWorld {
+  let scene = requestWithdrawal(withWithdrawals(world), {
+    withdrawalId: id,
+    owner,
+    amount: DEAL_AMOUNT,
+    preparedBy: 'operator-1',
+  });
+  scene = approveWithdrawal(scene, id, 'approver-1');
+  return approveWithdrawal(scene, id, 'approver-2');
 }
 
 /**
@@ -79,9 +100,11 @@ describe('снятие резерва по сроку', () => {
     // И12.2 буква в букву: «вывод доступен, пока средства не зарезервированы».
     // Пока запирание стояло на входе в `collected`, это обещание было ложным с
     // другой стороны — забрать было нельзя ничего, а экран говорил, что можно.
-    expect(evaluateWithdrawalGuard('g_free_balance_sufficient', withdrawalFacts(world.journal, buyer))).toBe(
-      false,
-    );
+    expect(
+      rejectWithdrawalEvent(preparedWithdrawal(world, buyer, 'wd-reserve-held'), 'wd-reserve-held', {
+        type: 'withdrawal_approved',
+      }).failedGuards,
+    ).toEqual(['g_free_balance_sufficient']);
 
     // --- Срок не настал: часы молчат ---
     expect(dueTrancheEvent(trancheOf(world, TRANCHE).state, world.now)).toBeNull();
@@ -124,9 +147,13 @@ describe('снятие резерва по сроку', () => {
     expect(accountBalance(world.journal, bankNominal(GEL), GEL).minor).toBe(20_000_000n);
 
     // --- Клиент выбирает: вывести… ---
-    expect(evaluateWithdrawalGuard('g_free_balance_sufficient', withdrawalFacts(world.journal, buyer))).toBe(
-      true,
+    const released = applyWithdrawalEvent(
+      preparedWithdrawal(world, buyer, 'wd-reserve-released'),
+      'wd-reserve-released',
+      { type: 'withdrawal_approved' },
+      WITHDRAWAL_STEP,
     );
+    expect(released.withdrawals.get('wd-reserve-released')?.state.status).toBe('approved');
 
     // --- …или провести заново ---
     const again = applyTrancheEvent(world, TRANCHE, { type: 'reserve_requested' }, OPTIONS);

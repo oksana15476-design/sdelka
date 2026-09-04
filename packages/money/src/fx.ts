@@ -16,27 +16,114 @@ export function isoDate(value: string): IsoDate {
 }
 
 /**
+ * Курс — величина **со своей парой валют**, а не голое число.
+ *
+ * **Исправленный дефект, самый дорогой в батче.** Прежде курс был `Rational`,
+ * пара валют жила в аргументах вызова, и `convert` умножала на клиентский курс
+ * в любом направлении. Проба: у клиента 200 000 ₾, курс 2,50 (лари за доллар),
+ * конвертация GEL→USD зачисляла клиенту 500 000 долларов вместо 80 000 —
+ * умножение вместо деления. Запись собиралась, номинальный счёт в валюте,
+ * которой платформа не держала, вырастал из нуля, а покрытие рапортовало
+ * единицу по обеим валютам: обязательство и покрытие под него создавала одна и
+ * та же запись. Ни один инвариант не срабатывал.
+ *
+ * Проверять направление на входе `convert` было бы недостаточно: проверка
+ * ловит вызов, а величина остаётся двусмысленной, и следующий вызов из другого
+ * пакета соберёт ту же ошибку заново. Поэтому **направление — часть величины**:
+ * курс несёт `base` (за одну мажорную единицу какой валюты он выражен) и
+ * `quote` (в каких мажорных единицах). Применить курс не к своей паре нельзя ни
+ * по типам (валюта выводится из суммы, а курс помечен `NoInfer` — иначе `F`
+ * вывелся бы объединением обеих валют и несовпадение прошло бы молча), ни в
+ * рантайме: типы не переживают границу процесса, курс приходит из базы и от
+ * провайдера.
+ *
+ * **Обратного курса здесь нет намеренно.** Арифметически он был бы точен
+ * (переворот дроби), но `1 / клиентский курс USD→GEL` — не клиентский курс
+ * GEL→USD: спред обязан работать в нашу сторону в обоих направлениях, а
+ * перевёрнутый курс отдаёт его клиенту. Обратное направление — это другая
+ * котировка, которую выдаёт провайдер, а не вычисляет `money`. Дай мы здесь
+ * `invert`, дверь, ради закрытия которой переписан этот модуль, открылась бы
+ * снова.
+ */
+export interface FxRate<F extends CurrencyCode = CurrencyCode, T extends CurrencyCode = CurrencyCode> {
+  /** Валюта, за одну **мажорную** единицу которой выражен курс. */
+  readonly base: F;
+  /** Валюта, в мажорных единицах которой выражен курс. */
+  readonly quote: T;
+  readonly value: Rational;
+}
+
+export function fxRate<F extends CurrencyCode, T extends CurrencyCode>(
+  base: F,
+  quote: T,
+  value: Rational,
+): FxRate<F, T> {
+  if ((base as CurrencyCode) === (quote as CurrencyCode)) {
+    throw new MoneyError(MoneyErrorCode.fxCurrencyMismatch, { source: base, target: quote });
+  }
+  // Ноль и отрицательный курс — не курс. Ноль обнуляет чужие деньги, знак
+  // выворачивает направление, и обе величины проходят всю арифметику молча.
+  if (value.numerator <= 0n) {
+    throw new MoneyError(MoneyErrorCode.fxNonPositiveRate, {
+      base,
+      quote,
+      value: `${value.numerator}/${value.denominator}`,
+    });
+  }
+  return Object.freeze({ base, quote, value });
+}
+
+/**
  * Три курса, которые обязаны храниться вместе (FUNCTIONAL.md §4.5, CORE.md Ф5):
  * клиентский (по нему зачисляем клиенту), эталонный (рыночный, от него считается
  * наценка) и официальный на дату операции (по нему считается учётная курсовая
  * разница). Без эталонного нельзя показать наценку и разделить выручку для налога.
+ *
+ * Пара валют у всех трёх одна и та же и объявлена один раз: три курса разных
+ * пар — это не котировка, а три разные котировки, и смешивать их в одном
+ * значении нельзя. Собираются они только через `fxRates`, который эту пару и
+ * проставляет.
  */
-export interface FxRates {
+export interface FxRates<F extends CurrencyCode = CurrencyCode, T extends CurrencyCode = CurrencyCode> {
+  readonly base: F;
+  readonly quote: T;
+  readonly client: FxRate<F, T>;
+  readonly reference: FxRate<F, T>;
+  readonly official: FxRate<F, T>;
+}
+
+export interface FxRateValues {
   readonly client: Rational;
   readonly reference: Rational;
   readonly official: Rational;
+}
+
+export function fxRates<F extends CurrencyCode, T extends CurrencyCode>(
+  base: F,
+  quote: T,
+  values: FxRateValues,
+): FxRates<F, T> {
+  return Object.freeze({
+    base,
+    quote,
+    client: fxRate(base, quote, values.client),
+    reference: fxRate(base, quote, values.reference),
+    official: fxRate(base, quote, values.official),
+  });
 }
 
 export interface ConvertedAmount<F extends CurrencyCode, T extends CurrencyCode> {
   readonly source: Money<F>;
   /** Сумма, зачисленная клиенту: исходная сумма по клиентскому курсу. */
   readonly target: Money<T>;
-  readonly rates: FxRates;
+  readonly rates: FxRates<F, T>;
   readonly asOf: IsoDate;
 }
 
 /**
- * Пересчёт суммы в другую валюту по одному курсу.
+ * Пересчёт суммы по курсу. Целевая валюта берётся **из курса**, а не из
+ * аргумента: у величины уже есть направление, и второй его источник означал бы
+ * возможность их рассогласовать.
  *
  * Курс — единиц целевой валюты за **мажорную** единицу исходной, как его
  * публикуют банк и Нацбанк. Разница в числе знаков (JPY — 0, GEL — 2) входит
@@ -49,31 +136,47 @@ export interface ConvertedAmount<F extends CurrencyCode, T extends CurrencyCode>
  */
 export function convertAtRate<F extends CurrencyCode, T extends CurrencyCode>(
   source: Money<F>,
-  targetCurrency: T,
-  rate: Rational,
+  rate: FxRate<NoInfer<F>, T>,
   rounding: Rounding,
 ): Money<T> {
-  if ((source.currency as CurrencyCode) === (targetCurrency as CurrencyCode)) {
-    throw new MoneyError(MoneyErrorCode.fxCurrencyMismatch, {
+  assertRateApplies(source, rate);
+  const exponentFactor = rational(minorUnitScale(rate.quote), minorUnitScale(source.currency));
+  return money(
+    rate.quote,
+    applyRational(source.minor, multiplyRational(rate.value, exponentFactor), rounding),
+  );
+}
+
+/**
+ * Курс применяется только к своей паре. Типы это уже говорят, но данные
+ * приходят из базы и от провайдера — там типов нет.
+ */
+function assertRateApplies<F extends CurrencyCode, T extends CurrencyCode>(
+  source: Money<F>,
+  rate: FxRate<F, T>,
+): void {
+  if ((source.currency as CurrencyCode) !== (rate.base as CurrencyCode)) {
+    throw new MoneyError(MoneyErrorCode.fxRatePairMismatch, {
       source: source.currency,
-      target: targetCurrency,
+      base: rate.base,
+      quote: rate.quote,
     });
   }
-  const exponentFactor = rational(minorUnitScale(targetCurrency), minorUnitScale(source.currency));
-  return money(
-    targetCurrency,
-    applyRational(source.minor, multiplyRational(rate, exponentFactor), rounding),
-  );
+  if ((rate.base as CurrencyCode) === (rate.quote as CurrencyCode)) {
+    throw new MoneyError(MoneyErrorCode.fxCurrencyMismatch, {
+      source: rate.base,
+      target: rate.quote,
+    });
+  }
 }
 
 export function convert<F extends CurrencyCode, T extends CurrencyCode>(
   source: Money<F>,
-  targetCurrency: T,
-  rates: FxRates,
+  rates: FxRates<NoInfer<F>, T>,
   asOf: IsoDate,
   rounding: Rounding,
 ): ConvertedAmount<F, T> {
-  const target = convertAtRate(source, targetCurrency, rates.client, rounding);
+  const target = convertAtRate(source, rates.client, rounding);
   return Object.freeze({ source, target, rates, asOf });
 }
 
@@ -101,12 +204,7 @@ export function platformSpread<F extends CurrencyCode, T extends CurrencyCode>(
   converted: ConvertedAmount<F, T>,
   rounding: Rounding,
 ): PlatformSpread<T> {
-  const atReference = convertAtRate(
-    converted.source,
-    converted.target.currency,
-    converted.rates.reference,
-    rounding,
-  );
+  const atReference = convertAtRate(converted.source, converted.rates.reference, rounding);
   return Object.freeze({
     kind: 'platform_spread',
     amount: subtract(atReference, converted.target),
@@ -117,12 +215,7 @@ export function accountingFxDifference<F extends CurrencyCode, T extends Currenc
   converted: ConvertedAmount<F, T>,
   rounding: Rounding,
 ): AccountingFxDifference<T> {
-  const atOfficial = convertAtRate(
-    converted.source,
-    converted.target.currency,
-    converted.rates.official,
-    rounding,
-  );
+  const atOfficial = convertAtRate(converted.source, converted.rates.official, rounding);
   return Object.freeze({
     kind: 'accounting_fx_difference',
     amount: subtract(atOfficial, converted.target),

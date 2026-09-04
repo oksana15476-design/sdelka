@@ -60,7 +60,13 @@ describe('каждый guard проходит и не проходит', () => {
     // refunding → release_blocked → release_pending → paying_out` в `reserved`
     // не заходит, деньги остаются в свободной части счёта покупателя, а расчёт
     // дебетует пустой файл транша — то есть берёт деньги других сделок.
-    expect(GUARD_IDS).toHaveLength(18);
+    //
+    // Девятнадцатый — `g_write_off_covers_collected`: списание закрывает ровно
+    // то обязательство, которое дебетует. Отдельно от `g_funds_locked`, потому
+    // что у списания два законных пустых файла и различать их обязано правило,
+    // а не вызывающий: «денег под траншем не было вовсе» — закрывать нечего, а
+    // «деньги есть, но в свободной части счёта» — закрывать нельзя.
+    expect(GUARD_IDS).toHaveLength(19);
     expect(GUARD_IDS).not.toContain('g_seller_is_owner');
     expect(GUARD_IDS).not.toContain('g_no_stale_break');
     expect(GUARD_IDS).toContain('g_condition_agreed');
@@ -69,6 +75,7 @@ describe('каждый guard проходит и не проходит', () => {
     expect(GUARD_IDS).toContain('g_unfreeze_approvers_distinct');
     expect(GUARD_IDS).toContain('g_funds_collected');
     expect(GUARD_IDS).toContain('g_funds_locked');
+    expect(GUARD_IDS).toContain('g_write_off_covers_collected');
   });
 
   it('g_funds_locked', () => {
@@ -89,6 +96,34 @@ describe('каждый guard проходит и не проходит', () => {
     expect(check('g_funds_locked', { lockedAmount: money('USD', AMOUNT.minor) })).toBe(false);
     // Собранного нет вовсе — сравнивать не с чем, отказ закрытый.
     expect(check('g_funds_locked', { collectedAmount: null })).toBe(false);
+  });
+
+  it('g_write_off_covers_collected', () => {
+    // Файл транша полон: закрывается ровно то, что дебетуется.
+    expect(check('g_write_off_covers_collected', {})).toBe(true);
+    // Собирать было нечего — закрывать нечего, списание проходит и не
+    // утверждает о деньгах ничего. Это транш, куда деньги не дошли вовсе.
+    expect(check('g_write_off_covers_collected', { collectedAmount: null, lockedAmount: null })).toBe(
+      true,
+    );
+    expect(
+      check('g_write_off_covers_collected', {
+        collectedAmount: money('GEL', 0n),
+        lockedAmount: money('GEL', 0n),
+      }),
+    ).toBe(true);
+    // Собрано, но лежит в свободной части счёта клиента: списание закрыло бы
+    // транш, не тронув обязательства. Это и есть дефект «бесследного списания».
+    expect(check('g_write_off_covers_collected', { lockedAmount: money('GEL', 0n) })).toBe(false);
+    expect(check('g_write_off_covers_collected', { lockedAmount: null })).toBe(false);
+    // Заперта только часть — расхождение, а не «мало».
+    expect(
+      check('g_write_off_covers_collected', { lockedAmount: money('GEL', AMOUNT.minor - 1n) }),
+    ).toBe(false);
+    // Другая валюта — не те деньги, как и у соседних двух guard'ов.
+    expect(
+      check('g_write_off_covers_collected', { lockedAmount: money('USD', AMOUNT.minor) }),
+    ).toBe(false);
   });
 
   it('g_funds_collected', () => {

@@ -15,6 +15,11 @@ export const LedgerErrorCode = {
   settlementSelfDealing: 'ledger.settlement.self_dealing',
   settlementAttestationMismatch: 'ledger.settlement.attestation_mismatch',
   entryNonPositiveExcess: 'ledger.entry.non_positive_excess',
+  entryNonPositiveShortfall: 'ledger.entry.non_positive_shortfall',
+  // Клиентский курс лучше эталонного: на конвертации не доход, а убыток, и
+  // проводка у него другая. Молча вывернуть направление значило бы признать
+  // убыток доходом (см. `receiveConversion`).
+  entryNegativeSpread: 'ledger.entry.negative_spread',
   entryCorrectionWithoutReference: 'ledger.entry.correction_without_reference',
   entrySettlementWithReference: 'ledger.entry.settlement_with_reference',
   postingNonPositiveAmount: 'ledger.posting.non_positive_amount',

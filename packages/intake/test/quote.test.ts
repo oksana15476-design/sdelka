@@ -5,6 +5,7 @@ import {
   accountingFxDifference,
   isoDate,
   platformSpread,
+  fxRates,
   rationalFromDecimalString,
 } from '@sdelka/money';
 import {
@@ -20,7 +21,10 @@ import {
 } from '../src/index';
 import { NOW, POLICY, at, usd } from './support/fixtures';
 
-const RATES: FxRates = Object.freeze({
+// Курс несёт свою пару: доллар за лари. Раньше пары не было, и конвертация в
+// обратную сторону давала клиенту вшестеро больше, не роняя ни одного
+// инварианта.
+const RATES: FxRates<'USD', 'GEL'> = fxRates('USD', 'GEL', {
   // Клиентский хуже эталонного на 0,7% — наш спред.
   client: rationalFromDecimalString('2.66'),
   reference: rationalFromDecimalString('2.6787'),
@@ -61,7 +65,7 @@ describe('дрейф рынка считается целочисленно', ()
   });
 
   it('неподвижный рынок даёт ноль', () => {
-    expect(marketDriftBp(RATES.reference, RATES.reference)).toBe(0);
+    expect(marketDriftBp(RATES.reference.value, RATES.reference.value)).toBe(0);
   });
 });
 
@@ -79,7 +83,7 @@ describe('котировка гасится при движении рынка �
   });
 
   it('срок истёк — котировка просрочена', () => {
-    const report = quoteStatus(makeQuote(), RATES.reference, at(3 * 60 * 60 * 1000));
+    const report = quoteStatus(makeQuote(), RATES.reference.value, at(3 * 60 * 60 * 1000));
     expect(report.status).toBe('expired');
   });
 
@@ -90,14 +94,14 @@ describe('котировка гасится при движении рынка �
   });
 
   it('граница срока: ровно в момент истечения котировка уже не тверда', () => {
-    const report = quoteStatus(makeQuote(), RATES.reference, at(PROPOSED_INTAKE_POLICY.quote.validity));
+    const report = quoteStatus(makeQuote(), RATES.reference.value, at(PROPOSED_INTAKE_POLICY.quote.validity));
     expect(report.status).toBe('expired');
   });
 });
 
 describe('конвертация невозможна без явного подтверждения', () => {
   it('подтверждения нет — отказ', () => {
-    const decision = decideConversion(makeQuote(), RATES.reference, null, at(60_000), 'trunc');
+    const decision = decideConversion(makeQuote(), RATES.reference.value, null, at(60_000), 'trunc');
     expect(decision.allowed).toBe(false);
     expect(decision.converted).toBeNull();
     expect(decision.reasons).toContain(INTAKE_REASON_KEYS.quoteConfirmationMissing);
@@ -106,7 +110,7 @@ describe('конвертация невозможна без явного под
   it('подтверждение выдано на другую котировку — не подходит', () => {
     const decision = decideConversion(
       makeQuote(),
-      RATES.reference,
+      RATES.reference.value,
       { ...CONFIRMATION, quoteId: 'q-2' },
       at(60_000),
       'trunc',
@@ -125,7 +129,7 @@ describe('конвертация невозможна без явного под
   it('срок истёк — молчаливого пересчёта не происходит', () => {
     const decision = decideConversion(
       makeQuote(),
-      RATES.reference,
+      RATES.reference.value,
       CONFIRMATION,
       at(3 * 60 * 60 * 1000),
       'trunc',
@@ -137,7 +141,7 @@ describe('конвертация невозможна без явного под
   it('твёрдая котировка с подтверждением конвертируется', () => {
     const decision = decideConversion(
       makeQuote(),
-      RATES.reference,
+      RATES.reference.value,
       CONFIRMATION,
       at(60_000),
       'trunc',
@@ -162,7 +166,11 @@ describe('три курса и раскрытие наценки', () => {
   });
 
   it('клиентский курс лучше эталонного даёт отрицательную наценку, а не ноль', () => {
-    const generous: FxRates = { ...RATES, client: rationalFromDecimalString('2.70') };
+    const generous: FxRates<'USD', 'GEL'> = fxRates('USD', 'GEL', {
+      client: rationalFromDecimalString('2.70'),
+      reference: RATES.reference.value,
+      official: RATES.official.value,
+    });
     expect(disclosedMarkupBp(generous)).toBeLessThan(0);
   });
 });
@@ -171,7 +179,7 @@ describe('надгробие: спред и учётная курсовая ра
   it('это разные типы, и одно нельзя выдать за другое', () => {
     const decision = decideConversion(
       makeQuote(),
-      RATES.reference,
+      RATES.reference.value,
       CONFIRMATION,
       at(60_000),
       'trunc',

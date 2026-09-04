@@ -288,6 +288,35 @@ export function isEveryTrancheCovered(journal: Journal): boolean {
   return coverageByTranche(journal).every((item) => item.covered);
 }
 
+/**
+ * Отрицательный остаток **банковского счёта платформы** — деньги, которых у нас
+ * не было.
+ *
+ * `negativeClientBalances` сюда не достаёт по построению: номинальный счёт под
+ * ним, потому что объявлен клиентскими средствами, а операционный — нет, он
+ * деньги платформы. Между тем банковский счёт не уходит в минус ни у кого:
+ * овердрафта нет, и запись, уводящая операционный счёт ниже нуля, утверждает
+ * перевод, которого банк не исполнил бы. Ровно эта форма — довнесение недостачи
+ * (§3.1, случай А, момент 2) с пустого операционного счёта: обещание закрыть
+ * дыру деньгами, которых нет.
+ *
+ * Приём новых сделок этим не останавливается: красная линия №3 говорит о
+ * покрытии **клиентских** средств, а здесь расхождение в наших собственных.
+ * Видимым оно быть обязано — решение о стоп-кране принимает владелец.
+ */
+export function negativeBankBalances(journal: Journal): readonly AccountBalance[] {
+  const platformAssets = new Set<string>();
+  for (const posting of eachPosting(journal)) {
+    const account = posting.account;
+    if (accountType(account) === 'asset' && fundsOwnership(account) === 'platform') {
+      platformAssets.add(accountCode(account));
+    }
+  }
+  return accountBalances(journal).filter(
+    (item) => platformAssets.has(item.accountCode) && item.balance.minor < 0n,
+  );
+}
+
 /** Отрицательный остаток клиентского счёта невозможен — здесь он ловится в коде. */
 export function negativeClientBalances(journal: Journal): readonly AccountBalance[] {
   const clientCodes = new Set<string>();

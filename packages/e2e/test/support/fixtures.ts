@@ -31,7 +31,16 @@ import {
   type StatementFields,
   instant,
 } from '@sdelka/domain';
-import { type CurrencyCode, type Deduction, type IsoDate, type Money, isoDate, money, rational } from '@sdelka/money';
+import {
+  type CurrencyCode,
+  type Deduction,
+  type IsoDate,
+  type Money,
+  fxRates,
+  isoDate,
+  money,
+  rational,
+} from '@sdelka/money';
 import { type BankOutcome, type BankPort, type RegistryExtract, type RegistryPort, toClientKey } from '../../src/index';
 
 /**
@@ -209,7 +218,12 @@ export const PLATFORM_FEE: readonly Deduction[] = Object.freeze([
   Object.freeze({ key: 'platform_fee', rate: rational(150n, 10_000n) }),
 ]);
 
-export const FX_RATES = Object.freeze({
+/**
+ * Три курса на пару USD→GEL. Пара объявлена **в самой величине**, а не в
+ * аргументах вызова: направление — часть курса, и подставить эти множители под
+ * обратное направление больше нечем (`@sdelka/money`, `fxRates`).
+ */
+export const FX_RATES = fxRates(USD, GEL, {
   client: rational(250n, 100n),
   reference: rational(255n, 100n),
   official: rational(252n, 100n),

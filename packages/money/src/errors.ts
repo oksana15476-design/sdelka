@@ -16,6 +16,10 @@ export const MoneyErrorCode = {
   allocateNegativeWeight: 'money.allocate.negative_weight',
   allocateRemainderIndexOutOfRange: 'money.allocate.remainder_index_out_of_range',
   fxCurrencyMismatch: 'money.fx.currency_mismatch',
+  // Курс приложен не к своей паре валют: величина несёт пару, и это её нарушение,
+  // а не ошибка аргументов вызова (см. `fx.ts`).
+  fxRatePairMismatch: 'money.fx.rate_pair_mismatch',
+  fxNonPositiveRate: 'money.fx.non_positive_rate',
 } as const;
 
 export type MoneyErrorCode = (typeof MoneyErrorCode)[keyof typeof MoneyErrorCode];

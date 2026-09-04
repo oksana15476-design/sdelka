@@ -1,11 +1,16 @@
 @import './tokens.css';
 
 /*
- * Вёрстка. Два правила держат три языка:
+ * Вёрстка. Три правила держат три языка и два рабочих места:
+ *
  * 1) ни одной фиксированной ширины у элемента с текстом — кнопки, чипы и бэджи
- *    растут по контенту и переносятся на две строки (грузинский шире русского);
+ *    растут по контенту и переносятся на две строки (грузинский шире русского
+ *    примерно в полтора раза);
  * 2) только логические свойства (inline/block), физических нет ни одного —
- *    это задел под правостороннее письмо.
+ *    это задел под правостороннее письмо;
+ * 3) брейкпоинты **контейнерные**, а не оконные (`IMPLEMENTATION.md` §5).
+ *    Ширину задаёт оболочка `.frame`, а не окно: мобильная раскладка обязана
+ *    проверяться на широком экране и быть той же самой, что на телефоне.
  */
 
 *,
@@ -26,26 +31,33 @@ body {
   background: var(--c-bg);
   color: var(--c-ink);
   text-align: start;
+  -webkit-font-smoothing: antialiased;
 }
 
 h1,
 h2,
 h3 {
   margin-block: 0;
-  line-height: 1.25;
+  line-height: 1.2;
   text-wrap: balance;
 }
 
 h1 {
   font-size: var(--t-2xl);
+  letter-spacing: -0.03em;
+  font-weight: 800;
 }
 
 h2 {
   font-size: var(--t-lg);
+  letter-spacing: -0.02em;
+  font-weight: 700;
 }
 
 h3 {
   font-size: var(--t-md);
+  letter-spacing: -0.015em;
+  font-weight: 700;
 }
 
 p {
@@ -60,129 +72,479 @@ ol {
 }
 
 a {
-  color: var(--c-accent);
+  color: var(--c-accent-hover);
+}
+
+a:hover {
+  color: var(--c-accent-active);
 }
 
 :focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
-  border-radius: var(--r-1);
+  border-radius: var(--r-field);
 }
 
-/* ----------------------------------------------------------------- каркас */
+/* ================================================================ каркас */
 
-.page {
+/*
+ * Контейнером запросов служит обёртка, а не сама оболочка: правила внутри
+ * `@container` не применяются к элементу, который этот контейнер задал.
+ */
+.frame {
+  container-type: inline-size;
+  inline-size: 100%;
   min-block-size: 100vh;
+}
+
+.shell {
+  display: flex;
+  align-items: stretch;
+  min-block-size: 100vh;
+  position: relative;
+  background: var(--c-bg);
+}
+
+.column {
+  flex: 1;
+  min-inline-size: 0;
   display: flex;
   flex-direction: column;
 }
 
-.appbar {
+/* --------------------------------------------------------- боковая панель */
+
+.side {
+  inline-size: var(--side);
+  flex-shrink: 0;
   background: var(--c-surface);
-  border-block-end: 1px solid var(--c-line);
-}
-
-.appbar__inner,
-.shell,
-.shell--wide {
-  margin-inline: auto;
-  padding-inline: var(--s-4);
-  inline-size: 100%;
-}
-
-.appbar__inner {
-  max-inline-size: 1180px;
+  border-inline-end: 1px solid var(--c-line);
+  padding: var(--s-5) var(--s-3);
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-3);
-  align-items: center;
-  justify-content: space-between;
-  padding-block: var(--s-3);
+  flex-direction: column;
+  gap: var(--s-5);
+  position: sticky;
+  inset-block-start: 0;
+  block-size: 100vh;
+  overflow-y: auto;
 }
 
-.appbar__brand {
-  font-weight: 700;
-  font-size: var(--t-md);
-  letter-spacing: 0.02em;
+.side__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-1) var(--s-2);
+  min-block-size: var(--tap);
   color: var(--c-ink);
   text-decoration: none;
+  font-weight: 800;
+  font-size: var(--t-lg);
+  letter-spacing: -0.04em;
 }
 
-.appbar__brand small {
+.side__brand small {
   display: block;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
   font-weight: 400;
-  font-size: var(--t-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   color: var(--c-ink-faint);
-  letter-spacing: 0;
 }
 
-.nav {
+.side__nav {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-1);
+  flex-direction: column;
+  gap: 2px;
+}
+
+.side__foot {
+  margin-block-start: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding-block-start: var(--s-3);
+  border-block-start: 1px solid var(--c-line);
 }
 
 .nav__link {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
   min-block-size: var(--tap);
   padding-inline: var(--s-3);
   padding-block: var(--s-2);
   border-radius: var(--r-2);
-  color: var(--c-ink-muted);
+  color: var(--c-ink-faint);
   text-decoration: none;
   font-size: var(--t-sm);
+  font-weight: 500;
 }
 
 .nav__link:hover {
-  background: var(--c-surface-sunken);
+  background: var(--c-surface-quiet);
+  color: var(--c-ink);
 }
 
 .nav__link[aria-current='page'] {
   background: var(--c-accent-soft);
-  color: var(--c-accent);
+  color: var(--c-accent-strong);
+  font-weight: 700;
+}
+
+.nav__count {
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  font-weight: 700;
+  color: var(--c-accent-ink);
+  background: var(--c-accent);
+  padding-inline: var(--s-2);
+  border-radius: var(--r-pill);
+}
+
+/* Текущая сделка в панели: код, роль, объект, чип положения денег. */
+.side__deal {
+  background: var(--c-accent-soft);
+  border-radius: var(--r-2);
+  padding: var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  color: var(--c-ink);
+  text-decoration: none;
+}
+
+.side__deal:hover {
+  color: var(--c-ink);
+}
+
+.side__deal-title {
+  font-size: var(--t-sm);
   font-weight: 600;
+  line-height: 1.4;
 }
 
 .langs {
   display: flex;
-  gap: var(--s-1);
-  align-items: center;
+  gap: 2px;
+  background: var(--c-bg);
+  padding: 3px;
+  border-radius: var(--r-field);
 }
 
 .langs__item {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-inline-size: var(--tap);
+  flex: 1 1 auto;
   min-block-size: var(--tap);
   padding-inline: var(--s-2);
-  border: 1px solid var(--c-line);
-  border-radius: var(--r-2);
-  background: var(--c-surface);
-  color: var(--c-ink-muted);
+  border-radius: var(--r-1);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  color: var(--c-ink-faint);
   text-decoration: none;
-  font-size: var(--t-sm);
 }
 
 .langs__item[aria-current='true'] {
-  border-color: var(--c-accent);
-  background: var(--c-accent-soft);
-  color: var(--c-accent);
+  background: var(--c-ink);
+  color: var(--c-surface);
+}
+
+.person {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-block-size: var(--tap);
+  color: var(--c-ink);
+  text-decoration: none;
+}
+
+.person__avatar {
+  inline-size: 30px;
+  block-size: 30px;
+  border-radius: var(--r-pill);
+  background: var(--c-surface-sunken);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--t-xs);
   font-weight: 700;
+  color: var(--c-ink-faint);
+  flex-shrink: 0;
+}
+
+.person__body {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+}
+
+.person__name {
+  font-size: var(--t-xs);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* -------------------------------------------------------------- знак марки */
+
+/*
+ * Знак «Сдвиг»: два круга по 72% габарита, смещённые по диагонали. Передний
+ * круг всегда правый нижний — направление перехода не меняется никогда
+ * (брендбук §02). Знак плоский: два тона, без градиента, тени и ореола.
+ */
+.mk {
+  inline-size: 24px;
+  block-size: 24px;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.mk--lg {
+  inline-size: 40px;
+  block-size: 40px;
+}
+
+.mk i {
+  position: absolute;
+  inline-size: 72%;
+  block-size: 72%;
+  border-radius: var(--r-pill);
+}
+
+.mk i:first-child {
+  inset-inline-start: 0;
+  inset-block-start: 0;
+  background: var(--c-ink);
+}
+
+.mk i:last-child {
+  inset-inline-end: 0;
+  inset-block-end: 0;
+  background: var(--c-accent);
+}
+
+/* ------------------------------------------------- шапка телефона и панель */
+
+.topbar {
+  display: none;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  min-block-size: 58px;
+  background: var(--c-surface);
+  border-block-end: 1px solid var(--c-line);
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 20;
+}
+
+.topbar__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-block-size: var(--tap);
+  color: var(--c-ink);
+  text-decoration: none;
+  font-weight: 800;
+  font-size: var(--t-md);
+  letter-spacing: -0.04em;
+}
+
+.burger {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  inline-size: var(--tap);
+  block-size: var(--tap);
+  flex-shrink: 0;
+  border-radius: var(--r-2);
+}
+
+.burger i {
+  display: block;
+  inline-size: 18px;
+  block-size: 2px;
+  border-radius: 2px;
+  background: var(--c-ink);
+}
+
+.scrim {
+  display: none;
 }
 
 .main {
   flex: 1;
-  padding-block: var(--s-5) var(--s-6);
+  min-inline-size: 0;
+  padding: var(--s-6) var(--s-6) var(--s-7);
+  display: flex;
+  justify-content: center;
 }
 
-.shell {
-  max-inline-size: min(100%, 760px);
+.sheet {
+  inline-size: 100%;
+  max-inline-size: var(--content);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
 }
 
-.shell--wide {
-  max-inline-size: 1180px;
+.sheet--wide {
+  max-inline-size: 1140px;
+}
+
+/* ---------------------------------------------------- контейнерные запросы */
+
+/*
+ * Ниже 1024 боковая панель не переодевается в шапку, а становится выдвижной:
+ * разделов шесть, в таб-бар они не влезают, а деньгам нужна полная ширина.
+ * Открытие — ссылкой на якорь: панель работает без клиентского кода, а закрытая
+ * убрана из фокуса (`visibility`), а не только из вида.
+ */
+@container (max-width: 1023px) {
+  .shell {
+    flex-direction: column;
+  }
+
+  .topbar {
+    display: flex;
+  }
+
+  .side {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 60;
+    inline-size: var(--drawer);
+    block-size: auto;
+    padding: var(--s-4) var(--s-3);
+    gap: var(--s-4);
+    border-inline-end: 1px solid var(--c-line);
+    transform: translateX(-102%);
+    visibility: hidden;
+    transition:
+      transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      visibility 220ms;
+  }
+
+  .side:target {
+    transform: translateX(0);
+    visibility: visible;
+    box-shadow: var(--shadow-drawer);
+  }
+
+  /* Цели касания в панели: 44 px — минимум, у языков он тоже действует. */
+  .side .nav__link,
+  .side .langs__item {
+    min-block-size: var(--tap-drawer);
+  }
+
+  .scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    background: rgba(15, 23, 41, 0.42);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .side:target ~ .scrim {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .main {
+    padding: var(--s-5) var(--s-4) var(--s-7);
+  }
+}
+
+@container (max-width: 767px) {
+  .main {
+    padding: var(--s-4) var(--s-3) var(--s-6);
+  }
+
+  .card,
+  .state-card {
+    padding: var(--s-4) var(--s-3);
+    border-radius: 14px;
+  }
+
+  h1 {
+    font-size: 1.3125rem;
+  }
+}
+
+/* xs ≤479 · база проектирования: одна колонка, крупные цели, поля без зума iOS */
+@container (max-width: 479px) {
+  .main {
+    padding: var(--s-3) var(--s-3) var(--s-6);
+  }
+
+  h1 {
+    font-size: 1.1875rem;
+  }
+
+  .row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--s-1);
+  }
+
+  .row__value {
+    text-align: start;
+  }
+
+  .fld {
+    font-size: 1rem;
+  }
+
+  .btn {
+    inline-size: 100%;
+  }
+}
+
+/* ============================================================ поверхности */
+
+.card {
+  background: var(--c-surface);
+  border-radius: var(--r-3);
+  padding: var(--s-5);
+  box-shadow: var(--shadow-card);
+}
+
+.card--quiet {
+  background: var(--c-surface-sunken);
+  border: 1px solid var(--c-line);
+  box-shadow: none;
+}
+
+.card__title {
+  font-size: var(--t-md);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-block-end: var(--s-3);
+}
+
+.eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--c-ink-faint);
+}
+
+.rule {
+  block-size: 1px;
+  background: var(--c-line);
+  border: 0;
+  margin-block: var(--s-4);
 }
 
 .stack {
@@ -205,52 +567,32 @@ a {
   gap: var(--s-2);
 }
 
+.pagehead__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: baseline;
+  justify-content: space-between;
+}
+
 .pagehead__note {
-  color: var(--c-ink-muted);
+  color: var(--c-ink-faint);
   font-size: var(--t-sm);
+  line-height: 1.6;
   max-inline-size: var(--measure);
 }
 
-/* ------------------------------------------------------------ поверхности */
-
-.card {
-  background: var(--c-surface);
-  border: 1px solid var(--c-line);
-  border-radius: var(--r-3);
-  padding: var(--s-4);
-}
-
-.card__title {
-  font-size: var(--t-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--c-ink-faint);
-  margin-block-end: var(--s-3);
-}
-
-.card--flat {
-  border-radius: var(--r-2);
-  background: var(--c-surface-sunken);
-  border-color: transparent;
-}
-
-.rule {
-  block-size: 1px;
-  background: var(--c-line);
-  border: 0;
-  margin-block: var(--s-3);
-}
-
-/* --------------------------------------------------- индикатор состояния  */
+/* ==================================================== индикатор состояния */
 
 /*
- * Форма индикатора несёт тот же смысл, что цвет: круг — идёт по плану, ромб —
- * требуется внимание, квадрат — остановлено, треугольник — предупреждение,
- * галочка — завершено. Дальтоник различает состояния по фигуре и по тексту.
+ * Форма индикатора несёт тот же смысл, что цвет (брендбук §04): круг — идёт по
+ * плану, ромб — требуется действие, треугольник — предупреждение, квадрат —
+ * приостановлено, галочка — исполнено, ромб-контур — не состоялась.
+ * Дальтоник различает состояния по фигуре и по тексту.
  */
 .dot {
-  inline-size: 14px;
-  block-size: 14px;
+  inline-size: 12px;
+  block-size: 12px;
   flex: 0 0 auto;
   display: inline-block;
   margin-block-start: 5px;
@@ -258,16 +600,16 @@ a {
 
 .dot--wait {
   border-radius: 50%;
-  background: var(--c-wait);
+  background: var(--c-wait-dot);
 }
 
 .dot--info {
   border-radius: 50%;
-  background: var(--c-info);
+  background: var(--c-accent);
 }
 
 .dot--ok {
-  background: var(--c-ok);
+  background: var(--c-ok-dot);
   clip-path: polygon(14% 46%, 0 60%, 39% 100%, 100% 22%, 86% 8%, 39% 72%);
 }
 
@@ -277,75 +619,87 @@ a {
 }
 
 .dot--warn {
-  background: var(--c-warn);
+  background: var(--c-warn-dot);
   clip-path: polygon(50% 0, 100% 100%, 0 100%);
 }
 
 .dot--danger {
-  background: var(--c-danger);
-  border-radius: var(--r-1);
+  background: var(--c-danger-dot);
+  border-radius: 2px;
 }
 
-/* ------------------------------------------------------------------ бэджи */
+.dot--refund {
+  background: var(--c-refund-dot);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  opacity: 0.85;
+}
+
+/* ================================================================== бэджи */
 
 .badge {
   display: inline-flex;
   align-items: center;
   gap: var(--s-2);
   padding-inline: var(--s-2);
-  padding-block: 2px;
+  padding-block: 3px;
   border-radius: var(--r-1);
   border: 1px solid transparent;
   font-size: var(--t-xs);
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.35;
   max-inline-size: 100%;
   overflow-wrap: anywhere;
 }
 
 .badge .dot {
-  inline-size: 10px;
-  block-size: 10px;
+  inline-size: 9px;
+  block-size: 9px;
   margin-block-start: 0;
 }
 
 .badge--wait {
   background: var(--c-wait-soft);
-  color: var(--c-ink-muted);
+  color: var(--c-ink-faint);
   border-color: var(--c-line);
 }
 
 .badge--info {
-  background: var(--c-info-soft);
-  color: var(--c-info);
-  border-color: #bcd4e6;
+  background: var(--c-accent-soft);
+  color: var(--c-accent-strong);
+  border-color: var(--c-accent-line);
+}
+
+.badge--action {
+  background: var(--c-accent-chip);
+  color: var(--c-accent-strong);
+  border-color: var(--c-accent-line);
 }
 
 .badge--ok {
   background: var(--c-ok-soft);
   color: var(--c-ok);
-  border-color: #b6dcc7;
+  border-color: var(--c-ok-line);
 }
 
 .badge--warn {
   background: var(--c-warn-soft);
   color: var(--c-warn);
-  border-color: #e5cfa4;
+  border-color: var(--c-warn-line);
 }
 
 .badge--danger {
   background: var(--c-danger-soft);
   color: var(--c-danger);
-  border-color: #e8bcbc;
+  border-color: var(--c-danger-line);
 }
 
-.badge--action {
-  background: var(--c-accent-soft);
-  color: var(--c-accent);
-  border-color: #b9d2e8;
+.badge--refund {
+  background: var(--c-refund-soft);
+  color: var(--c-refund);
+  border-color: var(--c-refund-line);
 }
 
-/* ---------------------------------------------------------------- кнопки  */
+/* ================================================================ кнопки */
 
 .btn {
   display: inline-flex;
@@ -354,13 +708,13 @@ a {
   gap: var(--s-2);
   min-block-size: var(--tap);
   padding-inline: var(--s-4);
-  padding-block: var(--s-2);
+  padding-block: var(--s-3);
   border-radius: var(--r-2);
   border: 1px solid var(--c-accent);
   background: var(--c-accent);
   color: var(--c-accent-ink);
   font: inherit;
-  font-weight: 600;
+  font-weight: 700;
   font-size: var(--t-sm);
   text-align: center;
   text-decoration: none;
@@ -370,21 +724,61 @@ a {
   overflow-wrap: anywhere;
 }
 
+.btn:hover {
+  background: var(--c-accent-hover);
+  border-color: var(--c-accent-hover);
+  color: var(--c-accent-ink);
+}
+
 .btn--secondary {
   background: var(--c-surface);
-  color: var(--c-accent);
+  border-color: var(--c-line-field);
+  color: var(--c-ink);
+  font-weight: 600;
+}
+
+.btn--secondary:hover {
+  background: var(--c-bg);
+  border-color: var(--c-line-strong);
+  color: var(--c-ink);
 }
 
 .btn--ghost {
   background: transparent;
-  border-color: var(--c-line-strong);
-  color: var(--c-ink-muted);
+  border-color: var(--c-line-field);
+  color: var(--c-ink-faint);
+}
+
+.btn--ghost:hover {
+  background: var(--c-bg);
+  color: var(--c-ink);
+}
+
+/* Компактная кнопка-подпись: «назад», «копировать», «документы». */
+.chipbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-block-size: var(--tap);
+  padding-inline: var(--s-3);
+  border: 1px solid var(--c-line-field);
+  border-radius: var(--r-field);
+  background: var(--c-surface);
+  color: var(--c-ink-faint);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.chipbtn:hover {
+  background: var(--c-bg);
+  color: var(--c-ink);
 }
 
 /*
  * Недоступное действие — не `disabled`: скринридер его пропускает, а причина
- * обязана быть прочитана (SCREENS.md §7.6). Поэтому это блок с текстом причины,
- * а не серая кнопка.
+ * обязана быть прочитана (`SCREENS.md` §7.6). Поэтому это блок с текстом
+ * причины, а не серая кнопка.
  */
 .blocked {
   display: flex;
@@ -397,13 +791,14 @@ a {
 }
 
 .blocked__label {
-  font-weight: 600;
+  font-weight: 700;
   font-size: var(--t-sm);
-  color: var(--c-ink-muted);
+  color: var(--c-ink-faint);
 }
 
 .blocked__reason {
   font-size: var(--t-sm);
+  line-height: 1.55;
   color: var(--c-ink-muted);
 }
 
@@ -411,61 +806,155 @@ a {
   display: flex;
   flex-wrap: wrap;
   gap: var(--s-2);
+  align-items: center;
 }
 
-/* ---------------------------------------------------- блок «где деньги»  */
+/* ====================================== карточка положения денег (C-01) */
 
-.where {
-  border-inline-start: 6px solid var(--c-line-strong);
-}
-
-.where--ok {
-  border-inline-start-color: var(--c-ok);
-}
-
-.where--action {
-  border-inline-start-color: var(--c-accent);
-}
-
-.where--warn {
-  border-inline-start-color: var(--c-warn);
-}
-
-.where--danger {
-  border-inline-start-color: var(--c-danger);
-}
-
-.where--wait {
-  border-inline-start-color: var(--c-line-strong);
-}
-
-.where__head {
+/*
+ * Одна карточка вместо трёх: деньги, требуемое действие и срок — один ответ,
+ * а не три равнозначных блока (`Кабинет стороны.dc.html`, экран сделки).
+ */
+.state-card {
+  border-radius: var(--r-3);
+  padding: var(--s-5);
   display: flex;
-  gap: var(--s-3);
-  align-items: flex-start;
+  flex-direction: column;
+  gap: var(--s-5);
+  border: 1px solid var(--c-line);
+  background: var(--c-surface-sunken);
+  color: var(--c-ink-muted);
 }
 
-.where__title {
-  font-size: var(--t-lg);
+.state-card--wait {
+  background: var(--c-surface-sunken);
+  border-color: var(--c-line);
+  color: var(--c-ink-faint);
+}
+
+.state-card--info,
+.state-card--action {
+  background: var(--c-accent-soft);
+  border-color: var(--c-accent-line);
+  color: var(--c-accent-strong);
+}
+
+.state-card--warn {
+  background: var(--c-warn-soft);
+  border-color: var(--c-warn-line);
+  color: var(--c-warn);
+}
+
+.state-card--ok {
+  background: var(--c-ok-soft);
+  border-color: var(--c-ok-line);
+  color: var(--c-ok);
+}
+
+.state-card--danger {
+  background: var(--c-danger-soft);
+  border-color: var(--c-danger-line);
+  color: var(--c-danger);
+}
+
+.state-card--refund {
+  background: var(--c-refund-soft);
+  border-color: var(--c-refund-line);
+  color: var(--c-refund);
+}
+
+.state-card__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.state-card__top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.state-card__label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--t-caption);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   font-weight: 700;
 }
 
-.where__body {
-  color: var(--c-ink-muted);
-  font-size: var(--t-sm);
-  margin-block-start: var(--s-2);
+.state-card__title {
+  font-size: var(--t-xl);
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+}
+
+.state-card__body {
+  font-size: var(--t-md);
+  line-height: 1.6;
   max-inline-size: var(--measure);
 }
 
-.where__amount {
-  margin-block-start: var(--s-3);
+/* Вложенный белый блок «что требуется от вас» внутри цветной карточки. */
+.state-card__inner {
+  background: var(--c-surface);
+  border-radius: 14px;
+  padding: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  color: var(--c-ink);
 }
 
-/* ------------------------------------------------------------- суммы (C-04) */
+.state-card__section {
+  padding-block-start: var(--s-3);
+  border-block-start: 1px solid var(--c-line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+/* ⚖-слот: юридически значимая строка, вынесенная из тела блока. */
+.legal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.legal__body {
+  font-size: var(--t-sm);
+  line-height: 1.6;
+  color: var(--c-ink-muted);
+  max-inline-size: var(--measure);
+}
+
+/*
+ * Слот, не прошедший юридическое ревью, не публикуется: на его месте стоит
+ * видимая заглушка с пометкой, а не молчание (`LEGAL-REVIEW.md` §10).
+ */
+.legal--pending {
+  border: 1px dashed var(--c-warn-line);
+  border-radius: var(--r-field);
+  padding: var(--s-3);
+  background: var(--c-warn-soft);
+}
+
+.legal--pending .legal__body {
+  color: var(--c-warn);
+}
+
+/* ========================================================= суммы (C-04) */
 
 .amount {
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   /* Сумма не обрезается никогда: колонка растёт, обрезаются соседи. */
   overflow-wrap: normal;
   white-space: nowrap;
@@ -476,21 +965,22 @@ a {
  *
  * Мерой оказался русский, а не грузинский: русская локаль не печатает символ
  * лари вовсе — вместо «436 231,00 ₾» она даёт «436 231,00 GEL», и на 360 px
- * это на три знака шире грузинского. Строка с `nowrap` раздвигала колонку
- * сетки и уводила весь экран за край. Подменять код валюты своим символом
+ * это на три знака шире грузинского. Подменять код валюты своим символом
  * нельзя — это правило локали, а не дефект, — поэтому сжимается кегль.
  */
 .amount--hero {
-  font-size: clamp(1.5rem, 6.5vw, var(--t-3xl));
-  line-height: 1.15;
+  font-size: clamp(1.6875rem, 6.5vw, var(--t-3xl));
+  line-height: 1.05;
+  letter-spacing: -0.035em;
 }
 
 .amount--lead {
-  font-size: clamp(1.0625rem, 4.5vw, var(--t-xl));
+  font-size: clamp(1.0625rem, 4.5vw, 1.5rem);
+  font-weight: 700;
 }
 
 .amount--muted {
-  font-weight: 600;
+  font-weight: 500;
   color: var(--c-ink-muted);
 }
 
@@ -500,11 +990,23 @@ a {
  * распорядиться. Что именно с ними происходит, говорит текст рядом.
  */
 .amount--unavailable {
-  color: var(--c-ink-muted);
+  color: var(--c-ink-faint);
+}
+
+/*
+ * Знак лари в слоте фиксированной ширины (§2.4 дизайн-системы): глифа ₾ нет ни
+ * в Manrope, ни в IBM Plex Mono, он приходит из фолбэка со своей метрикой — и
+ * без слота правый край колонки сумм плывёт.
+ */
+.lari {
+  display: inline-block;
+  inline-size: 0.62em;
+  text-align: center;
 }
 
 .amount-label {
   display: block;
+  font-family: var(--font-sans);
   font-size: var(--t-xs);
   font-weight: 400;
   color: var(--c-ink-faint);
@@ -528,7 +1030,7 @@ a {
 }
 
 .row__key {
-  color: var(--c-ink-muted);
+  color: var(--c-ink-faint);
   font-size: var(--t-sm);
   /* Текстовая ячейка уступает место сумме, а не наоборот. */
   min-inline-size: 0;
@@ -536,13 +1038,10 @@ a {
 }
 
 /*
- * Значение строки уступает место, а не выталкивает страницу.
- *
- * Здесь ломался грузинский: адрес объекта — имя собственное, оно не переводится
- * и на всех трёх языках остаётся грузинским, а `flex: 0 0 auto` не давал ему
- * перенестись. На 360 px строка уезжала на 43 px за экран. Сумма при этом не
- * страдает: у неё собственный `white-space: nowrap`, и переноситься ей нечем —
- * она короче любого адреса.
+ * Значение строки уступает место, а не выталкивает страницу. Здесь ломался
+ * грузинский: адрес объекта — имя собственное, оно не переводится и остаётся
+ * грузинским на всех трёх языках. Сумма при этом не страдает: у неё собственный
+ * `white-space: nowrap`, и переноситься ей нечем.
  */
 .row__value {
   flex: 0 1 auto;
@@ -553,8 +1052,13 @@ a {
 }
 
 .row--total {
-  padding-block-start: var(--s-2);
+  padding-block-start: var(--s-3);
   border-block-start: 1px solid var(--c-line);
+  font-weight: 700;
+}
+
+.row--total .row__key {
+  color: var(--c-ink);
   font-weight: 700;
 }
 
@@ -563,7 +1067,7 @@ a {
   min-inline-size: 8ch;
   block-size: 1em;
   border-radius: var(--r-1);
-  background: linear-gradient(90deg, var(--c-surface-sunken), #dfe4e9, var(--c-surface-sunken));
+  background: linear-gradient(90deg, var(--c-surface-quiet), #dfe4e9, var(--c-surface-quiet));
   background-size: 200% 100%;
   animation: shimmer 1.4s linear infinite;
 }
@@ -577,7 +1081,7 @@ a {
   }
 }
 
-/* ------------------------------------------------------------ срок (C-03) */
+/* ============================================================ срок (C-03) */
 
 .deadline {
   display: flex;
@@ -586,14 +1090,15 @@ a {
 }
 
 .deadline__primary {
-  font-weight: 700;
+  font-family: var(--font-mono);
+  font-weight: 600;
   font-size: var(--t-md);
 }
 
 .deadline__secondary,
 .deadline__relative {
   font-size: var(--t-sm);
-  color: var(--c-ink-muted);
+  color: var(--c-ink-faint);
 }
 
 .deadline__consequence {
@@ -601,7 +1106,8 @@ a {
   padding-block-start: var(--s-2);
   border-block-start: 1px solid var(--c-line);
   font-size: var(--t-sm);
-  color: var(--c-ink);
+  line-height: 1.55;
+  color: var(--c-ink-muted);
   max-inline-size: var(--measure);
 }
 
@@ -613,7 +1119,7 @@ a {
   color: var(--c-warn);
 }
 
-/* ---------------------------------------------------------- лента (C-06) */
+/* ========================================================== лента (C-06) */
 
 .timeline {
   display: flex;
@@ -622,7 +1128,7 @@ a {
 
 .timeline__step {
   display: grid;
-  grid-template-columns: 20px 1fr;
+  grid-template-columns: 18px 1fr;
   gap: var(--s-3);
   padding-block: var(--s-2);
 }
@@ -637,31 +1143,84 @@ a {
 .timeline__line {
   inline-size: 2px;
   flex: 1;
+  min-block-size: 18px;
   background: var(--c-line);
+}
+
+.timeline__step--done .timeline__line {
+  background: var(--c-ok-line);
+}
+
+.timeline__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
 }
 
 .timeline__label {
   font-size: var(--t-sm);
+  color: var(--c-ink);
 }
 
 .timeline__step--current .timeline__label {
   font-weight: 700;
+  color: var(--c-accent-strong);
 }
 
 .timeline__step--future .timeline__label {
   color: var(--c-ink-faint);
 }
 
-.timeline__meta {
-  font-size: var(--t-xs);
+.timeline__step--missed .timeline__label {
   color: var(--c-ink-faint);
+  text-decoration: line-through;
 }
 
 .timeline__step--branch .timeline__label {
-  color: var(--c-warn);
+  color: var(--c-refund);
+  font-weight: 600;
 }
 
-/* ------------------------------------------------------------- сравнение */
+.timeline__step--insert {
+  background: var(--c-warn-soft);
+  border-radius: var(--r-field);
+  padding-inline: var(--s-2);
+}
+
+.timeline__detail {
+  display: block;
+  font-size: var(--t-xs);
+  line-height: 1.55;
+  color: var(--c-ink-faint);
+  max-inline-size: var(--measure);
+}
+
+.timeline__meta {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  color: var(--c-ink-faint);
+}
+
+/* Плашка «кто держит мяч»: пока там не «вы», от вас ничего не требуется. */
+.ball {
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--c-ink-faint);
+  background: var(--c-surface-sunken);
+  padding: 2px var(--s-2);
+  border-radius: var(--r-1);
+}
+
+.ball--you {
+  color: var(--c-accent-strong);
+  background: var(--c-accent-soft);
+}
+
+/* ============================================================== сравнение */
 
 .compare {
   inline-size: 100%;
@@ -671,7 +1230,7 @@ a {
 
 .compare caption {
   text-align: start;
-  font-weight: 600;
+  font-weight: 700;
   padding-block-end: var(--s-2);
 }
 
@@ -694,7 +1253,16 @@ a {
   font-weight: 700;
 }
 
-/* --------------------------------------------------------------- баннеры */
+.compare__match {
+  color: var(--c-ok);
+  font-weight: 700;
+}
+
+.compare tr.is-mismatch {
+  background: var(--c-danger-soft);
+}
+
+/* ================================================================ баннеры */
 
 .banner {
   display: flex;
@@ -706,18 +1274,18 @@ a {
 }
 
 .banner--info {
-  background: var(--c-info-soft);
-  border-color: #bcd4e6;
+  background: var(--c-accent-soft);
+  border-color: var(--c-accent-line);
 }
 
 .banner--warn {
   background: var(--c-warn-soft);
-  border-color: #e5cfa4;
+  border-color: var(--c-warn-line);
 }
 
 .banner--critical {
   background: var(--c-danger-soft);
-  border-color: #e8bcbc;
+  border-color: var(--c-danger-line);
 }
 
 .banner__title {
@@ -727,23 +1295,28 @@ a {
 
 .banner__body {
   font-size: var(--t-sm);
+  line-height: 1.55;
   color: var(--c-ink-muted);
   max-inline-size: var(--measure);
 }
 
-/* ------------------------------------------------------ блок безопасности */
+/* ====================================================== блок безопасности */
 
 .security {
-  background: var(--c-surface-sunken);
-  border: 1px solid var(--c-line);
+  background: var(--c-surface);
   border-radius: var(--r-3);
-  padding: var(--s-4);
+  padding: var(--s-5);
+  box-shadow: var(--shadow-card);
 }
 
 .security__title {
-  font-size: var(--t-sm);
-  font-weight: 700;
-  margin-block-end: var(--s-2);
+  font-size: var(--t-caption);
+  font-family: var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--c-ink-faint);
+  font-weight: 400;
+  margin-block-end: var(--s-3);
 }
 
 .security__list {
@@ -751,6 +1324,7 @@ a {
   flex-direction: column;
   gap: var(--s-2);
   font-size: var(--t-sm);
+  line-height: 1.6;
   color: var(--c-ink-muted);
   max-inline-size: var(--measure);
 }
@@ -761,55 +1335,45 @@ a {
   align-items: flex-start;
 }
 
-.footer {
-  border-block-start: 1px solid var(--c-line);
-  background: var(--c-surface);
-  padding-block: var(--s-4) var(--s-6);
-}
+/* ========================================================= список сделок */
 
-.footer__inner {
-  margin-inline: auto;
-  max-inline-size: 1180px;
-  padding-inline: var(--s-4);
+/*
+ * Список сделок — экран сканирования, а не чтения: строки сравнивают между
+ * собой. Группировка по «требует вашего действия» / «идут своим ходом» задаётся
+ * разметкой, а не сортировкой: клиент должен видеть границу, а не догадываться.
+ */
+.group {
   display: flex;
   flex-direction: column;
   gap: var(--s-3);
 }
 
-.footer__links {
+.group__title {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--s-3);
-  font-size: var(--t-sm);
+  gap: var(--s-2);
+  align-items: baseline;
 }
-
-/* ---------------------------------------------------------- список сделок */
 
 .deal-list {
   display: grid;
   gap: var(--s-3);
 }
 
-/*
- * Список сделок — экран сканирования, а не чтения: строки сравнивают между
- * собой, а не читают сверху вниз. Поэтому на широком экране карточка
- * разворачивается в четыре колонки — объект, положение денег, сумма, действие,
- * — и взгляд идёт по столбцу, а не прыгает по карточкам.
- */
 .deal-card {
   display: grid;
   gap: var(--s-3);
   grid-template-columns: minmax(0, 1fr);
   background: var(--c-surface);
-  border: 1px solid var(--c-line);
   border-radius: var(--r-3);
-  padding: var(--s-4);
+  padding: var(--s-4) var(--s-5);
+  box-shadow: var(--shadow-card);
 }
 
-@media (min-width: 860px) {
+@container (min-width: 860px) {
   .deal-card {
     grid-template-columns: minmax(0, 2.4fr) minmax(0, 1.6fr) auto auto;
-    align-items: start;
+    align-items: center;
     column-gap: var(--s-5);
   }
 }
@@ -827,7 +1391,7 @@ a {
   align-items: flex-start;
 }
 
-@media (min-width: 860px) {
+@container (min-width: 860px) {
   .deal-card__money {
     align-items: flex-end;
   }
@@ -859,6 +1423,7 @@ a {
 .deal-card__title {
   font-size: var(--t-md);
   font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .deal-card__title a {
@@ -871,13 +1436,12 @@ a {
 }
 
 .deal-card__meta {
+  font-family: var(--font-mono);
   font-size: var(--t-xs);
   color: var(--c-ink-faint);
 }
 
-
-
-/* ------------------------------------------------------------ мой счёт  */
+/* =============================================================== мой счёт */
 
 .split {
   display: grid;
@@ -886,10 +1450,64 @@ a {
   grid-template-columns: minmax(0, 1fr);
 }
 
-@media (min-width: 760px) {
+@container (min-width: 760px) {
   .split {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+/*
+ * Сгруппированный список: строки разделены линией в один пиксель, а не
+ * отступами. Так читается таблица остатков, движений и реквизитов.
+ */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--c-line);
+  border-radius: var(--r-2);
+  overflow: hidden;
+}
+
+.list__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  justify-content: space-between;
+  align-items: baseline;
+  background: var(--c-surface);
+  padding: var(--s-3) var(--s-4);
+}
+
+.list__row--quiet {
+  background: var(--c-surface-sunken);
+}
+
+.list__row--accent {
+  background: var(--c-warn-soft);
+}
+
+.list__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-inline-size: 0;
+}
+
+.list__cell--end {
+  text-align: end;
+  align-items: flex-end;
+}
+
+.list__label {
+  font-size: var(--t-sm);
+  font-weight: 600;
+}
+
+.list__meta {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--c-ink-faint);
 }
 
 .locked-item {
@@ -913,6 +1531,10 @@ a {
   border-block-end: 1px solid var(--c-line);
 }
 
+.record:last-child {
+  border-block-end: 0;
+}
+
 .record__top {
   display: flex;
   flex-wrap: wrap;
@@ -927,32 +1549,40 @@ a {
 }
 
 .record__meta {
+  font-family: var(--font-mono);
   font-size: var(--t-xs);
   color: var(--c-ink-faint);
 }
 
-/* ---------------------------------------------------- карточка получателя */
+/* ==================================================== карточка получателя */
 
 .assurance {
-  border: 2px solid var(--c-ok);
+  border: 1px solid var(--c-ok-line);
   border-radius: var(--r-3);
   background: var(--c-surface);
-  padding: var(--s-4);
+  padding: var(--s-5);
+  box-shadow: var(--shadow-card);
 }
 
 .assurance--pending {
-  border-color: var(--c-line-strong);
+  border-color: var(--c-line);
 }
 
 .assurance--stopped {
-  border-color: var(--c-warn);
+  border-color: var(--c-warn-line);
+}
+
+.assurance__head {
+  display: flex;
+  gap: var(--s-3);
+  align-items: flex-start;
 }
 
 .assurance__hero {
   display: flex;
   flex-direction: column;
   gap: var(--s-1);
-  margin-block: var(--s-3);
+  margin-block: var(--s-4);
 }
 
 .outcomes {
@@ -961,7 +1591,7 @@ a {
   grid-template-columns: minmax(0, 1fr);
 }
 
-@media (min-width: 720px) {
+@container (min-width: 720px) {
   .outcomes {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -969,13 +1599,13 @@ a {
 
 /*
  * Оба исхода одинаковы по весу: карточка, показывающая только хороший исход,
- * читается как реклама (SCREENS.md §4.1).
+ * читается как реклама (`SCREENS.md` §4.1).
  */
 .outcome {
   display: flex;
   flex-direction: column;
   gap: var(--s-2);
-  padding: var(--s-3);
+  padding: var(--s-4);
   border: 1px solid var(--c-line);
   border-radius: var(--r-2);
   background: var(--c-surface-sunken);
@@ -988,20 +1618,38 @@ a {
 
 .outcome__body {
   font-size: var(--t-sm);
+  line-height: 1.55;
   color: var(--c-ink-muted);
 }
 
+/* Лестница подтверждения A0…A4: полосами, а не ступенями-плашками. */
 .ladder {
+  display: flex;
+  gap: var(--s-1);
+}
+
+.ladder__bar {
+  flex: 1;
+  block-size: 9px;
+  border-radius: 3px;
+  background: var(--c-line);
+}
+
+.ladder__bar--done {
+  background: var(--c-accent);
+}
+
+.ladder__list {
   display: flex;
   flex-wrap: wrap;
   gap: var(--s-2);
-  align-items: stretch;
+  margin-block-start: var(--s-3);
 }
 
 .ladder__step {
-  flex: 1 1 6rem;
-  padding: var(--s-2);
-  border-radius: var(--r-2);
+  flex: 1 1 8rem;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-field);
   border: 1px solid var(--c-line);
   background: var(--c-surface);
   font-size: var(--t-xs);
@@ -1009,25 +1657,26 @@ a {
 }
 
 .ladder__step--done {
-  border-color: var(--c-ok);
-  background: var(--c-ok-soft);
-  color: var(--c-ok);
+  border-color: var(--c-accent-line);
+  background: var(--c-accent-soft);
+  color: var(--c-accent-strong);
 }
 
 .ladder__step--current {
-  border-color: var(--c-ok);
-  background: var(--c-ok);
-  color: #ffffff;
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  color: var(--c-accent-strong);
   font-weight: 700;
 }
 
 .ladder__code {
   display: block;
+  font-family: var(--font-mono);
   font-weight: 700;
   font-size: var(--t-sm);
 }
 
-/* ------------------------------------------------------------- реквизиты */
+/* ================================================ формы, поля, реквизиты */
 
 .field {
   display: flex;
@@ -1037,11 +1686,14 @@ a {
   border-block-end: 1px solid var(--c-line);
 }
 
+.field:last-child {
+  border-block-end: 0;
+}
+
 .field__label {
   font-size: var(--t-xs);
   color: var(--c-ink-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-weight: 600;
 }
 
 .field__value {
@@ -1056,9 +1708,56 @@ a {
 }
 
 .field__hint {
-  font-size: var(--t-sm);
-  color: var(--c-ink-muted);
+  font-size: var(--t-xs);
+  line-height: 1.5;
+  color: var(--c-ink-faint);
   max-inline-size: var(--measure);
+}
+
+.form-grid {
+  display: grid;
+  gap: var(--s-4);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@container (min-width: 640px) {
+  .form-grid {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+}
+
+.fld {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--tap);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--c-line-field);
+  border-radius: var(--r-field);
+  background: var(--c-surface);
+  font-family: var(--font-mono);
+  font-size: var(--t-md);
+  color: var(--c-ink);
+  overflow-wrap: anywhere;
+}
+
+.fld--readonly {
+  background: var(--c-surface-sunken);
+  color: var(--c-ink-muted);
+}
+
+.fld--suffix {
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.fld__unit {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--c-ink-faint);
+  padding-inline-start: var(--s-3);
+  border-inline-start: 1px solid var(--c-line);
+  white-space: nowrap;
 }
 
 .locknote {
@@ -1066,17 +1765,57 @@ a {
   align-items: flex-start;
   gap: var(--s-2);
   font-size: var(--t-xs);
-  color: var(--c-ink-muted);
+  line-height: 1.5;
+  color: var(--c-ink-faint);
   max-inline-size: var(--measure);
 }
 
 .locknote .dot {
-  inline-size: 10px;
-  block-size: 10px;
+  inline-size: 9px;
+  block-size: 9px;
   margin-block-start: 3px;
 }
 
-/* --------------------------------------------------------------- консоль */
+/* ================================================================ консоль */
+
+.metrics {
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@container (min-width: 720px) {
+  .metrics {
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  }
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  background: var(--c-surface);
+  border-radius: var(--r-3);
+  padding: var(--s-4);
+  box-shadow: var(--shadow-card);
+}
+
+.metric__value {
+  font-family: var(--font-mono);
+  font-size: 1.625rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.metric__value--ok {
+  color: var(--c-ok);
+}
+
+.metric__note {
+  font-size: var(--t-xs);
+  line-height: 1.5;
+  color: var(--c-ink-faint);
+}
 
 .ops-grid {
   display: grid;
@@ -1084,7 +1823,7 @@ a {
   grid-template-columns: minmax(0, 1fr);
 }
 
-@media (min-width: 1200px) {
+@container (min-width: 1200px) {
   .ops-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1095,14 +1834,17 @@ a {
   flex-direction: column;
   gap: var(--s-3);
   background: var(--c-surface);
-  border: 1px solid var(--c-line);
   border-radius: var(--r-3);
   padding: var(--s-4);
+  box-shadow: var(--shadow-card);
 }
 
 .task--overdue {
-  border-color: var(--c-danger);
-  border-inline-start-width: 6px;
+  border-inline-start: 3px solid var(--c-danger-dot);
+}
+
+.task--claimed {
+  opacity: 0.78;
 }
 
 .task__top {
@@ -1130,19 +1872,19 @@ a {
   min-block-size: var(--tap);
   padding-inline: var(--s-3);
   border: 1px solid var(--c-line);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--c-surface);
   font-size: var(--t-sm);
-  color: var(--c-ink-muted);
+  color: var(--c-ink-faint);
   text-decoration: none;
   max-inline-size: 100%;
   overflow-wrap: anywhere;
 }
 
 .chip[aria-current='true'] {
-  border-color: var(--c-accent);
+  border-color: var(--c-accent-line);
   background: var(--c-accent-soft);
-  color: var(--c-accent);
+  color: var(--c-accent-strong);
   font-weight: 600;
 }
 
@@ -1153,23 +1895,57 @@ a {
   align-items: baseline;
 }
 
+/* Сверка пяти полей: сетка, а не таблица — колонок фиксированное число. */
+.cmp {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--c-line);
+  border-radius: var(--r-2);
+  overflow: hidden;
+}
+
+.cmp__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s-1) var(--s-3);
+  background: var(--c-surface);
+  padding: var(--s-3) var(--s-4);
+  font-size: var(--t-sm);
+}
+
+@container (min-width: 720px) {
+  .cmp__row {
+    grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr) 84px;
+    align-items: baseline;
+  }
+}
+
+.cmp__row--head {
+  background: var(--c-surface-sunken);
+}
+
+.cmp__row--mismatch {
+  background: var(--c-danger-soft);
+}
+
 /*
- * Консоль на телефоне показывает только то, ради чего руководителя будят ночью:
- * утверждение выплаты и дежурные метрики. Остальные задачи требуют документов и
- * второй проверки — на телефоне их не разбирают, и делать вид, что разбирают,
- * опаснее, чем честно закрыть (`SCREENS.md` §1.3).
+ * Консоль на телефоне показывает только то, ради чего дежурного будят ночью:
+ * утверждение выплаты и метрики. Остальное требует документов и второй
+ * проверки — на телефоне их не разбирают, и делать вид, что разбирают, опаснее,
+ * чем честно закрыть (`SCREENS.md` §1.3).
  */
 .desktop-only-note {
   display: block;
 }
 
-@media (min-width: 768px) {
+@container (min-width: 768px) {
   .desktop-only-note {
     display: none;
   }
 }
 
-@media (max-width: 767px) {
+@container (max-width: 767px) {
   .task--desktop-only,
   .wide-only {
     display: none;
@@ -1177,26 +1953,23 @@ a {
 }
 
 /*
- * Сенсорная цель ≥ 44 px у каждой самостоятельной ссылки.
- *
- * Исключение делается только для ссылок внутри предложения: там увеличение
- * цели ломает строку, и WCAG 2.5.5 такие ссылки не считает. Заголовок карточки
- * сделки, ссылка на сделку в списке движений и ссылки подвала самостоятельны —
- * им цель обязательна, и на телефоне это половина всех нажатий.
+ * Сенсорная цель ≥ 44 px у каждой самостоятельной ссылки. Исключение — ссылки
+ * внутри предложения: там увеличение цели ломает строку, и WCAG 2.5.5 такие
+ * ссылки не считает.
  */
 .deal-card__title a,
-.footer__links a,
 .locked-item a,
 .record a,
 .rows a,
 .task__title a,
+.list a,
 .breadcrumb a {
   display: inline-flex;
   align-items: center;
   min-block-size: var(--tap);
 }
 
-/* --------------------------------------------------------- прочие мелочи */
+/* ========================================================= прочие мелочи */
 
 .empty {
   display: flex;
@@ -1211,23 +1984,78 @@ a {
 }
 
 .empty--positive {
-  border-color: var(--c-ok);
+  border-color: var(--c-ok-line);
   background: var(--c-ok-soft);
+}
+
+.hero-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  align-items: center;
+  text-align: center;
+  padding: var(--s-7) var(--s-4);
+}
+
+.steps {
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1fr);
+  inline-size: 100%;
+  text-align: start;
+}
+
+@container (min-width: 720px) {
+  .steps {
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  }
+}
+
+.step {
+  background: var(--c-surface);
+  border-radius: 14px;
+  padding: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  color: var(--c-ink-muted);
+}
+
+.step--accent {
+  background: var(--c-accent-soft);
+  color: var(--c-accent-strong);
+  font-weight: 600;
+}
+
+.step__no {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--c-accent-hover);
 }
 
 .muted {
   color: var(--c-ink-muted);
   font-size: var(--t-sm);
+  line-height: 1.6;
   max-inline-size: var(--measure);
 }
 
 .faint {
   color: var(--c-ink-faint);
   font-size: var(--t-xs);
+  line-height: 1.55;
 }
 
 .mono {
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.disclosure {
+  border-block-start: 1px solid var(--c-line);
+  padding-block-start: var(--s-2);
 }
 
 .disclosure > summary {
@@ -1235,12 +2063,14 @@ a {
   min-block-size: var(--tap);
   display: flex;
   align-items: center;
+  gap: var(--s-2);
   font-size: var(--t-sm);
-  color: var(--c-accent);
+  font-weight: 600;
+  color: var(--c-accent-hover);
 }
 
 .disclosure > div {
-  padding-block-start: var(--s-2);
+  padding-block-start: var(--s-3);
 }
 
 .visually-hidden {

@@ -119,19 +119,25 @@ describe('платёж от третьего лица', () => {
     // ⚠ Ловушка шва. Если приложение запишет `collectedAmount` на любое
     // `funds_received` — а различить два исхода одного события домен не
     // помогает ничем, — возврат из `release_blocked` заплатит покупателю
-    // сумму, которой он не вносил. Инвариант неотрицательности клиентского
-    // остатка ловит это на первом же шаге. Отчёт, расхождение 12.
-    const trapped = patchFacts(world, TRANCHE, { collectedAmount: TINY });
-    let trap = applyTrancheEvent(
-      trapped,
-      TRANCHE,
-      { type: 'refund_requested', reason: 'compliance.payer_mismatch' },
-      OPTIONS,
-    ).world;
-    trap = applyTrancheEvent(trap, TRANCHE, { type: 'refund_initiated' }, OPTIONS).world;
-    expect(() =>
-      applyTrancheEvent(trap, TRANCHE, { type: 'payout_result', outcome: 'settled' }, OPTIONS),
-    ).toThrow(E2eInvariantError);
+    // сумму, которой он не вносил. Отчёт, расхождение 12.
+    //
+    // **Ловится на шаге, где объявлена, а не тремя шагами позже.** Прежняя
+    // редакция этого места утверждала «на первом же шаге», а проверяла обратное:
+    // фантом проходил `refund_pending` и `refunding` **запечатанными без единого
+    // нарушения** и падал только на `payout_result(settled)`, когда деньги
+    // физически уходят с номинального счёта. Собранное — единственный денежный
+    // факт, который приложение держит само, и обеспеченность притязания учётом
+    // проверяется теперь на каждом шаге (`collected_not_backed`).
+    let trap: unknown = null;
+    try {
+      patchFacts(world, TRANCHE, { collectedAmount: TINY });
+    } catch (error) {
+      trap = error;
+    }
+    expect(trap).toBeInstanceOf(E2eInvariantError);
+    expect((trap as E2eInvariantError).violations.map((item) => item.invariant)).toEqual([
+      'collected_not_backed',
+    ]);
 
     // Разбор: деньги возвращаются отправителю, транш закрывается возвратом.
     // Проводки у возврата транша нет — на транш ничего не зачислялось.

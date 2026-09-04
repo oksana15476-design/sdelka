@@ -19,8 +19,10 @@ import { accountBalance, bankNominal, clientFreeAccount, clientLockedAccount, co
 import { money } from '@sdelka/money';
 import {
   E2eInvariantError,
+  absorbIncomingShortfall,
   applyDealEvent,
   applyTrancheEvent,
+  fundIncomingShortfall,
   receiveExternalPayment,
   rejectTrancheEvent,
   trancheOf,
@@ -170,47 +172,81 @@ describe('приём средств', () => {
     expect(allocationBalances(allocation({ incoming: short, tolerance: tolerance.amount }), plan)).toBe(true);
 
     // --- А теперь то, ради чего этот сценарий сквозной ---
-    // Признанную недостачу обязана закрыть вторая запись — довнесение с
-    // операционного счёта (`FUNCTIONAL.md` §3.1, случай А). Конструктора этой
-    // записи в словаре учёта сегодня нет, и без неё план исполнить нечем:
-    // клиентских денег на транш ровно на 50 ₾ меньше, чем транш требует.
-    //
-    // Проверяется не «падает», а **чем именно** держится запрет: если приложить
-    // план к журналу как есть — зачесть траншу полную сумму и запереть её из
-    // свободной части, где лежит только пришедшее, — недостача платформы
-    // окажется оплачена деньгами клиента. Инвариант неотрицательного остатка
-    // ловит это на первом же шаге, и другой двери в журнал у теста нет.
-    world = receiveExternalPayment(world, opened.buyerKey, short);
-    world = applyTrancheEvent(
-      world,
-      TRANCHE,
-      {
-        type: 'funds_received',
-        amount: plan.toTranche,
-        sender: payerKeyForDomain(BUYER.document),
-        reference: 'payment-absorbed',
-      },
-      ATTACHED,
-    ).world;
-    expect(trancheStatusOf(world, TRANCHE)).toBe('collected');
-    world = applyDealEvent(world, DEAL, { type: 'funds_received' }, OPTIONS);
-
+    // Зачесть план как есть — то есть положить клиенту пришедшее, а траншу
+    // объявить полную сумму — значит оплатить недостачу платформы деньгами
+    // клиента. Отказ наступает **на том шаге, где сумма объявлена**: собранное
+    // приложение держит само, и обеспеченность притязания учётом проверяется
+    // на каждом шаге.
+    const naive = receiveExternalPayment(world, opened.buyerKey, short);
     let violation: unknown = null;
     try {
-      applyTrancheEvent(world, TRANCHE, { type: 'reserve_requested' }, OPTIONS);
+      applyTrancheEvent(
+        naive,
+        TRANCHE,
+        {
+          type: 'funds_received',
+          amount: plan.toTranche,
+          sender: payerKeyForDomain(BUYER.document),
+          reference: 'payment-absorbed',
+        },
+        ATTACHED,
+      );
     } catch (error) {
       violation = error;
     }
     expect(violation).toBeInstanceOf(E2eInvariantError);
     expect((violation as E2eInvariantError).violations.map((item) => item.invariant)).toContain(
-      'negative_client_balance',
+      'collected_not_backed',
     );
+    expect(trancheStatusOf(naive, TRANCHE)).toBe('collecting');
 
-    // Что из этого следует и кому: пока признанная недостача не стала записью,
-    // `shortfall_absorbed` исполним только до `collected`. Это не дефект приёма
-    // и не дефект автомата — это отсутствующий конструктор в `@sdelka/ledger`
-    // (`INTAKE.md` §11, пункт учёта). Надгробие стоит здесь, чтобы день, когда
-    // конструктор появится, начался с падения этого теста, а не с тишины.
+    // --- Как это делается правильно: две записи, а не одна ---
+    // Здесь стояло надгробие «конструктора нет в словаре». Конструкторы
+    // появились (`absorbShortfall`, `fundShortfall`), и надгробие заменено тем,
+    // ради чего стояло: недостача признаётся расходом **в момент поступления**,
+    // обязательство перед клиентом доводится до полной суммы, — и на этом
+    // первый момент кончается.
+    let uncovered: unknown = null;
+    try {
+      absorbIncomingShortfall(world, opened.buyerKey, short, plan.shortfall);
+    } catch (error) {
+      uncovered = error;
+    }
+    // Ровно то, что обещает §3.1: «до второй записи транш не обеспечен, и это
+    // видно в системе как расхождение, а не как норма». В сквозном мире
+    // «видно» выражается единственным способом, который у него есть: шаг не
+    // запечатывается, приём остановлен, и расхождение названо поимённо.
+    expect(uncovered).toBeInstanceOf(E2eInvariantError);
+    const uncoveredNames = (uncovered as E2eInvariantError).violations.map((item) => item.invariant);
+    expect(uncoveredNames).toContain('funds_source_uncovered');
+    expect(uncoveredNames).toContain('coverage_below_one');
+    // И это **не** отрицательный остаток клиента: обязательство доведено до
+    // полной суммы честно, не хватает денег под ним, а не денег у клиента.
+    expect(uncoveredNames).not.toContain('negative_client_balance');
+
+    // Второй момент — довнесение с операционного счёта, межбанковский перевод.
+    // В этом мире операционный счёт пуст: платформа никогда ничего не
+    // зарабатывала, и закрыть дыру ей нечем. Довнесение с пустого счёта
+    // восстанавливает пофайловое обеспечение — и ловится отрицательным
+    // остатком банковского счёта, то есть обещанием, за которым ничего нет.
+    let promised: unknown = null;
+    try {
+      fundIncomingShortfall(world, opened.buyerKey, plan.shortfall);
+    } catch (error) {
+      promised = error;
+    }
+    expect(promised).toBeInstanceOf(E2eInvariantError);
+    expect(
+      (promised as E2eInvariantError).violations.map((item) => item.detail),
+    ).toContain('ledger.invariant.negative_bank_balance');
+
+    // Что из этого следует и кому. Недостачу закрывают **наши** деньги, а
+    // единственный способ их появления в сквозном мире — заработанная
+    // комиссия: операционного остатка платформы этот мир не заводит вовсе, и
+    // взяться ему неоткуда. Пока это так, случай А исполним только в мире, где
+    // хотя бы одна сделка уже расчитана. Владельцу: источник операционных
+    // средств (взнос капитала) в плане счетов §3.1 не назван — а без него
+    // «платформа доплачивает» держится на пустом счёте.
   });
 
   it('накапливает дробные платежи и применяет допуск один раз к итогу', async () => {

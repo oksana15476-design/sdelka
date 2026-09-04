@@ -37,6 +37,45 @@ export function formatMoney(locale: Locale, value: Money<CurrencyCode>): string 
   );
 }
 
+/** Знак лари. В коде — кодовой точкой: литерал в исходнике не нужен. */
+const LARI = '₾';
+
+export interface MoneyPart {
+  readonly text: string;
+  /** Знак лари ставится в слот фиксированной ширины, остальное — как есть. */
+  readonly lari: boolean;
+}
+
+/**
+ * Сумма, разобранная на части, чтобы знак валюты можно было положить в слот
+ * фиксированной ширины (`IMPLEMENTATION.md` §1, дизайн-система §2.4).
+ *
+ * Глифа `₾` нет ни в Manrope, ни в IBM Plex Mono: он приходит из шрифта-фолбэка
+ * со своей метрикой, и в вертикальном списке сумм уводит правый край. Слот
+ * `.62em` возвращает колонку на место. Все прочие валюты форматируются без
+ * изменений: у их символов метрика гарнитуры, и слот им только вредит.
+ */
+export function formatMoneyParts(locale: Locale, value: Money<CurrencyCode>): readonly MoneyPart[] {
+  const formatter = new Intl.NumberFormat(LOCALE_TAG[locale], {
+    style: 'currency',
+    currency: value.currency,
+  });
+  const parts = (formatter.formatToParts as (input: string) => Intl.NumberFormatPart[])(
+    toDecimalString(value),
+  );
+  const out: MoneyPart[] = [];
+  for (const part of parts) {
+    const lari = part.type === 'currency' && part.value === LARI;
+    const previous = out.at(-1);
+    if (!lari && previous !== undefined && !previous.lari) {
+      out[out.length - 1] = { text: previous.text + part.value, lari: false };
+      continue;
+    }
+    out.push({ text: part.value, lari });
+  }
+  return out;
+}
+
 /** Сумма со знаком: движение по счёту читается только со знаком. */
 export function formatSignedMoney(locale: Locale, value: Money<CurrencyCode>): string {
   return formatDecimalString(

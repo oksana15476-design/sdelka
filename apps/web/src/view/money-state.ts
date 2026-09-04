@@ -66,7 +66,7 @@ export const MONEY_STATE_CODE: Readonly<Record<MoneyState, string>> = Object.fre
  * форма индикатора, иначе дальтоник не отличит «зарезервировано» от «возвращено»
  * (`SCREENS.md` §1.7).
  */
-export type StateTone = 'wait' | 'action' | 'ok' | 'warn' | 'danger' | 'info';
+export type StateTone = 'wait' | 'action' | 'ok' | 'warn' | 'danger' | 'info' | 'refund';
 
 export const MONEY_STATE_TONE: Readonly<Record<MoneyState, StateTone>> = Object.freeze({
   notFunded: 'action',
@@ -77,15 +77,17 @@ export const MONEY_STATE_TONE: Readonly<Record<MoneyState, StateTone>> = Object.
   onAccount: 'info',
   partiallyFunded: 'action',
   overfunded: 'info',
-  reserved: 'ok',
-  submitted: 'ok',
-  releasePending: 'ok',
+  reserved: 'info',
+  submitted: 'info',
+  releasePending: 'info',
   released: 'ok',
   payoutUnknown: 'warn',
-  rollbackInProgress: 'warn',
-  releasedToAccount: 'info',
-  refundInProgress: 'wait',
-  refunded: 'ok',
+  // Ветка возврата — собственная семантика, а не оттенок ошибки: сделка, которая
+  // не состоялась, ошибкой клиента не является (брендбук §04, «◇ не состоялась»).
+  rollbackInProgress: 'refund',
+  releasedToAccount: 'refund',
+  refundInProgress: 'refund',
+  refunded: 'refund',
   frozen: 'danger',
 });
 

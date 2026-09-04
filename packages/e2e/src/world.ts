@@ -16,8 +16,11 @@ import {
 import {
   type ClientKey,
   type Journal,
+  accountBalance,
   balanceByCurrency,
+  clientFreeAccount,
   clientKey,
+  clientLockedAccount,
   checkLedgerInvariants,
   isEveryFundsSourceCovered,
   isEveryTrancheCovered,
@@ -93,6 +96,27 @@ export const E2E_INVARIANTS = [
   'tranche_uncovered',
   'funds_source_uncovered',
   'negative_client_balance',
+  /**
+   * Собранное, объявленное приложением, не обеспечено учётом.
+   *
+   * `collectedAmount` — **единственный денежный факт, который приложение держит
+   * само**: покрытие и запертую сумму `contextFor` пересчитывает из журнала на
+   * каждый вызов, а собранное берёт из события `funds_received` и запоминает.
+   * Отнесение свободной части счёта клиента к траншу в журнале не записано
+   * (зачисление кредитует `client:{c}:free`, где траншей не видно), поэтому
+   * вывести собранное из журнала нельзя — но **проверить** можно: сумма
+   * притязаний живых траншей одного клиента не может превышать того, что учёт
+   * этому клиенту должен.
+   *
+   * Проба, которую это закрывает: приложение объявляет полную сумму, а на счёт
+   * клиента пришло на 50 ₾ меньше. Транш проходит `collected`,
+   * `refund_pending` и `refunding` — **каждый шаг запечатан без единого
+   * нарушения**, — и падает только на `refunded`, когда деньги физически
+   * уходят с номинального счёта. Денежный факт, который приложение может
+   * объявить, — не факт, и ловиться он обязан на шаге, где объявлен, а не
+   * тремя шагами позже.
+   */
+  'collected_not_backed',
   'double_active_payout',
   'non_terminal_without_deadline',
   'audit_chain_broken',
@@ -150,6 +174,11 @@ export function invariantViolations(world: World): readonly InvariantViolation[]
     });
   }
 
+  // 5. Собранное, объявленное приложением, обеспечено учётом.
+  for (const violation of unbackedCollectedClaims(world)) {
+    out.push(violation);
+  }
+
   for (const tranche of world.tranches.values()) {
     if (violatesSingleActivePayout(tranche.payouts, tranche.trancheId)) {
       out.push({ invariant: 'double_active_payout', subject: tranche.trancheId, detail: '' });
@@ -186,6 +215,60 @@ export function invariantViolations(world: World): readonly InvariantViolation[]
   }
 
   return Object.freeze(out);
+}
+
+/**
+ * Притязания живых траншей на деньги клиента против того, что учёт этому
+ * клиенту должен.
+ *
+ * Сумма — по клиенту и валюте, а не по одному траншу: два транша одного
+ * покупателя, каждый в пределах остатка, вместе могут этот остаток превышать, и
+ * пофайловая проверка такую пару пропустила бы. Терминальные транши не
+ * считаются: их обязательство уже погашено расчётом, возвратом или списанием, а
+ * `collectedAmount` в фактах остаётся как след прошлого.
+ *
+ * Обеспечением считается **свободная часть плюс запертое под траншами этого же
+ * клиента**: пока деньги не заперты, притязание опирается на свободный остаток,
+ * после запирания — на файл транша. Обе половины принадлежат одному клиенту, и
+ * складывать их законно.
+ */
+function unbackedCollectedClaims(world: World): readonly InvariantViolation[] {
+  const claims = new Map<string, { owner: ClientKey; currency: CurrencyCode; minor: bigint }>();
+  const owners = new Map<ClientKey, TrancheRuntime[]>();
+  for (const tranche of world.tranches.values()) {
+    const owner = payerOf(tranche);
+    owners.set(owner, [...(owners.get(owner) ?? []), tranche]);
+    if (isTerminalTrancheStatus(tranche.state.status)) continue;
+    const claimed = tranche.facts.collectedAmount;
+    if (claimed === null || claimed.minor <= 0n) continue;
+    const key = `${owner}|${claimed.currency}`;
+    const previous = claims.get(key);
+    claims.set(key, {
+      owner,
+      currency: claimed.currency,
+      minor: (previous?.minor ?? 0n) + claimed.minor,
+    });
+  }
+
+  const out: InvariantViolation[] = [];
+  for (const claim of claims.values()) {
+    let backing = accountBalance(world.journal, clientFreeAccount(claim.owner), claim.currency).minor;
+    for (const tranche of owners.get(claim.owner) ?? []) {
+      backing += accountBalance(
+        world.journal,
+        clientLockedAccount(claim.owner, tranche.dealId, tranche.trancheId),
+        claim.currency,
+      ).minor;
+    }
+    if (claim.minor > backing) {
+      out.push({
+        invariant: 'collected_not_backed',
+        subject: `${claim.owner}:${claim.currency}`,
+        detail: `${claim.minor} > ${backing}`,
+      });
+    }
+  }
+  return out;
 }
 
 export class E2eInvariantError extends Error {

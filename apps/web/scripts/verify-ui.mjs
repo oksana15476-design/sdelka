@@ -31,7 +31,16 @@
  * единственный `h1`, достижимость с клавиатуры.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -389,22 +398,113 @@ async function waitForServer(timeoutMs) {
   return false;
 }
 
+/* ------------------------------------------------- 4. свежесть сборки */
+
 /**
- * Нужна ли пересборка.
+ * Из чего собрано приложение — **весь** вход, а не только `apps/web/src`.
  *
- * Раньше здесь стояло «есть каталог `.next` — не собираем», и это была дыра
- * ровно того же рода, что все остальные, которые ловит этот скрипт: обход шёл
- * по **вчерашней** сборке и заканчивался зелёным на коде, которого в ней нет.
- * Поймано на добавленной фикстуре — новый экран отвечал 404, хотя в исходниках
- * он был. Сравнивается отметка `BUILD_ID` с самым свежим исходником: проверка,
- * которую нельзя забыть провести, не должна проверять не то, что лежит на диске.
+ * ## Что было сломано
+ *
+ * Первая версия сравнивала отметку `BUILD_ID` с `apps/web/src` и
+ * `package.json`. Дыра осталась ровно того же рода, что и та, которую она
+ * закрывала: изменение в `packages/domain`, `packages/ledger` или
+ * `packages/money` пересборку **не вызывало**, и обход шёл по вчерашней
+ * сборке — с сегодняшним доменом внутри. В батче, где это писалось, не
+ * выстрелило только потому, что `apps/web/src` менялся одновременно с
+ * доменом; в батче, где правят один домен, выстрелило бы молча и зелёным.
+ *
+ * Пакеты не перечислены здесь руками: список зависимостей читается из
+ * `package.json` приложения и замыкается транзитивно по рабочему пространству.
+ * Новая зависимость попадёт в проверку сама — иначе мы вернулись бы сюда
+ * третий раз.
+ *
+ * ## Почему отпечаток, а не время правки
+ *
+ * Сравнение по `mtime` верит часам и порядку файловых операций: `git checkout`
+ * ветки со **старым** кодом ставит свежий `mtime`, а `git stash pop` — наоборот.
+ * Отпечаток содержимого не верит ничему: сборка считается свежей, только если
+ * вход байт-в-байт тот же, что был при её сборке. Отметка лежит внутри `.next`,
+ * то есть пропадает вместе со сборкой.
  */
-function staleBuild() {
-  const marker = join(APP_ROOT, '.next', 'BUILD_ID');
-  if (!existsSync(marker)) return true;
-  const builtAt = statSync(marker).mtimeMs;
-  const inputs = [...SOURCE_FILES, join(APP_ROOT, 'package.json')].filter((file) => existsSync(file));
-  return inputs.some((file) => statSync(file).mtimeMs > builtAt);
+const WORKSPACE_PACKAGES = join(APP_ROOT, '..', '..', 'packages');
+
+function workspaceDirectories() {
+  const byName = new Map();
+  for (const entry of readdirSync(WORKSPACE_PACKAGES)) {
+    const manifest = join(WORKSPACE_PACKAGES, entry, 'package.json');
+    if (!existsSync(manifest)) continue;
+    byName.set(JSON.parse(readFileSync(manifest, 'utf8')).name, join(WORKSPACE_PACKAGES, entry));
+  }
+  return byName;
+}
+
+/** Зависимости приложения по рабочему пространству, замкнутые транзитивно. */
+function workspaceClosure() {
+  const byName = workspaceDirectories();
+  const seen = new Set();
+  const queue = [APP_ROOT];
+  const roots = [];
+  while (queue.length > 0) {
+    const dir = queue.shift();
+    const manifest = join(dir, 'package.json');
+    if (!existsSync(manifest)) continue;
+    const parsed = JSON.parse(readFileSync(manifest, 'utf8'));
+    for (const name of Object.keys(parsed.dependencies ?? {})) {
+      const target = byName.get(name);
+      if (target === undefined || seen.has(target)) continue;
+      seen.add(target);
+      roots.push(target);
+      queue.push(target);
+    }
+  }
+  return roots;
+}
+
+/**
+ * Файлы, из которых собрана страница: исходники приложения, его конфигурация,
+ * исходники и манифесты пакетов, от которых оно зависит, и замок версий.
+ */
+function buildInputs() {
+  const files = [...SOURCE_FILES];
+  for (const entry of readdirSync(APP_ROOT)) {
+    // `tsconfig.tsbuildinfo` — след прошлого `tsc`, а не вход сборки: он
+    // меняется на каждом typecheck и заставлял бы пересобирать вхолостую.
+    if (entry === 'tsconfig.tsbuildinfo') continue;
+    const full = join(APP_ROOT, entry);
+    // Конфигурация приложения: `next.config.mjs`, `tsconfig.json`,
+    // `package.json` и всё, что появится рядом. Каталоги — уже перечислены
+    // отдельно либо не входят в сборку.
+    if (statSync(full).isDirectory()) continue;
+    files.push(full);
+  }
+  for (const dir of workspaceClosure()) {
+    files.push(join(dir, 'package.json'));
+    const src = join(dir, 'src');
+    if (existsSync(src)) walk(src, files);
+  }
+  for (const shared of ['pnpm-lock.yaml', 'tsconfig.base.json']) {
+    files.push(join(APP_ROOT, '..', '..', shared));
+  }
+  return files.filter((file) => existsSync(file) && statSync(file).isFile()).sort();
+}
+
+const BUILD_MARKER = join(APP_ROOT, '.next', 'sdelka-verify-inputs');
+
+function inputsDigest() {
+  const digest = createHash('sha256');
+  for (const file of buildInputs()) {
+    digest.update(relative(APP_ROOT, file));
+    digest.update('\0');
+    digest.update(createHash('sha256').update(readFileSync(file)).digest());
+    digest.update('\0');
+  }
+  return digest.digest('hex');
+}
+
+function staleBuild(digest) {
+  if (!existsSync(join(APP_ROOT, '.next', 'BUILD_ID'))) return true;
+  if (!existsSync(BUILD_MARKER)) return true;
+  return readFileSync(BUILD_MARKER, 'utf8').trim() !== digest;
 }
 
 async function main() {
@@ -419,14 +519,22 @@ async function main() {
     process.exit(1);
   }
 
-  if (staleBuild()) {
-    process.stdout.write('Сборка отсутствует или старее исходников — собираем.\n');
+  const digest = inputsDigest();
+  if (staleBuild(digest)) {
+    process.stdout.write(
+      `Сборка отсутствует или собрана из другого кода (вход ${digest.slice(0, 12)}…) — собираем.\n`,
+    );
     const build = spawn('npx', ['next', 'build'], { cwd: APP_ROOT, stdio: 'inherit' });
     const code = await new Promise((done) => build.on('exit', done));
     if (code !== 0) {
       process.stdout.write('Сборка не удалась.\n');
       process.exit(1);
     }
+    // Отметка пишется **после** успешной сборки и только тогда: упавшая сборка
+    // не должна выглядеть свежей на следующем запуске.
+    writeFileSync(BUILD_MARKER, `${digest}\n`, 'utf8');
+  } else {
+    process.stdout.write(`Сборка соответствует исходникам (вход ${digest.slice(0, 12)}…).\n`);
   }
 
   const server = spawn('npx', ['next', 'start', '-p', String(PORT)], {

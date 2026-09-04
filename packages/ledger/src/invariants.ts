@@ -3,6 +3,7 @@ import {
   coverage,
   coverageByFundsSource,
   coverageByTranche,
+  negativeBankBalances,
   negativeClientBalances,
   unclaimedCoverage,
 } from './balance';
@@ -20,6 +21,17 @@ import type { Journal } from './journal';
 export const InvariantCode = {
   entryUnbalanced: 'ledger.invariant.entry_unbalanced',
   negativeClientBalance: 'ledger.invariant.negative_client_balance',
+  /**
+   * Банковский счёт платформы в минусе: журнал утверждает перевод, которого
+   * банк не исполнил бы. Клиентские счета — включая номинальный — держит
+   * `negativeClientBalance`; здесь остаётся операционный, до которого тот не
+   * достаёт, потому что деньги на нём наши.
+   *
+   * Прямой случай — довнесение недостачи (§3.1, случай А, момент 2) с пустого
+   * операционного счёта: дыра в клиентских средствах закрыта обещанием, за
+   * которым ничего нет.
+   */
+  negativeBankBalance: 'ledger.invariant.negative_bank_balance',
   coverageBelowOne: 'ledger.invariant.coverage_below_one',
   trancheUncovered: 'ledger.invariant.tranche_uncovered',
   // Второй вид файла (FUNCTIONAL.md §3.1): свободная часть счёта клиента.
@@ -84,6 +96,15 @@ export function checkLedgerInvariants(journal: Journal): readonly InvariantViola
   for (const item of negativeClientBalances(journal)) {
     violations.push({
       code: InvariantCode.negativeClientBalance,
+      currency: item.currency,
+      subject: item.accountCode,
+      amountMinor: item.balance.minor,
+    });
+  }
+
+  for (const item of negativeBankBalances(journal)) {
+    violations.push({
+      code: InvariantCode.negativeBankBalance,
       currency: item.currency,
       subject: item.accountCode,
       amountMinor: item.balance.minor,

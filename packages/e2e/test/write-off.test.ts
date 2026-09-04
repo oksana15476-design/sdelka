@@ -24,9 +24,14 @@ import {
   trancheStatusOf,
 } from '../src/index';
 import { DEAL_AMOUNT, GEL, POLICY_VERSION } from './support/fixtures';
-import { toReserved } from './support/paths';
+import { toCollected, toReserved } from './support/paths';
 
 const OPTIONS = trancheOptions(POLICY_VERSION, { taskKind: 'source_of_funds' });
+/** Деньги уже на свободной части счёта: возврат их туда не зачисляет заново. */
+const ROLLBACK = trancheOptions(POLICY_VERSION, {
+  taskKind: 'source_of_funds',
+  creditRoute: 'already_on_client_account',
+});
 const DEAL = 'deal-unclaimed';
 const TRANCHE = 'tranche-unclaimed';
 
@@ -166,5 +171,62 @@ describe('невостребованные средства', () => {
         ],
       }),
     ).toThrow('ledger.entry.terminal_pool_payout');
+  });
+
+  /**
+   * Списание закрывает **то обязательство, которое дебетует** — и только его.
+   *
+   * Путь сюда не выдуман: `collected --refund_requested--> refund_pending
+   * --refund_initiated--> refunding --payout_result(rejected)-->
+   * release_blocked` в `reserved` не заходит ни разу, поэтому файл транша пуст,
+   * а деньги лежат в **свободной** части счёта покупателя. Они его собственные
+   * и отзывные (красная линия №7), выход для них — возврат, а не списание.
+   *
+   * Раньше такой транш уходил в `written_off` **бесследно**: сумма записи
+   * берётся из файла транша, пустой файл не порождал намерения проводки вовсе,
+   * и в журнале не оставалось ничего — при том что статус утверждает «долг
+   * закрыт, деньги ушли с номинального счёта».
+   *
+   * Guard `g_write_off_covers_collected` появился в этом же батче, и сквозной
+   * контур его **не проверял**: мутационный прогон, научившись читать все
+   * перечни домена, нашёл его непокрытым вместе с шестью guard'ами сделки.
+   */
+  it('не списывает собранное, которое лежит в свободной части, а не в файле транша', async () => {
+    const collected = await toCollected({
+      dealId: 'deal-unclaimed-free',
+      trancheId: 'tranche-unclaimed-free',
+    });
+    const tranche = 'tranche-unclaimed-free';
+    let world = applyTrancheEvent(collected.world, tranche, { type: 'refund_requested', reason: 'buyer.requested' }, ROLLBACK).world;
+    world = applyTrancheEvent(world, tranche, { type: 'refund_initiated' }, ROLLBACK).world;
+    world = applyTrancheEvent(world, tranche, { type: 'payout_result', outcome: 'rejected' }, ROLLBACK).world;
+    expect(trancheStatusOf(world, tranche)).toBe('release_blocked');
+
+    // Собрано — да; заперто — нет. Ровно та пара, которую `g_funds_locked`
+    // различить не может: у него пустое собранное и незапертое собранное
+    // сливаются в один отказ.
+    const facts = trancheOf(world, tranche).facts;
+    expect(facts.collectedAmount?.minor).toBe(20_000_000n);
+    const file = clientLockedAccount(collected.buyerKey, 'deal-unclaimed-free', tranche);
+    expect(accountBalance(world.journal, file, GEL).minor).toBe(0n);
+    expect(accountBalance(world.journal, clientFreeAccount(collected.buyerKey), GEL).minor).toBe(
+      20_000_000n,
+    );
+
+    // Два разных утверждающих — и всё равно отказ, потому что закрывать этим
+    // списанием нечего: обязательство стоит не там, куда смотрит запись.
+    const refused = rejectTrancheEvent(world, tranche, {
+      type: 'write_off_approved',
+      userIds: ['operator-2', 'operator-3'],
+    });
+    expect(refused.code).toBe('domain.guard.failed');
+    expect([...refused.failedGuards]).toEqual(['g_write_off_covers_collected']);
+
+    // Журнал не сдвинулся ни на запись, обязательство перед клиентом целое.
+    expect(accountBalance(world.journal, clientFreeAccount(collected.buyerKey), GEL).minor).toBe(
+      20_000_000n,
+    );
+    expect(accountBalance(world.journal, bankNominal(GEL), GEL).minor).toBe(20_000_000n);
+    expect(checkLedgerInvariants(world.journal)).toEqual([]);
   });
 });

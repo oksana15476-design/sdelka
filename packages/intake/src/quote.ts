@@ -35,8 +35,16 @@ export interface Quote<F extends CurrencyCode = CurrencyCode, T extends Currency
   readonly quoteId: string;
   readonly source: Money<F>;
   readonly targetCurrency: T;
-  /** Три курса вместе: клиентский, эталонный, официальный на дату операции. */
-  readonly rates: FxRates;
+  /**
+   * Три курса вместе: клиентский, эталонный, официальный на дату операции.
+   *
+   * Параметризован парой котировки: курс теперь несёт свои валюты
+   * (`FxRate<base, quote>`), и котировка обязана нести ту же пару. Иначе
+   * защита «курс нельзя применить не к своей паре», выигранная в
+   * `@sdelka/money`, теряется на первой же границе — ровно так и появился
+   * денежный баг, где конвертация в обратную сторону давала вшестеро больше.
+   */
+  readonly rates: FxRates<F, T>;
   readonly asOf: IsoDate;
   readonly issuedAt: Instant;
   readonly validity: DurationMs;
@@ -112,7 +120,7 @@ export function quoteStatus(
   marketReferenceRate: Rational,
   now: Instant,
 ): QuoteStatusReport {
-  const driftBp = marketDriftBp(value.rates.reference, marketReferenceRate);
+  const driftBp = marketDriftBp(value.rates.reference.value, marketReferenceRate);
   const expiresAt = (value.issuedAt + value.validity) as Instant;
 
   if (driftBp >= value.driftThresholdBp) {
@@ -220,7 +228,7 @@ export function decideConversion<F extends CurrencyCode, T extends CurrencyCode>
   return Object.freeze({
     allowed: true,
     status: report.status,
-    converted: convert(value.source, value.targetCurrency, value.rates, value.asOf, rounding),
+    converted: convert(value.source, value.rates, value.asOf, rounding),
     reasons: Object.freeze([INTAKE_REASON_KEYS.quoteFirm]),
   });
 }
@@ -235,17 +243,22 @@ export function decideConversion<F extends CurrencyCode, T extends CurrencyCode>
  * складывать её с деньгами нечем.
  */
 export function disclosedMarkupBp(rates: FxRates): number {
-  if (rates.reference.numerator === 0n) {
+  // Курс теперь несёт свою пару валют (`FxRate`), а дробь лежит в `.value`.
+  // Наценка считается по дробям, поэтому разворачиваем их здесь один раз, а не
+  // тянем `FxRate` через арифметику: применение курса не к своей паре должно
+  // оставаться невозможным, а не проверяемым.
+  const reference = rates.reference.value;
+  const client = rates.client.value;
+  if (reference.numerator === 0n) {
     throw new IntakeError(IntakeErrorCode.basisPointsOutOfRange, { value: '0' });
   }
-  const difference = subtractRational(rates.reference, rates.client);
+  const difference = subtractRational(reference, client);
   const sign = compareRational(difference, { numerator: 0n, denominator: 1n });
   const absoluteNumerator =
     difference.numerator < 0n ? -difference.numerator : difference.numerator;
-  const referenceNumerator =
-    rates.reference.numerator < 0n ? -rates.reference.numerator : rates.reference.numerator;
+  const referenceNumerator = reference.numerator < 0n ? -reference.numerator : reference.numerator;
   const magnitude = Number(
-    (absoluteNumerator * rates.reference.denominator * 10_000n) /
+    (absoluteNumerator * reference.denominator * 10_000n) /
       (difference.denominator * referenceNumerator),
   );
   return sign < 0 ? -magnitude : magnitude;

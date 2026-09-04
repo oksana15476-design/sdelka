@@ -1,4 +1,4 @@
-import { type Money, isoDate, money, rationalFromDecimalString } from '@sdelka/money';
+import { type Money, fxRate, isoDate, money, rationalFromDecimalString } from '@sdelka/money';
 import { describe, expect, it } from 'vitest';
 import {
   type ApprovalPolicy,
@@ -12,12 +12,16 @@ import { accept, reject, stateAt } from './support/drive';
 
 const policy: ApprovalPolicy = DEFAULT_APPROVAL_POLICY;
 
-/** Официальный курс Нацбанка на дату создания транша, 2,50 лари за доллар. */
+/**
+ * Официальный курс Нацбанка на дату создания транша, 2,50 лари за доллар.
+ *
+ * Пара валют больше не лежит соседними полями рядом с дробью: её несёт сам
+ * курс (`FxRate`), и подставить множитель одной пары под направление другой
+ * здесь нечем.
+ */
 const official: OfficialRateAtCreation = {
   asOf: CREATED_ON,
-  from: 'USD',
-  to: 'GEL',
-  rate: rationalFromDecimalString('2.50'),
+  rate: fxRate('USD', 'GEL', rationalFromDecimalString('2.50')),
 };
 
 const approvals = (amount: Money<'USD' | 'GEL'>, rate: OfficialRateAtCreation | null): number | null =>
@@ -61,7 +65,7 @@ describe('пороги утверждений в валюте, отличной 
     // округление вверх защищает от погрешности курса. Дальше сравнение обычное.
     const rate: OfficialRateAtCreation = {
       ...official,
-      rate: rationalFromDecimalString('2.5000001'),
+      rate: fxRate('USD', 'GEL', rationalFromDecimalString('2.5000001')),
     };
     // 12 000 USD × 2,5000001 = 30 000,0012 ₾ → 3 000 001 тетри (вверх) → ступень 1.
     expect(approvals(money('USD', 1_200_000n), rate)).toBe(1);
@@ -75,11 +79,11 @@ describe('пороги утверждений в валюте, отличной 
     const amount = money('USD', 1_124_000n);
     const officialRate: OfficialRateAtCreation = {
       ...official,
-      rate: rationalFromDecimalString('2.70'),
+      rate: fxRate('USD', 'GEL', rationalFromDecimalString('2.70')),
     };
     const clientRate: OfficialRateAtCreation = {
       ...official,
-      rate: rationalFromDecimalString('2.6686875'),
+      rate: fxRate('USD', 'GEL', rationalFromDecimalString('2.6686875')),
     };
     expect(approvals(amount, officialRate)).toBe(1);
     expect(approvals(amount, clientRate)).toBe(1);
@@ -89,11 +93,31 @@ describe('пороги утверждений в валюте, отличной 
     expect(approvals(money('USD', 2_000_000n), null)).toBeNull();
     // Курс на другую дату — не курс на дату создания. Ближайший не подставляем.
     expect(approvals(money('USD', 2_000_000n), { ...official, asOf: isoDate('2026-09-04') })).toBeNull();
-    expect(approvals(money('USD', 2_000_000n), { ...official, from: 'EUR' })).toBeNull();
-    expect(approvals(money('USD', 2_000_000n), { ...official, to: 'EUR' })).toBeNull();
-    expect(
-      approvals(money('USD', 2_000_000n), { ...official, rate: rationalFromDecimalString('0') }),
-    ).toBeNull();
+    // Чужая пара — отказ, а не исключение. Сумма в долларах, курс евровый:
+    // `convertAtRate` на такой паре бросает, и если бы guard дал ей дойти до
+    // вызова, шаг упал бы вместо того, чтобы остановить выплату.
+    const eurRate: OfficialRateAtCreation = {
+      ...official,
+      rate: fxRate('EUR', 'GEL', rationalFromDecimalString('2.50')),
+    };
+    expect(approvals(money('USD', 2_000_000n), eurRate)).toBeNull();
+    // Правая половина пары чужая: пересчитанное в евро сравнивать с лестницей
+    // в лари нельзя — это разные деньги, а не разные числа.
+    const toEur: OfficialRateAtCreation = {
+      ...official,
+      rate: fxRate('USD', 'EUR', rationalFromDecimalString('2.50')),
+    };
+    expect(approvals(money('USD', 2_000_000n), toEur)).toBeNull();
+    // Нулевой курс до guard'а больше не доходит: его отвергает конструктор
+    // величины. Проверка в guard'е остаётся второй линией — значение приходит
+    // из базы, где конструктора не было, — и здесь она проверяется на
+    // значении, собранном мимо него, ровно как оно и придёт из базы.
+    const zeroFromStorage = {
+      ...official,
+      rate: { base: 'USD', quote: 'GEL', value: rationalFromDecimalString('0') },
+    } as OfficialRateAtCreation;
+    expect(approvals(money('USD', 2_000_000n), zeroFromStorage)).toBeNull();
+    expect(() => fxRate('USD', 'GEL', rationalFromDecimalString('0'))).toThrow();
   });
 });
 

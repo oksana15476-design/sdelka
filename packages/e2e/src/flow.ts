@@ -58,15 +58,18 @@ import {
   type JournalEntry,
   accountBalance,
   appendEntry,
+  absorbShortfall,
   clientLockedAccount,
   emptyJournal,
+  fundShortfall,
+  receiveConversion,
+  sendForConversion,
   writeOffTransitArrived,
 } from '@sdelka/ledger';
 import type { ConvertedAmount, CurrencyCode, Deduction, FxRates, IsoDate, Money, PlatformSpread } from '@sdelka/money';
 import { accountingFxDifference, convert, platformSpread } from '@sdelka/money';
 import {
   type CreditRoute,
-  convertClientBalance,
   creditIncomingPayment,
   feeOf,
   holdUnidentifiedPayment,
@@ -397,36 +400,133 @@ export function receiveWriteOffTransit(world: World, amount: Money<CurrencyCode>
   });
 }
 
+/**
+ * Недостача корреспондента, **момент 1** (`FUNCTIONAL.md` §3.1, случай А):
+ * пришло меньше обещанного, разницу признаёт расходом платформа.
+ *
+ * Обязательство перед клиентом доводится до полной суммы **в момент
+ * поступления**, а не потом. Отдельным шагом мира — и этот шаг сегодня один не
+ * проходит: на номинальном счёте лежит только пришедшее, файл клиента
+ * необеспечен, красная линия №3 сработала. Так и обещает документ: «до второй
+ * записи транш не обеспечен, и это видно в системе как расхождение, а не как
+ * норма». В сквозном мире «видно как расхождение» выражается единственным
+ * способом, который у него есть, — шаг не запечатывается.
+ */
+export function absorbIncomingShortfall(
+  world: World,
+  owner: ClientKey,
+  received: Money<CurrencyCode>,
+  shortfall: Money<CurrencyCode>,
+): World {
+  const { meta, seq } = nextMeta(world, 'shortfall-absorbed');
+  return sealed({
+    ...world,
+    seq,
+    journal: appendJournal(world, absorbShortfall(meta, owner, received, shortfall)),
+    checks: world.checks,
+  });
+}
+
+/**
+ * Недостача, **момент 2**: довнесение с операционного счёта на номинальный.
+ *
+ * Межбанковский перевод, а не проводка вежливости: счета в разных банках, и
+ * между моментами проходит день-два. Довнесение **с пустого операционного
+ * счёта** восстанавливает пофайловое обеспечение и тут же ловится
+ * отрицательным остатком банковского счёта — дыра, закрытая обещанием, за
+ * которым ничего нет.
+ */
+export function fundIncomingShortfall(
+  world: World,
+  owner: ClientKey,
+  amount: Money<CurrencyCode>,
+): World {
+  const { meta, seq } = nextMeta(world, 'shortfall-funded');
+  return sealed({
+    ...world,
+    seq,
+    journal: appendJournal(world, fundShortfall(meta, owner, amount)),
+    checks: world.checks,
+  });
+}
+
 export interface ConversionResult {
   readonly world: World;
   readonly converted: ConvertedAmount<CurrencyCode, CurrencyCode>;
   readonly spread: PlatformSpread<CurrencyCode>;
 }
 
+/**
+ * Конвертация, **момент 1**: исходная валюта ушла валютному контрагенту.
+ *
+ * Отдельный шаг мира, а не половина одного вызова: между моментами деньги
+ * клиента лежат на `fx:settlement` — они всё ещё его и всё ещё покрывают его
+ * обязательство, но уже не на нашем счёте. `sealed` проверяет инварианты
+ * **между** моментами, и промежуток обязан их проходить: иначе конвертация
+ * была бы мгновением, которого в жизни нет.
+ */
+export function sendBalanceForConversion(
+  world: World,
+  owner: ClientKey,
+  source: Money<CurrencyCode>,
+): World {
+  const { meta, seq } = nextMeta(world, 'fx-sent');
+  return sealed({
+    ...world,
+    seq,
+    journal: appendJournal(world, sendForConversion(meta, owner, source)),
+    checks: world.checks,
+  });
+}
+
+/**
+ * Конвертация, **момент 2**: контрагент отдал встречную валюту.
+ *
+ * Требование к контрагенту закрывается исходной валютой, встречная зачисляется
+ * клиенту, спред уходит на операционный счёт в этой же записи. Получить
+ * встречную валюту, не отдав исходную, нельзя: закрытие несуществующего
+ * требования уводит `fx:settlement` в минус, и шаг падает на инварианте.
+ */
+export function receiveConvertedBalance(
+  world: World,
+  owner: ClientKey,
+  converted: ConvertedAmount<CurrencyCode, CurrencyCode>,
+  spread: PlatformSpread<CurrencyCode>,
+): World {
+  const { meta, seq } = nextMeta(world, 'fx-received');
+  return sealed({
+    ...world,
+    seq,
+    journal: appendJournal(world, receiveConversion(meta, owner, converted, spread)),
+    checks: world.checks,
+  });
+}
+
+/**
+ * Конвертация остатка клиента целиком — **два шага, а не один**.
+ *
+ * Целевой валюты в аргументах больше нет: её несёт курс (`FxRates.quote`), и
+ * второго источника направления, с которым первый можно рассогласовать, не
+ * существует. Раньше приложение собирало конвертацию одной записью своим
+ * `convertClientBalance`: целевая валюта дебетовалась на номинальный счёт без
+ * единого внешнего источника, то есть обязательство перед клиентом в новой
+ * валюте и покрытие под него создавала одна и та же запись. Конструктор
+ * приложения удалён — форма записи живёт в словаре учёта, где её проверяют.
+ */
 export function convertBalance(
   world: World,
   owner: ClientKey,
   source: Money<CurrencyCode>,
-  target: CurrencyCode,
   rates: FxRates,
   asOf: IsoDate,
 ): ConversionResult {
-  const converted = convert(source, target, rates, asOf, 'trunc');
+  const converted = convert(source, rates, asOf, 'trunc');
   const spread = platformSpread(converted, 'trunc');
   // Учётная курсовая разница считается здесь же и **не складывается** со
   // спредом: это два разных показателя и два разных типа (`CORE.md` Ф5).
   accountingFxDifference(converted, 'trunc');
-  const { meta, seq } = nextMeta(world, 'fx');
-  return {
-    world: sealed({
-      ...world,
-      seq,
-      journal: appendJournal(world, convertClientBalance(meta, owner, converted, spread)),
-      checks: world.checks,
-    }),
-    converted,
-    spread,
-  };
+  const sent = sendBalanceForConversion(world, owner, source);
+  return { world: receiveConvertedBalance(sent, owner, converted, spread), converted, spread };
 }
 
 /**

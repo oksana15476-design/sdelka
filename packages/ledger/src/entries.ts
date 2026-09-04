@@ -1,7 +1,11 @@
 import {
+  type ConvertedAmount,
   type CurrencyCode,
   type Money,
+  type PlatformSpread,
+  add,
   assertSameCurrency,
+  isNegative,
   isPositive,
   subtract,
 } from '@sdelka/money';
@@ -12,6 +16,8 @@ import {
   bankOperating,
   clientFreeAccount,
   clientLockedAccount,
+  fxSettlement,
+  shortfallExpense,
   transitWriteoff,
   unclaimedLiability,
 } from './accounts';
@@ -379,6 +385,221 @@ export function writeOffTransitArrived(
     postings: [
       debit(bankOperating(amount.currency), amount),
       credit(transitWriteoff, amount),
+    ],
+  });
+}
+
+/**
+ * Конвертация, **момент 1**: исходная валюта ушла валютному контрагенту.
+ *
+ * ```
+ * Кт bank:nominal:{исходная}    сумма   файл клиента
+ * Дт fx:settlement              сумма   файл клиента
+ * ```
+ *
+ * **Исправленный дефект, второй по тяжести в батче.** Конвертация собиралась
+ * одной записью в приложении: целевая валюта дебетовалась на номинальный счёт
+ * без единого внешнего источника. Проба: номинальный в долларах был ноль и стал
+ * 500 000 — счёт в валюте, которой платформа не держала, создан одной записью.
+ *
+ * Следствие тяжелее самого факта. Обязательство перед клиентом в новой валюте и
+ * покрытие под него создавала **одна и та же запись**, поэтому отношение
+ * покрытия после конвертации тождественно равнялось единице: красная линия №3
+ * переставала быть утверждением о деньгах и не проверяла больше ничего.
+ *
+ * Конвертация — операция с внешним контрагентом: валюта уходит с одного счёта и
+ * приходит на другой **через него**, а не появляется. Поэтому моментов два, как
+ * и у списания невостребованного (§3.1, «два момента, а не один»): между ними
+ * деньги клиента лежат на `fx:settlement` — они всё ещё его, всё ещё покрывают
+ * его обязательство, но уже не на нашем счёте. Обязательство перед клиентом
+ * здесь не трогается вовсе: пока встречная валюта не пришла, он должен получить
+ * ровно то, что отдал.
+ *
+ * Что это закрывает: получить встречную валюту, не отдав исходную, больше
+ * нельзя. Момент 2 обязан закрыть требование к контрагенту, а закрытие
+ * несуществующего требования уводит `fx:settlement` в минус — отрицательный
+ * остаток клиентского счёта, инвариант и стоп-кран.
+ *
+ * Конвертация запертой части здесь невыразима намеренно: сменить валюту
+ * обязательства под живым траншем — решение домена о сумме сделки, а не
+ * проводка (сумма транша деноминирована), и ни один сегодняшний поток этого не
+ * требует. Появится потребность — появится своё объявление, по образцу
+ * `TrancheSettlement`.
+ */
+export function sendForConversion(
+  meta: EntryMeta,
+  owner: ClientKey,
+  source: Money<CurrencyCode>,
+): JournalEntry {
+  const ref = clientRef(owner);
+  return createJournalEntry({
+    ...meta,
+    kind: 'settlement',
+    memoKey: 'ledger.entry.fx_sent_for_conversion',
+    postings: [
+      credit(custodyOf(source), source, ref),
+      debit(fxSettlement, source, ref),
+    ],
+  });
+}
+
+/**
+ * Конвертация, **момент 2**: контрагент отдал встречную валюту.
+ *
+ * ```
+ * Дт client:{c}:free      80 000 USD   файл клиента   (старое обязательство)
+ *     Кт fx:settlement        80 000 USD   файл клиента   (требование закрыто)
+ * Дт bank:nominal:gel    213 495 GEL   файл клиента
+ * Дт bank:operating:gel    1 505 GEL                  (наш спред)
+ *     Кт client:{c}:free     213 495 GEL   файл клиента   (новое обязательство)
+ *     Кт fx:income             1 505 GEL
+ * ```
+ *
+ * Запись балансируется **в каждой валюте отдельно** (`assertBalanced`): по
+ * доллару требование к контрагенту гасится обязательством, по лари пришедшее
+ * от контрагента расходится между клиентом и нашим спредом. От контрагента
+ * приходит вся сумма по эталонному курсу; клиенту зачисляется по клиентскому,
+ * разница признаётся доходом и **в этой же записи** уходит на операционный
+ * счёт: красная линия №2 и `assertPlatformIncomeSweptToOperating`. На
+ * номинальном счёте наш спред не оседает ни на минуту.
+ *
+ * Суммы приходят готовыми из `@sdelka/money` (`ConvertedAmount`, `PlatformSpread`):
+ * учёт не считает деньги, а курс с недавних пор несёт свою пару валют, поэтому
+ * «умножить вместо разделить» здесь уже невыразимо.
+ */
+export function receiveConversion(
+  meta: EntryMeta,
+  owner: ClientKey,
+  converted: ConvertedAmount<CurrencyCode, CurrencyCode>,
+  spread: PlatformSpread<CurrencyCode>,
+): JournalEntry {
+  const ref = clientRef(owner);
+  const source = converted.source;
+  const target = converted.target;
+  assertSameCurrency(target, spread.amount);
+  if (isNegative(spread.amount)) {
+    // Клиентский курс лучше эталонного — это убыток платформы, и проводка у
+    // него другая: расход, а не доход, и встречного вывода на операционный
+    // счёт у него нет. Молча вывернуть направление значило бы записать убыток
+    // доходом, поэтому форма отвергается, а не собирается «как получится».
+    throw new LedgerError(LedgerErrorCode.entryNegativeSpread, {
+      amount: spread.amount.minor.toString(),
+      currency: spread.amount.currency,
+    });
+  }
+  // Нулевой спред — отсутствие спреда, а не проводка на ноль (та же логика, что
+  // у комиссии в расчёте).
+  const earned = isPositive(spread.amount) ? spread.amount : null;
+  return createJournalEntry({
+    ...meta,
+    kind: 'settlement',
+    memoKey: 'ledger.entry.fx_converted',
+    postings: [
+      debit(clientFreeAccount(owner), source, ref),
+      credit(fxSettlement, source, ref),
+      debit(custodyOf(target), target, ref),
+      credit(clientFreeAccount(owner), target, ref),
+      ...(earned === null
+        ? []
+        : [debit(bankOperating(earned.currency), earned), credit({ kind: 'fx_income' } as const, earned)]),
+    ],
+  });
+}
+
+/**
+ * Недостача, покрытая платформой, **момент 1** (FUNCTIONAL.md §3.1, случай А):
+ * корреспондент снял с суммы при проходе, пришло меньше обещанного.
+ *
+ * ```
+ * Дт bank:nominal          99 900   файл клиента
+ * Дт shortfall:expense        100
+ *     Кт client:{c}:free      100 000   файл клиента
+ * ```
+ *
+ * Убыток признаётся **в момент поступления**, а не потом. Обязательство перед
+ * клиентом доводится до полной суммы за наш счёт — направление «дебет расхода,
+ * кредит обязательства» для этого случая верно, и именно оно отличает случай А
+ * от случая Б, где обязательство, наоборот, дебетуется.
+ *
+ * Форма документа кредитует запертую часть транша; здесь кредитуется свободная
+ * часть счёта клиента, и это то же самое одним шагом раньше: §3.1 развёл
+ * зачисление и привязку к сделке на два события, а разнесение поступления
+ * (`@sdelka/intake`, §4.3.2) выдаёт план на счёт клиента, из которого транш
+ * запирается обычной `lockForTranche`.
+ *
+ * ⚠ **Одной этой записи мало, и это не недосмотр.** Признание расхода — не
+ * перевод денег: на номинальном счёте по-прежнему 99 900 против обязательства
+ * в 100 000, файл клиента недообеспечен, красная линия №3 сработала, приём
+ * новых сделок остановлен. Так и должно быть до второй записи — `fundShortfall`.
+ * Недостача, о которой никто не знает, опаснее недостачи, которая горит на
+ * дежурном дашборде.
+ */
+export function absorbShortfall(
+  meta: EntryMeta,
+  owner: ClientKey,
+  received: Money<CurrencyCode>,
+  shortfall: Money<CurrencyCode>,
+): JournalEntry {
+  if (!isPositive(shortfall)) {
+    // Недостача без недостачи — обычное зачисление (`clientTopUp`). Записывать
+    // её этой формой значит прятать ноль в проводке и признавать расход,
+    // которого не было.
+    throw new LedgerError(LedgerErrorCode.entryNonPositiveShortfall, {
+      amount: shortfall.minor.toString(),
+    });
+  }
+  // Недостача — свойство одного поступления: срез корреспондента в другой
+  // валюте недостачей по этому платежу не является.
+  assertSameCurrency(received, shortfall);
+  const ref = clientRef(owner);
+  return createJournalEntry({
+    ...meta,
+    kind: 'settlement',
+    memoKey: 'ledger.entry.shortfall_absorbed',
+    postings: [
+      debit(custodyOf(received), received, ref),
+      debit(shortfallExpense, shortfall),
+      credit(clientFreeAccount(owner), add(received, shortfall), ref),
+    ],
+  });
+}
+
+/**
+ * Недостача, **момент 2**: довнесение с операционного счёта на номинальный.
+ *
+ * ```
+ * Дт bank:nominal    100   файл клиента
+ *     Кт bank:operating  100
+ * ```
+ *
+ * Инициирует человек, и это межбанковский перевод: номинальный счёт в одном
+ * банке, операционный в другом, автоматических переводов между ними нет (§3.2).
+ * До этой записи файл клиента недообеспечен, и это видно как расхождение, а не
+ * как норма.
+ *
+ * Прирост обеспечения клиентского файла без встречного обязательства — ровно та
+ * форма, которую `assertNoUnfundedClientFileGain` запрещает всем остальным:
+ * законный источник у такого прироста один — собственные деньги платформы,
+ * ушедшие с её собственного счёта **в этой же записи**. Здесь он и стоит.
+ *
+ * Отнесение — файл клиента, а не транша: недостача признана на счёте клиента, и
+ * если деньги успели запереться под транш, дыра осталась в файле клиента —
+ * `lockForTranche` перенесла в файл транша полную сумму, которой на номинальном
+ * счёте не было.
+ */
+export function fundShortfall(
+  meta: EntryMeta,
+  owner: ClientKey,
+  amount: Money<CurrencyCode>,
+): JournalEntry {
+  const ref = clientRef(owner);
+  return createJournalEntry({
+    ...meta,
+    kind: 'settlement',
+    memoKey: 'ledger.entry.shortfall_funded',
+    postings: [
+      debit(custodyOf(amount), amount, ref),
+      credit(bankOperating(amount.currency), amount),
     ],
   });
 }

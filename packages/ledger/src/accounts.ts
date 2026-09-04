@@ -57,6 +57,12 @@ export type Account =
   // одной записью прямо на операционный счёт, и обязательство перед клиентом
   // на время перевода оставалось без единого актива за ним.
   | { readonly kind: 'transit_writeoff' }
+  // Клиентские средства у валютного контрагента: исходная валюта ушла с
+  // номинального счёта, встречная ещё не пришла. Конвертация — операция с
+  // внешним контрагентом, а не превращение одной валюты в другую внутри нашего
+  // журнала; без этого счёта обе стороны обмена создавала одна запись, и
+  // покрытие после неё тождественно равнялось единице.
+  | { readonly kind: 'fx_settlement' }
   | { readonly kind: 'fx_accounting_diff' };
 
 export type AccountKind = Account['kind'];
@@ -149,6 +155,11 @@ const ACCOUNT_NATURE = {
   // Транзит списания — те же клиентские деньги, только в пути между банками.
   // Актив того же пула, что и долг, который он обеспечивает.
   transit_writeoff: { type: 'asset', funds: 'client', file: 'pooled', pool: 'terminal' },
+  // Средства у валютного контрагента — те же чужие деньги, только не на нашем
+  // счёте. Клиентский актив, файл приносит отнесение: деньги уходят из файла
+  // клиента и в него же возвращаются встречной валютой, поэтому покрытие
+  // между двумя моментами обмена не проваливается и не завышается.
+  fx_settlement: { type: 'asset', funds: 'client', file: 'in_attribution' },
   // FUNCTIONAL.md §3.1 помечает учётную курсовую разницу как «расход/доход»:
   // она бывает обеих знаков. Тип счёта в плане один, поэтому знак несёт
   // направление проводки, а не отдельный счёт: кредитовый остаток на этом
@@ -314,6 +325,8 @@ export function accountCode(account: Account): string {
       return 'unclaimed:liability';
     case 'transit_writeoff':
       return 'transit:writeoff';
+    case 'fx_settlement':
+      return 'fx:settlement';
     case 'fx_accounting_diff':
       return 'fx:accounting:diff';
   }
@@ -345,4 +358,5 @@ export const clientLockedAccount = (
 export const shortfallExpense: Account = Object.freeze({ kind: 'shortfall_expense' });
 export const unclaimedLiability: Account = Object.freeze({ kind: 'unclaimed_liability' });
 export const transitWriteoff: Account = Object.freeze({ kind: 'transit_writeoff' });
+export const fxSettlement: Account = Object.freeze({ kind: 'fx_settlement' });
 export const fxAccountingDiff: Account = Object.freeze({ kind: 'fx_accounting_diff' });

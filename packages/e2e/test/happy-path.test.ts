@@ -55,7 +55,8 @@ describe('счастливый путь', () => {
     // --- Приём средств: покупатель платит в долларах ---
     world = receiveExternalPayment(world, opened.buyerKey, DEAL_AMOUNT_USD);
     // --- Конвертация: клиенту по клиентскому курсу, спред — на операционный ---
-    const conversion = convertBalance(world, opened.buyerKey, DEAL_AMOUNT_USD, GEL, FX_RATES, CREATED_ON);
+    // Целевой валюты в аргументах нет: её несёт курс (`FxRates.quote`).
+    const conversion = convertBalance(world, opened.buyerKey, DEAL_AMOUNT_USD, FX_RATES, CREATED_ON);
     world = conversion.world;
     expect(conversion.converted.target.minor).toBe(20_000_000n);
     // 8 000 долларов·255/100 − 20 000 000 тетри = 400 000 тетри спреда.

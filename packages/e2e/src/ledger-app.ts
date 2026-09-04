@@ -1,10 +1,7 @@
 import {
-  type ConvertedAmount,
   type CurrencyCode,
   type Deduction,
   type Money,
-  type PlatformSpread,
-  isPositive,
   money,
   split,
   subtract,
@@ -15,7 +12,6 @@ import {
   type JournalEntry,
   type TrancheRef,
   bankNominal,
-  bankOperating,
   clientFreeAccount,
   clientKey,
   clientLockedAccount,
@@ -174,49 +170,22 @@ export function returnUnidentifiedPayment(
 }
 
 /**
- * Конвертация остатка клиента.
+ * Конвертации здесь **больше нет**.
  *
- * Клиенту зачисляется сумма по клиентскому курсу; наш спред между эталонным и
- * клиентским курсом признаётся доходом и **сразу уходит на операционный счёт**,
- * а не оседает на номинальном. Это та же норма, что и для комиссии (красная
- * линия №2): чужой счёт не место для наших денег.
+ * Раньше её собирало приложение своим `convertClientBalance` — одной записью:
+ * исходная валюта списывалась со счёта клиента, встречная дебетовалась на
+ * номинальный счёт, спред уходил на операционный. Внешнего контрагента в этой
+ * записи не было вовсе, то есть номинальный счёт в валюте, которой платформа
+ * не держала, вырастал из нуля, а обязательство перед клиентом и покрытие под
+ * него создавала одна и та же запись: отношение покрытия после конвертации
+ * тождественно равнялось единице и не проверяло больше ничего.
  *
- * ⚠ Конструктора конвертации в `entries.ts` нет. Отчёт, расхождение 5.
+ * Сегодня конвертация — два момента словаря учёта (`sendForConversion` и
+ * `receiveConversion`), и приложение только зовёт их по очереди
+ * (`flow.ts`). Второй реализации той же записи здесь быть не должно: повторённая
+ * от руки форма расходится молча, и ровно так модели проводок однажды и
+ * разошлись.
  */
-export function convertClientBalance(
-  meta: EntryMeta,
-  owner: ClientKey,
-  converted: ConvertedAmount<CurrencyCode, CurrencyCode>,
-  spread: PlatformSpread<CurrencyCode>,
-): JournalEntry {
-  const ref = { clientKey: owner };
-  const source = converted.source;
-  const target = converted.target;
-  if (spread.amount.minor < 0n) {
-    // Отрицательный спред означает, что клиентский курс лучше эталонного. Это
-    // не арифметическая мелочь, а убыток платформы, и проводка у него другая.
-    // Здесь он не собирается намеренно: молча вывернуть направление значило бы
-    // признать убыток доходом.
-    throw new Error('e2e.fx.negative_spread');
-  }
-  return createJournalEntry({
-    ...meta,
-    kind: 'settlement',
-    memoKey: 'ledger.entry.fx_conversion',
-    postings: [
-      debit(clientFreeAccount(owner), source, ref),
-      credit(bankNominal(source.currency), source, ref),
-      debit(bankNominal(target.currency), target, ref),
-      credit(clientFreeAccount(owner), target, ref),
-      ...(isPositive(spread.amount)
-        ? [
-            debit(bankOperating(spread.amount.currency), spread.amount),
-            credit({ kind: 'fx_income' } as const, spread.amount),
-          ]
-        : []),
-    ],
-  });
-}
 
 /**
  * Проекция намерения `post_journal_entry`.

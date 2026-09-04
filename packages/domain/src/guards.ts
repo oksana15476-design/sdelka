@@ -1,8 +1,8 @@
 import {
   type CurrencyCode,
+  type FxRate,
   type IsoDate,
   type Money,
-  type Rational,
   compare,
   convertAtRate,
 } from '@sdelka/money';
@@ -93,6 +93,38 @@ export const GUARD_IDS = [
   'g_mismatch_resolved',
   /** введено кодом: §1.4 «write_off_approved(два разных пользователя)» */
   'g_write_off_approvers_distinct',
+  /**
+   * введено кодом (E14): **списание закрывает ровно то обязательство, которое
+   * дебетует.**
+   *
+   * Запись списания (`writeOffUnclaimed`, FUNCTIONAL.md §3.1, случай Б)
+   * дебетует файл транша и берёт сумму из него же — перебрать его она не
+   * может, и потому пустой файл не ловила никак: намерения проводки не
+   * возникало вовсе, а транш уходил в `written_off` **бесследно**. Статус при
+   * этом утверждает «обязательство закрыто, деньги ушли с номинального счёта»,
+   * и на этом след кончается.
+   *
+   * Два случая пустого файла надо развести, и они разведены здесь:
+   *
+   * - **собирать было нечего** (`collectedAmount` пуст) — обязательства перед
+   *   клиентом по этому траншу не возникло, закрывать нечего, и списание
+   *   ничего о деньгах не утверждает. Так уходит транш, куда деньги не дошли:
+   *   платёж третьего лица в `release_blocked` на транш не зачисляется;
+   * - **собрано, но не заперто** — деньги лежат в свободной части счёта
+   *   покупателя, отзывными (красная линия №7). Это **не** невостребованные
+   *   средства этого транша, и списанием их закрывать нельзя: выход отсюда —
+   *   возврат. Проба: `collected --refund_requested--> refund_pending
+   *   --refund_initiated--> refunding --payout_result(rejected)-->
+   *   release_blocked`, двое утверждающих, ноль записей в журнале, обязательство
+   *   перед клиентом стоит целиком.
+   *
+   * Отдельный guard, а не `g_funds_locked`: тот требует непустого собранного
+   * (`collected === null → false`) и на первом случае отказал бы, оставив
+   * транш без денег и без выхода в списание. §7 требует, чтобы каждое правило
+   * проверялось поимённо, и «нечего закрывать» — не то же самое, что «есть что
+   * закрывать, и оно на месте».
+   */
+  'g_write_off_covers_collected',
   /** введено кодом (E11-4): новую редакцию условия приняли обе стороны */
   'g_amendment_accepted_by_both',
   /**
@@ -163,10 +195,17 @@ export const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = Object.freeze({
 export interface OfficialRateAtCreation {
   /** Дата публикации курса. Сверяется с датой создания транша, а не с «сегодня». */
   readonly asOf: IsoDate;
-  readonly from: CurrencyCode;
-  readonly to: CurrencyCode;
-  /** Единиц валюты `to` за мажорную единицу валюты `from`. */
-  readonly rate: Rational;
+  /**
+   * Курс **со своей парой валют** (`@sdelka/money`, `FxRate`): направление —
+   * часть величины, а не соседние поля рядом с числом.
+   *
+   * Раньше здесь лежали три поля — `from`, `to` и голая дробь `rate`, — и пара
+   * валют жила отдельно от множителя. Сверить их между собой можно было только
+   * вручную, что эта функция и делала; в соседнем пакете такой сверки не было
+   * вовсе, и умножение вместо деления проходило молча. Направление, которое
+   * нельзя отделить от множителя, нельзя и рассогласовать.
+   */
+  readonly rate: FxRate;
 }
 
 /**
@@ -305,7 +344,13 @@ export function requiredApprovals(
   if (officialRate === null) {
     return null;
   }
-  if (officialRate.from !== amount.currency || officialRate.to !== policy.currency) {
+  // Пара сверяется с суммой и с валютой лестницы, а не с самой собой: курс
+  // теперь несёт направление сам, но применять его **не к той паре** всё ещё
+  // можно — курс приходит из базы, где типов нет. Отказ здесь закрытый
+  // (`null` — «утверждений не набрать»), а не исключение: `convertAtRate` на
+  // чужой паре бросает, и guard, бросающий вместо отказа, уронил бы шаг вместо
+  // того, чтобы остановить выплату.
+  if (officialRate.rate.base !== amount.currency || officialRate.rate.quote !== policy.currency) {
     return null;
   }
   // Курс обязан быть именно на дату создания транша, а не «свежий»: проверка
@@ -313,10 +358,12 @@ export function requiredApprovals(
   if (officialRate.asOf !== createdOn) {
     return null;
   }
-  if (officialRate.rate.numerator <= 0n) {
+  // Вторая линия к проверке `fxRate`: ноль и отрицательный курс конструктор не
+  // выпускает, но значение приходит из базы, где конструктора не было.
+  if (officialRate.rate.value.numerator <= 0n) {
     return null;
   }
-  const converted = convertAtRate(amount, policy.currency, officialRate.rate, 'ceil');
+  const converted = convertAtRate(amount, officialRate.rate, 'ceil');
   return approvalsForTier(policy, converted.minor);
 }
 
@@ -463,6 +510,21 @@ export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> =
     return accepted.has(facts.buyer.partyId) && accepted.has(recipient.partyId);
   },
   g_mismatch_resolved: ({ facts }) => facts.mismatchResolved,
+  /**
+   * Списание дебетует файл транша — значит, всё, что оно закрывает, обязано в
+   * этом файле лежать. Ноль наравне с `null`: пустой файл возвращает не `null`,
+   * а ноль в валюте (`accountBalance`).
+   */
+  g_write_off_covers_collected: ({ facts }) => {
+    const collected = facts.collectedAmount;
+    // Собирать было нечего: обязательства нет, закрывать нечего.
+    if (collected === null || collected.minor === 0n) return true;
+    const locked = facts.lockedAmount;
+    if (locked === null) return false;
+    // Запертое в другой валюте — не те деньги, ровно как в `g_funds_locked`.
+    if (locked.currency !== collected.currency) return false;
+    return compare(locked, collected) >= 0;
+  },
   g_write_off_approvers_distinct: ({ facts, event }) => {
     if (event.type !== 'write_off_approved') return false;
     const approvers = new Set(event.userIds.filter((userId) => userId !== facts.preparedBy));
