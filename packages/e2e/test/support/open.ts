@@ -12,6 +12,7 @@ import {
   payerKeyForDomain,
   sanctionsToDetectorOutcome,
 } from '@sdelka/compliance';
+import type { FeeCeilingPolicy } from '@sdelka/domain';
 import type { ClientKey } from '@sdelka/ledger';
 import type { CurrencyCode, Deduction, Money } from '@sdelka/money';
 import {
@@ -62,6 +63,13 @@ export interface OpenOptions {
   readonly screening?: SanctionsScreeningPort;
   readonly beneficiary?: BeneficiaryState;
   readonly deductions?: readonly Deduction[];
+  /**
+   * Потолок удержания этого транша. По умолчанию поле не ставится вовсе —
+   * действует умолчание домена (два процента). Сценарий, которому нужен более
+   * тесный предел, называет его здесь: политика едет фактом транша до записи
+   * расчёта, и проверить это можно только настоящим прогоном.
+   */
+  readonly feeCeilingPolicy?: FeeCeilingPolicy;
   readonly sourceAccountKnown?: boolean;
   /** Объект сделки. По умолчанию общий для фикстур: см. `CADASTRAL_CODE`. */
   readonly objectCadastralCode?: string;
@@ -177,6 +185,9 @@ export async function openDeal(options: OpenOptions): Promise<OpenedDeal> {
     beneficiary: options.beneficiary ?? beneficiaryFor(options.seller, 500),
     preparedBy: 'operator-1',
     sourceAccountKnown: options.sourceAccountKnown ?? true,
+    ...(options.feeCeilingPolicy === undefined
+      ? {}
+      : { feeCeilingPolicy: options.feeCeilingPolicy }),
   });
 
   world = recordConditionAct(

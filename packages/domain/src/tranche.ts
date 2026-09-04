@@ -28,7 +28,7 @@ import {
 } from './instant';
 import type { Intent, LedgerTemplate } from './intents';
 import { RELEASE_CONDITIONS } from './release-condition';
-import { DEFAULT_FEE_CEILING_POLICY, maxWithholding } from './tariff';
+import { DEFAULT_FEE_CEILING_POLICY } from './tariff';
 import {
   type Rejection,
   type Result,
@@ -804,15 +804,13 @@ function entryIntents(
           recipientClientKey: act.recipient.accountKey,
           amount,
           /**
-           * Потолок удержания едет вместе с суммой (`tariff.ts`, эпик E16).
-           * Считается здесь и от политики транша, а не на той стороне и не от
-           * сегодняшней настройки: `CORE.md` Ф11 — решение хранит политику,
-           * действовавшую в момент принятия.
+           * Потолок удержания едет вместе с суммой (`tariff.ts`, эпик E16) —
+           * **политикой, а не посчитанной суммой**: запрет на записи меряет
+           * удержание долей от брутто, и сумма на входе ему не предел. Берётся
+           * из фактов транша, а не из сегодняшней настройки: `CORE.md` Ф11 —
+           * решение хранит политику, действовавшую в момент принятия.
            */
-          maxWithholding: maxWithholding(
-            amount,
-            context.facts.feeCeilingPolicy ?? DEFAULT_FEE_CEILING_POLICY,
-          ),
+          feeCeiling: context.facts.feeCeilingPolicy ?? DEFAULT_FEE_CEILING_POLICY,
           attestation: trancheSettlementAttestation(context, act, evidenceRef),
         },
         { type: 'notify', audience: 'both', messageKey: 'tranche.paid_out.both' },

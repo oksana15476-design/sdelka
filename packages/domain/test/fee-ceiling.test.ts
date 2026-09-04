@@ -107,9 +107,11 @@ describe('комиссия: предел сверху', () => {
     expect(DEFAULT_FEE_CEILING_POLICY.maxShare).toEqual(rational(1n, 50n));
   });
 
-  it('предел едет в намерении расчёта, посчитанный по политике транша', () => {
+  it('предел едет в намерении расчёта политикой транша, а не суммой', () => {
     // Ставку применяет проекция, значит и предел обязан доехать туда же:
     // правило, оставшееся в домене, существует там, где его некому нарушить.
+    // Едет **политика**: запрет на записи меряет удержание долей от брутто, и
+    // посчитанная сумма ему не предел (`packages/ledger`, `fee-ceiling.ts`).
     const paidOut = reduceTranche(
       stateAt('paying_out'),
       { type: 'payout_result', outcome: 'settled' },
@@ -122,7 +124,12 @@ describe('комиссия: предел сверху', () => {
     );
     expect(settlement).toBeDefined();
     if (settlement?.type !== 'post_settlement_entry') return;
-    expect(settlement.maxWithholding).toEqual(maxWithholding(settlement.amount));
+    expect(settlement.feeCeiling).toEqual(DEFAULT_FEE_CEILING_POLICY);
+    // Наибольшее удержание из намерения считается одной строкой — второй
+    // правды о пределе в намерении нет.
+    expect(maxWithholding(settlement.amount, settlement.feeCeiling).minor).toBe(
+      settlement.amount.minor / 50n,
+    );
 
     // Политика транша, а не сегодняшняя настройка: Ф11 — решение хранит
     // политику, действовавшую в момент принятия.
@@ -137,7 +144,8 @@ describe('комиссия: предел сверху', () => {
       (intent) => intent.type === 'post_settlement_entry',
     );
     if (stricterSettlement?.type !== 'post_settlement_entry') return;
-    expect(stricterSettlement.maxWithholding.minor).toBe(
+    expect(stricterSettlement.feeCeiling.maxShare).toEqual(rational(1n, 1000n));
+    expect(maxWithholding(stricterSettlement.amount, stricterSettlement.feeCeiling).minor).toBe(
       stricterSettlement.amount.minor / 1000n,
     );
   });

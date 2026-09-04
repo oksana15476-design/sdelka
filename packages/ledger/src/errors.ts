@@ -43,6 +43,9 @@ export const LedgerErrorCode = {
   // чужом файле, в чужой валюте, не на объявленную сумму или не из денег
   // платформы.
   entryShortfallFundingMismatch: 'ledger.entry.shortfall_funding_mismatch',
+  // Отмотать назад просят не расчёт: запись другого вида либо без объявления
+  // расчёта. Реверс строится зеркалом самой записи, и зеркалить нечего.
+  entryReversalTargetNotSettlement: 'ledger.entry.reversal_target_not_settlement',
   entryCorrectionWithoutReference: 'ledger.entry.correction_without_reference',
   entrySettlementWithReference: 'ledger.entry.settlement_with_reference',
   postingNonPositiveAmount: 'ledger.posting.non_positive_amount',
@@ -64,6 +67,10 @@ export const LedgerErrorCode = {
   // Второе начисление комиссии по тому же траншу. Идемпотентность начисления
   // (§4.6, Ф16): «начислено» — величина транша, а не счётчик вызовов.
   journalFeeAccruedTwice: 'ledger.journal.fee_accrued_twice',
+  // Один и тот же расчёт отматывается назад второй раз. Первый реверс вернул
+  // деньги плательщику целиком; второй увёл бы файл получателя в минус и
+  // открыл требование по комиссии, которого никто не начислял.
+  journalSettlementReversedTwice: 'ledger.journal.settlement_reversed_twice',
   // Ключ конверсии переиспользован под другой обмен: тот же счёт расчётов, но
   // другие объявленные ноги. Позиции двух обменов сложились бы в одну.
   journalConversionKeyReused: 'ledger.journal.conversion_key_reused',

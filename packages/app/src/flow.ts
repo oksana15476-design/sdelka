@@ -35,6 +35,7 @@ import {
   type DealFacts,
   type DealFiling,
   type DealState,
+  type FeeCeilingPolicy,
   type FilingSource,
   type Instant,
   type Intent,
@@ -277,6 +278,20 @@ export interface TrancheSpec {
   readonly beneficiary: BeneficiaryState;
   readonly preparedBy: string | null;
   readonly sourceAccountKnown: boolean;
+  /**
+   * Потолок удержания этого транша (`@sdelka/domain`, `tariff.ts`, эпик E16).
+   *
+   * Лежит рядом с `tariffVersionId` и по той же причине: ставка и её предел —
+   * одно решение о деньгах клиента, и хранится оно вместе с версией политики,
+   * действовавшей в момент принятия (`CORE.md` Ф11).
+   *
+   * Поле **необязательное**, и это безопасно ровно потому, что умолчание —
+   * жёсткий предел учёта (`DEFAULT_FEE_CEILING_POLICY`, два процента): пропуск
+   * не может ослабить правило, а объявление — только ужесточить его. Отсюда
+   * величина доезжает фактом транша до намерения расчёта, а из намерения — до
+   * записи (`ledger-app.ts`, `projectSettlementIntent`).
+   */
+  readonly feeCeilingPolicy?: FeeCeilingPolicy;
 }
 
 export function createTranche(world: World, spec: TrancheSpec): World {
@@ -312,6 +327,10 @@ export function createTranche(world: World, spec: TrancheSpec): World {
     approvalPolicy: DEFAULT_APPROVAL_POLICY,
     createdOn: spec.createdOn,
     officialRateAtCreation: null,
+    // Условное присваивание, а не `feeCeilingPolicy: spec.feeCeilingPolicy`:
+    // при `exactOptionalPropertyTypes` «поля нет» и «поле пусто» — разные
+    // состояния, и второе означало бы политику, которой не существует.
+    ...(spec.feeCeilingPolicy === undefined ? {} : { feeCeilingPolicy: spec.feeCeilingPolicy }),
     activePayouts: 0,
     coverageOk: coverageOk(world.journal),
     sourceAccountKnown: spec.sourceAccountKnown,

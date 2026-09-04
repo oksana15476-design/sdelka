@@ -1,3 +1,4 @@
+import type { FeeCeilingPolicy } from '@sdelka/domain';
 import type { ClientKey } from '@sdelka/ledger';
 import type { BeneficiaryState, PartyProfile } from '@sdelka/compliance';
 import { payerKeyForDomain } from '@sdelka/compliance';
@@ -12,7 +13,7 @@ import {
   receivePaidExtract,
   trancheOptions,
 } from '@sdelka/app';
-import { type CurrencyCode, type Money, money } from '@sdelka/money';
+import { type CurrencyCode, type Deduction, type Money, money } from '@sdelka/money';
 import {
   APPLICATION_ID,
   BUYER,
@@ -60,6 +61,13 @@ export interface PathOptions {
   readonly beneficiary?: BeneficiaryState;
   /** Сумма транша. По умолчанию 200 000 ₾ — вторая ступень утверждений. */
   readonly amount?: Money<CurrencyCode>;
+  /**
+   * Потолок удержания этого транша. Не задан — действует умолчание домена
+   * (два процента); задан — едет фактом транша до записи расчёта.
+   */
+  readonly feeCeilingPolicy?: FeeCeilingPolicy;
+  /** Удержания по траншу. По умолчанию — `PLATFORM_FEE`, 1,5 %. */
+  readonly deductions?: readonly Deduction[];
   readonly world?: World;
 }
 
@@ -74,6 +82,10 @@ export async function toCollected(options: PathOptions): Promise<Advanced> {
     seller,
     amount,
     ...(options.beneficiary === undefined ? {} : { beneficiary: options.beneficiary }),
+    ...(options.feeCeilingPolicy === undefined
+      ? {}
+      : { feeCeilingPolicy: options.feeCeilingPolicy }),
+    ...(options.deductions === undefined ? {} : { deductions: options.deductions }),
     ...(options.world === undefined ? {} : { world: options.world }),
   });
   let world = applyTrancheEvent(opened.world, options.trancheId, { type: 'instructions_issued' }, OPTIONS).world;

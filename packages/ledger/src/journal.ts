@@ -14,18 +14,12 @@ export interface Journal {
 export const emptyJournal: Journal = Object.freeze({ entries: Object.freeze([]) });
 
 /**
- * Транши, по которым запись **начисляет** комиссию.
- *
- * Признак структурный, а не по объявлению `accrues`: объявление необязательно
- * (см. `assertFeeAccrualDeclared`), поэтому начисление, собранное низкоуровневой
- * дверью без объявления, мимо признака по объявлению прошло бы молча. Начисление
- * — это чистый **дебет** требования по комиссии, отнесённый к траншу; расчёт и
- * реверс требование кредитуют и сюда не попадают.
+ * Чистое движение требования по комиссии, отнесённого к траншу. Дебет — плюс.
  *
  * Валюта в ключ не входит намеренно: комиссия по траншу — величина одна, и
  * второе начисление «в другой валюте» не второй тариф, а расхождение.
  */
-function feeAccrualTranches(entry: JournalEntry): ReadonlySet<string> {
+function feeReceivableNet(entry: JournalEntry): ReadonlyMap<string, bigint> {
   const net = new Map<string, bigint>();
   for (const posting of entry.postings) {
     if (posting.account.kind !== 'fee_receivable') continue;
@@ -40,9 +34,75 @@ function feeAccrualTranches(entry: JournalEntry): ReadonlySet<string> {
         (posting.direction === 'debit' ? posting.amount.minor : -posting.amount.minor),
     );
   }
+  return net;
+}
+
+/**
+ * Сколько требования по комиссии эта запись-исправление вправе **вернуть** по
+ * каждому траншу.
+ *
+ * Возврат — не начисление, и в этом вся правка. Расчёт требование гасит
+ * (`Кт fee:receivable`), поэтому его реверс требование дебетует — структурно
+ * это ровно то же движение, что у начисления. Различает их только цель
+ * исправления: вернуть можно столько, сколько **эта самая цель** сняла, за
+ * вычетом того, что по ней уже вернули прежние исправления. Отсюда свойство,
+ * из-за которого послабление не разворачивается в дверь: чтобы получить право
+ * на дебет требования, нужна лежащая в журнале запись, это требование
+ * уменьшившая, и каждое уменьшение отдаётся один раз.
+ *
+ * Отсутствия цели в журнале здесь не разбирается: его ловит
+ * `journalCorrectionTargetMissing` — своей ошибкой и своим именем.
+ */
+function feeRestorableBy(
+  prior: readonly JournalEntry[],
+  entry: JournalEntry,
+): ReadonlyMap<string, bigint> {
+  if (entry.kind !== 'correction' || entry.correctsEntryId === null) return new Map();
+  const target = prior.find((existing) => existing.id === entry.correctsEntryId);
+  if (target === undefined) return new Map();
+  const restorable = new Map<string, bigint>();
+  for (const [key, net] of feeReceivableNet(target)) {
+    // Цель требование увеличила — возвращать по ней нечего.
+    if (net < 0n) restorable.set(key, -net);
+  }
+  for (const existing of prior) {
+    if (existing.kind !== 'correction' || existing.correctsEntryId !== target.id) continue;
+    for (const [key, net] of feeReceivableNet(existing)) {
+      if (net <= 0n) continue;
+      restorable.set(key, (restorable.get(key) ?? 0n) - net);
+    }
+  }
+  return restorable;
+}
+
+/**
+ * Транши, по которым запись **начисляет** комиссию.
+ *
+ * Признак структурный, а не по объявлению `accrues`: объявление необязательно
+ * (см. `assertFeeAccrualDeclared`), поэтому начисление, собранное низкоуровневой
+ * дверью без объявления, мимо признака по объявлению прошло бы молча. Начисление
+ * — это чистый **дебет** требования по комиссии, отнесённый к траншу; расчёт
+ * требование кредитует и сюда не попадает.
+ *
+ * **[исправляет предыдущее] Возврат снятого требования начислением не
+ * считается.** Прежняя редакция читала дебет требования как начисление всегда,
+ * и законная операция — реверс расчёта целиком — оказывалась **невыразимой**:
+ * `appendEntry` отвечал на неё `journalFeeAccruedTwice`, то есть запрещал не
+ * то, что собирался (проба и её вывод — в `test/settlement-reversal.test.ts`).
+ * Теперь из дебета вычитается то, что исправление вправе вернуть по своей цели
+ * (`feeRestorableBy`), и начислением считается только остаток. Идемпотентность
+ * от этого не слабеет: без цели, снявшей требование, вычитать нечего, а каждое
+ * снятие отдаётся один раз.
+ */
+function feeAccrualTranches(
+  prior: readonly JournalEntry[],
+  entry: JournalEntry,
+): ReadonlySet<string> {
+  const restorable = feeRestorableBy(prior, entry);
   const accrued = new Set<string>();
-  for (const [key, total] of net) {
-    if (total > 0n) accrued.add(key);
+  for (const [key, total] of feeReceivableNet(entry)) {
+    const allowed = restorable.get(key) ?? 0n;
+    if (total > (allowed > 0n ? allowed : 0n)) accrued.add(key);
   }
   return accrued;
 }
@@ -67,10 +127,13 @@ function feeAccrualTranches(entry: JournalEntry): ReadonlySet<string> {
  * счётчик обнулился. Цена строгости названа в отчёте по батчу.
  */
 function assertFeeAccruedOnce(journal: Journal, entry: JournalEntry): void {
-  const accruing = feeAccrualTranches(entry);
+  const accruing = feeAccrualTranches(journal.entries, entry);
   if (accruing.size === 0) return;
-  for (const existing of journal.entries) {
-    for (const key of feeAccrualTranches(existing)) {
+  for (const [index, existing] of journal.entries.entries()) {
+    // Каждая лежащая запись читается тем же способом и в том положении, в
+    // каком она в журнал попала: что она вернула, а что начислила, зависит от
+    // записей **до** неё, а не от журнала целиком.
+    for (const key of feeAccrualTranches(journal.entries.slice(0, index), existing)) {
       if (!accruing.has(key)) continue;
       const separator = key.indexOf('|');
       throw new LedgerError(LedgerErrorCode.journalFeeAccruedTwice, {
@@ -81,6 +144,49 @@ function assertFeeAccruedOnce(journal: Journal, entry: JournalEntry): void {
       });
     }
   }
+}
+
+/**
+ * Расчёт отматывается назад **один раз**.
+ *
+ * Правило появилось вместе с самой возможностью отматывать
+ * (`entries.ts`, `reverseTrancheSettlement`) и закрывает дверь, которую эта
+ * возможность открывает. Первый реверс возвращает деньги плательщику целиком;
+ * второй увёл бы файл получателя в минус и открыл требование по комиссии,
+ * которого никто не начислял. У расчёта с комиссией второй реверс уткнулся бы
+ * в идемпотентность начисления — но с невнятным ответом «начислено дважды», а
+ * у расчёта **без** комиссии не уткнулся бы ни во что: `negativeClientBalance`
+ * — проверка постфактум, приём записи она не останавливает.
+ *
+ * Признак — объявление расчёта на исправлении, а не имя ключа памятки:
+ * движение обязательства между владельцами без `settles` невозможно
+ * (`assertClientOwnerMoveOnlySettles`), поэтому под правило попадает любой
+ * реверс расчёта, кем бы он ни был собран — словарём или низкоуровневой
+ * дверью.
+ *
+ * Что правило намеренно **не** запрещает: исправление той же цели, не
+ * двигающее клиентское обязательство (например, возврат одной лишь комиссии в
+ * транзит). Такое исправление ограничено своим пределом — вернуть больше, чем
+ * цель сняла, нельзя (`feeRestorableBy`).
+ */
+function assertSettlementReversedOnce(journal: Journal, entry: JournalEntry): void {
+  if (entry.kind !== 'correction' || entry.settles === null) return;
+  const target = entry.correctsEntryId;
+  if (target === null) return;
+  const reversal = journal.entries.find(
+    (existing) =>
+      existing.kind === 'correction' &&
+      existing.settles !== null &&
+      existing.correctsEntryId === target,
+  );
+  if (reversal === undefined) return;
+  throw new LedgerError(LedgerErrorCode.journalSettlementReversedTwice, {
+    id: entry.id,
+    correctsEntryId: target,
+    reversedBy: reversal.id,
+    dealId: entry.settles.deal.dealId,
+    trancheId: entry.settles.deal.trancheId,
+  });
 }
 
 /** Счета расчётов с валютным контрагентом, которых касается запись. */
@@ -311,8 +417,14 @@ export function appendEntry(journal: Journal, entry: JournalEntry): Journal {
       });
     }
   }
-  // Ниже — три правила, которым нужна история, а не одна запись. Все они стоят
+  // Ниже — правила, которым нужна история, а не одна запись. Все они стоят
   // здесь по одной причине: конструктор записи журнала не видит.
+  //
+  // Порядок значим ровно в одном месте: «расчёт отматывается один раз» стоит
+  // **до** идемпотентности начисления. Иначе второй реверс расчёта с комиссией
+  // отвергался бы как «начислено дважды» — то есть снова не тем правилом, к
+  // которому относится.
+  assertSettlementReversedOnce(journal, entry);
   assertFeeAccruedOnce(journal, entry);
   assertConversionKeyNotReused(journal, entry);
   assertShortfallFundingResolves(journal, entry);

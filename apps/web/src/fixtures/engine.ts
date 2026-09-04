@@ -375,6 +375,9 @@ function applyIntent(
           clientKey(intent.payerClientKey),
           clientKey(intent.recipientClientKey),
           intent.attestation,
+          // Потолок удержания транша — из намерения: витрина считает те же
+          // проводки, что и продукт, и послаблений себе не выдаёт.
+          intent.feeCeiling,
         ),
         intent.amount,
         feeAccrual,
