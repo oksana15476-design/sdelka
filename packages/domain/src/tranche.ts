@@ -399,7 +399,21 @@ const EVIDENCE_GUARDS: readonly GuardId[] = [
  * средств, и без них намерение просто не порождалось, — так что в учёте не
  * оставалось даже следа.
  */
-const RELEASE_PATH_GUARDS: readonly GuardId[] = [...EVIDENCE_GUARDS, 'g_funds_collected'];
+const RELEASE_PATH_GUARDS: readonly GuardId[] = [
+  ...EVIDENCE_GUARDS,
+  'g_funds_collected',
+  /**
+   * `g_funds_locked` стоит рядом с `g_funds_collected`, а не вместо него, и по
+   * той же причине, что и все guard'ы этого списка: после того как запирание
+   * стало намерением автомата (вход в `reserved`), путь
+   * `collected → refund_pending → refunding → release_blocked →
+   * release_pending → paying_out` в `reserved` не заходит вовсе. Средства
+   * собраны, guard собранных проходит, а файл транша пуст — и расчёт списывает
+   * с него сумму, которой там нет, то есть берёт её у других сделок
+   * (красная линия №1).
+   */
+  'g_funds_locked',
+];
 
 /**
  * Таблица переходов — STATE-MACHINES.md §1.4.
@@ -468,7 +482,7 @@ export const TRANCHE_TRANSITIONS: readonly TrancheTransition[] = Object.freeze([
     'paying_out',
     'payout_result',
     'paid_out',
-    ['g_evidence_present', 'g_funds_collected'],
+    ['g_evidence_present', 'g_funds_collected', 'g_funds_locked'],
     [],
     'settled',
   ),
@@ -481,7 +495,7 @@ export const TRANCHE_TRANSITIONS: readonly TrancheTransition[] = Object.freeze([
     'paying_out',
     'reconciliation_resolved',
     'paid_out',
-    ['g_evidence_present', 'g_funds_collected'],
+    ['g_evidence_present', 'g_funds_collected', 'g_funds_locked'],
     [],
     'settled',
   ),
@@ -530,17 +544,41 @@ function eventOutcome(event: TrancheEvent): PayoutOutcome | null {
 }
 
 /**
- * Сумма, которой распоряжается проводка. Для зачисления — сумма события, для
- * выплаты, возврата и списания — фактически собранные средства.
+ * Сумма, которой распоряжается проводка. Разводится **по шаблону явно**, а не
+ * одним «собранным» на всё: собранное и запертое — две разные величины, и
+ * склейка стоила симметричной дыры.
  *
- * `null` означает, что денег по траншу не поступало: транш из `collecting`
- * уходит в возврат по дедлайну и возвращать нечего. Проводки в этом случае нет
- * вовсе — «возврат нуля» это запись с нулевой суммой, а такие записи журнал
- * не принимает.
+ * - зачисление — сумма события;
+ * - запирание — собранное: запирается ровно то, что пришло под этот транш;
+ * - расфиксация, отвязка при возврате, списание — **запертое**. Дебетуется
+ *   счёт `client:{клиент}:tranche:{...}`, и брать сумму откуда-то, кроме его
+ *   остатка, значит дебетовать одну величину, а называть другую;
+ * - внешняя нога возврата — собранное: к этому моменту деньги лежат в
+ *   свободной части счёта покупателя независимо от того, запирались они
+ *   когда-нибудь или нет (возврат из `collecting`, из `collected` до резерва,
+ *   после отката резерва).
+ *
+ * `null` означает, что двигать нечего: транш из `collecting` уходит в возврат
+ * по дедлайну, возвращать нечего. Проводки в этом случае нет вовсе — «возврат
+ * нуля» это запись с нулевой суммой, а такие записи журнал не принимает.
  */
-function moneyForTemplate(event: TrancheEvent, facts: TrancheFacts): Money<CurrencyCode> | null {
-  if (event.type === 'funds_received') return event.amount;
-  return facts.collectedAmount;
+function moneyForTemplate(
+  template: LedgerTemplate,
+  event: TrancheEvent,
+  facts: TrancheFacts,
+): Money<CurrencyCode> | null {
+  switch (template) {
+    case 'funds_received':
+      return event.type === 'funds_received' ? event.amount : null;
+    case 'lock_funds':
+      return facts.collectedAmount;
+    case 'unlock_funds':
+    case 'refund_unlock':
+    case 'write_off':
+      return facts.lockedAmount;
+    case 'refund_external':
+      return facts.collectedAmount;
+  }
 }
 
 function exitIntents(from: TrancheStatus, to: TrancheStatus): readonly Intent[] {
@@ -607,9 +645,13 @@ function entryIntents(
   context: TrancheContext,
   act: ConditionAct | null,
 ): readonly Intent[] {
-  const amount = moneyForTemplate(event, context.facts);
-  const ledger = (template: LedgerTemplate): readonly Intent[] =>
-    amount === null
+  const ledger = (template: LedgerTemplate): readonly Intent[] => {
+    const amount = moneyForTemplate(template, event, context.facts);
+    // Ноль здесь наравне с `null`: пустой файл транша возвращает не `null`, а
+    // ноль в валюте (`accountBalance`), и запись на ноль журнал отвергает.
+    // Раньше этот разбор стоял в каждой проекции по-своему — в приложении по
+    // остатку, в интерфейсе по флагу, в проекции домена не стоял вовсе.
+    return amount === null || amount.minor === 0n
       ? []
       : [
           {
@@ -621,6 +663,7 @@ function entryIntents(
             amount,
           },
         ];
+  };
   switch (to) {
     case 'collected':
       return [
@@ -632,10 +675,38 @@ function entryIntents(
         // кастодиана. Обеспечение при этом сходится с обеих сторон, поэтому ни
         // один инвариант учёта такую запись не поймал бы.
         ...(event.type === 'funds_received' ? ledger('funds_received') : []),
+        /**
+         * Расфиксация — по **событию**, а не по статусу, тем же приёмом, что
+         * зачисление строкой выше. `reserve_expired` — единственное событие,
+         * которым в `collected` возвращаются, и оно ведёт сюда с **двух**
+         * рёбер: `reserved → collected` и `release_blocked → collected`. Ключ
+         * по событию закрывает оба одним правилом; ключ по статусу породил бы
+         * расфиксацию ещё и на приходе денег из `collecting`, где запирать
+         * ещё нечего.
+         *
+         * Симметричной половины запирания не было ни у одной проекции: при
+         * `reserve_expired` деньги оставались запертыми под траншем, который в
+         * интерфейсе уже считал их свободными (`CABINETS.md` §3.2 блок 6:
+         * «резерв будет снят автоматически и деньги останутся у вас»).
+         */
+        ...(event.type === 'reserve_expired' ? ledger('unlock_funds') : []),
         { type: 'notify', audience: 'buyer', messageKey: 'tranche.collected.buyer' },
       ];
     case 'reserved':
       return [
+        /**
+         * Запирание средств под транш — намерение автомата, а не шаг
+         * приложения. Раньше намерения не было вовсе, и три проекции запирали
+         * в трёх разных моментах; на этой же границе стоит весь экран «Мой
+         * счёт» (`CABINETS.md` §3.4: «вывод доступен, пока средства не
+         * зарезервированы»), то есть расхождение было видно клиенту.
+         *
+         * Момент — вход в `reserved`: FUNCTIONAL.md §3.1 описывает проводку
+         * привязки, но не называет переход, а STATE-MACHINES.md §6 и
+         * `ROADMAP.md` И12.2 определяют `collected` как деньги, которые можно
+         * забрать. Запирание на статус раньше делало оба обещания ложными.
+         */
+        ...ledger('lock_funds'),
         { type: 'lock_beneficiary' },
         { type: 'notify', audience: 'seller', messageKey: 'tranche.reserved.seller' },
       ];
@@ -660,6 +731,12 @@ function entryIntents(
     }
     case 'paid_out': {
       const evidenceRef = context.facts.evidenceBundleId;
+      // Расчёт двигает **собранное**: запись дебетует файл транша на брутто и
+      // расщепляет его на нетто получателю и комиссию. Запертое здесь читать
+      // нельзя — оно и есть то, что расчёт обнуляет, а не то, чем он меряется;
+      // равенство двух величин на этом пути держит `g_funds_collected` вместе с
+      // инвариантом отрицательного остатка, а не подстановка одной вместо другой.
+      const amount = context.facts.collectedAmount;
       if (act === null || evidenceRef === null || evidenceRef.length === 0 || amount === null) {
         // Сюда не попасть: акт привязан у всего, что вышло из `pending`, а
         // `g_evidence_present` стоит на обоих рёбрах пути выплаты. Ветка

@@ -9,14 +9,12 @@ import {
   approve,
   attachRegistryExtract,
   dealStatusOf,
-  lockFundsForTranche,
   patchFacts,
   receiveExternalPayment,
   rejectTrancheEvent,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-  unlockFundsFromTranche,
 } from '../src/index';
 import {
   BUYER,
@@ -58,7 +56,6 @@ describe('регистрация не состоялась', () => {
     ).world;
     world = applyDealEvent(world, DEAL, { type: 'funds_received' }, OPTIONS);
     world = applyTrancheEvent(world, TRANCHE, { type: 'reserve_requested' }, OPTIONS).world;
-    world = lockFundsForTranche(world, TRANCHE, DEAL_AMOUNT);
     world = applyDealEvent(world, DEAL, { type: 'tranches_reserved' }, OPTIONS);
     world = applyDealEvent(world, DEAL, { type: 'filing_registered', applicationId: 'app-2' }, OPTIONS);
 
@@ -67,10 +64,13 @@ describe('регистрация не состоялась', () => {
 
     world = advance(world, DAY_MS);
 
-    // ⚠ Планировщик, пришедший по дедлайну к зарезервированному траншу, не
-    // может его сдвинуть: ребра `reserved → deadline_reached` в таблице нет,
-    // хотя §1.5 ставит дедлайн на входе в `reserved`, а §5 обещает «отсечку
-    // рабочего дня». Отчёт, расхождение 9.
+    // Ребра `reserved → deadline_reached` в таблице нет — и **намеренно**, а не
+    // по недосмотру. Часы этого статуса порождают другое событие:
+    // `reserve_expired` (`dueTrancheEvent`, `STATE-MACHINES.md` §5 «отсечка
+    // рабочего дня» плюс `CABINETS.md` §3.2 блок 6 «резерв будет снят
+    // автоматически и деньги останутся у вас»). `deadline_reached` увёл бы
+    // транш прямо в `refund_pending`, минуя обещанное «сделку можно провести
+    // заново». Расхождение 9 закрыто селектором часов, а не новым ребром.
     const stuck = rejectTrancheEvent(world, TRANCHE, { type: 'deadline_reached' });
     expect(stuck.code).toBe('domain.transition.not_allowed');
 
@@ -93,7 +93,9 @@ describe('регистрация не состоялась', () => {
     // Блокировка реквизитов снята: уходим из резерва не в выплату.
     expect(trancheOf(world, TRANCHE).beneficiary.locked).toBe(false);
 
-    world = unlockFundsFromTranche(world, TRANCHE, DEAL_AMOUNT);
+    // Ручных шагов запирания и расфиксации в этом сценарии больше нет: оба
+    // порождает автомат. Утверждения о балансах ниже — те же самые и до
+    // минорной единицы, и это и есть доказательство, что перенос верен.
     expect(accountBalance(world.journal, clientFreeAccount(opened.buyerKey), GEL).minor).toBe(20_000_000n);
 
     world = applyTrancheEvent(world, TRANCHE, { type: 'deadline_reached' }, ROLLBACK).world;

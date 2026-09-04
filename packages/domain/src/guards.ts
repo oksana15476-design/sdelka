@@ -55,6 +55,32 @@ export const GUARD_IDS = [
    * средств других сделок — красная линия №1.
    */
   'g_funds_collected',
+  /**
+   * введено кодом: **средства действительно заперты под этим траншем** —
+   * остаток файла `client:{клиент}:tranche:{сделка}:{транш}` покрывает сумму,
+   * которую расчёт с него спишет.
+   *
+   * Отдельный guard рядом с `g_funds_collected`, а не его расширение: «деньги
+   * по траншу собраны» и «деньги лежат в файле этого транша» — два разных
+   * утверждения, и §7 требует, чтобы каждое проверялось поимённо. До того как
+   * запирание стало намерением автомата, они совпадали случайно: проекция
+   * запирала деньги в момент `collected`, и любой путь с собранными
+   * средствами имел непустой файл.
+   *
+   * Дыру нашёл тест на свойствах ровно в тот момент, когда запирание переехало
+   * на вход в `reserved`: путь `collected → refund_pending → refunding
+   * --payout_result(rejected)--> release_blocked → release_pending →
+   * paying_out → paid_out` **в `reserved` не заходит вовсе**. Деньги при этом
+   * лежат в свободной части счёта покупателя, файл транша пуст, а расчёт
+   * дебетует его на всю сумму — то есть выплата финансируется средствами
+   * других сделок, красная линия №1. В журнале это видно отрицательным
+   * остатком клиентского счёта, но ловить такое учётом уже поздно: деньги к
+   * этой секунде ушли в банк.
+   *
+   * Стоит на **каждой** двери пути выплаты по той же причине, что и остальные:
+   * guard, стоящий только на одном входе, не защищает состояние (§1.4, §4).
+   */
+  'g_funds_locked',
   'g_coverage_ok',
   'g_source_account_known',
   /**
@@ -169,6 +195,20 @@ export interface Approval {
 export interface TrancheFacts {
   readonly requiredAmount: Money<CurrencyCode>;
   readonly collectedAmount: Money<CurrencyCode> | null;
+  /**
+   * Сколько **сейчас заперто в файле этого транша**: остаток
+   * `client:{клиент}:tranche:{сделка}:{транш}`. Считает `@sdelka/ledger`
+   * (`accountBalance`), домен читает готовое — та же форма и та же оговорка,
+   * что у `coverageOk` и `sourceAccountKnown`.
+   *
+   * `null` — денег под траншем нет: он либо ещё не резервировался, либо резерв
+   * уже снят. Расфиксация, отвязка при возврате и списание берут сумму отсюда,
+   * а не из `collectedAmount`: это две разные величины, и до E-этого-батча
+   * каждая проекция городила против их расхождения свою защиту от пустого
+   * файла — в приложении по нулевому остатку, в интерфейсе по флагу, в
+   * проекции домена никакой. Одна величина в фактах убирает все три.
+   */
+  readonly lockedAmount: Money<CurrencyCode> | null;
   /** Ключ плательщика-покупателя, с которым сверяется отправитель платежа. */
   readonly buyerPayerKey: string;
   /**
@@ -372,6 +412,21 @@ export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> =
     if (collected === null) return false;
     if (collected.currency !== facts.requiredAmount.currency) return false;
     return collected.minor > 0n;
+  },
+  /**
+   * Файл транша покрывает сумму, которую расчёт с него спишет.
+   *
+   * Сравнение именно с собранным, а не с нулём: частично запертый файл — это
+   * не «мало», а расхождение, и расчёт по нему увёл бы остаток клиентского
+   * счёта в минус. Валюта сверяется отдельно по той же причине, что и в
+   * `g_funds_collected`: запертое в другой валюте — не те деньги.
+   */
+  g_funds_locked: ({ facts }) => {
+    const locked = facts.lockedAmount;
+    const collected = facts.collectedAmount;
+    if (locked === null || collected === null) return false;
+    if (locked.currency !== collected.currency) return false;
+    return compare(locked, collected) >= 0;
   },
   g_coverage_ok: ({ facts }) => facts.coverageOk,
   g_source_account_known: ({ facts }) => facts.sourceAccountKnown,

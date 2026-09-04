@@ -104,6 +104,8 @@ describe('guard g_approvals_sufficient на валютном транше', () =
     const ctx = context({
       requiredAmount: usdAmount,
       collectedAmount: usdAmount,
+      // Валютный транш заперт в своей валюте: базовая фикстура несёт лари.
+      lockedAmount: usdAmount,
       officialRateAtCreation: official,
       preparedBy: 'operator-1',
       approvals: [{ userId: 'operator-2' }],
@@ -117,6 +119,8 @@ describe('guard g_approvals_sufficient на валютном транше', () =
     const ctx = context({
       requiredAmount: usdAmount,
       collectedAmount: usdAmount,
+      // Валютный транш заперт в своей валюте: базовая фикстура несёт лари.
+      lockedAmount: usdAmount,
       officialRateAtCreation: official,
       approvals: [],
     });
@@ -131,6 +135,8 @@ describe('guard g_approvals_sufficient на валютном транше', () =
     const ctx = context({
       requiredAmount: usdAmount,
       collectedAmount: usdAmount,
+      // Валютный транш заперт в своей валюте: базовая фикстура несёт лари.
+      lockedAmount: usdAmount,
       officialRateAtCreation: null,
       approvals: [{ userId: 'operator-2' }, { userId: 'operator-3' }],
     });

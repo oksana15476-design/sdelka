@@ -13,6 +13,11 @@ import {
   type PolicyVersionId,
   decision,
 } from './decision';
+import {
+  type DualControl,
+  dualControlFailures,
+  isDistinctApprover,
+} from './dual-control';
 import type { IdentityDocument, PartyProfile } from './identity';
 import { type ReasonKey, REASON_KEYS } from './keys';
 import { type NameMatch, type NameObservations, compareNames, latinObservation } from './names';
@@ -301,11 +306,14 @@ export function advanceBeneficiaryChange(
     case 'parties_notified':
       return ok(Object.freeze({ ...request, notifiedAt: now }));
     case 'approval_added': {
-      if (event.userId === request.requestedBy) {
-        // Второе утверждение — второй человек. Не настройка прав, а разные учётные записи.
-        return failure(REASON_KEYS.beneficiaryChangeApproverNotDistinct);
-      }
-      if (request.approvals.includes(event.userId)) {
+      // Второе утверждение — второй человек. Не настройка прав, а разные учётные
+      // записи; проверка одна на все периметры (`dual-control.ts`).
+      if (
+        !isDistinctApprover(
+          { preparedBy: request.requestedBy, approvals: request.approvals, requiredApprovals: 0 },
+          event.userId,
+        )
+      ) {
         return failure(REASON_KEYS.beneficiaryChangeApproverNotDistinct);
       }
       return ok(
@@ -356,16 +364,26 @@ export function applyBeneficiaryChange(
     if (request.notifiedAt === null) {
       failures.push(REASON_KEYS.beneficiaryChangeAwaitsSecondApproval);
     }
-    const approvers = new Set(
-      request.approvals.filter((userId) => userId !== request.requestedBy),
+    // Правило «две различные учётные записи, и ни одна не готовила» живёт в
+    // `dual-control.ts` в единственном экземпляре: до него оно было написано
+    // здесь, у утверждений выплаты в домене и у разморозки — трижды порознь.
+    // Ключи причин остаются периметровыми: оператору нужна строка про реквизиты,
+    // а не про «второе утверждение вообще».
+    const control: DualControl = {
+      preparedBy: request.requestedBy,
+      approvals: Object.freeze([...request.approvals, approval.actorId]),
+      requiredApprovals: policy.beneficiary.requiredApprovals,
+    };
+    failures.push(
+      ...dualControlFailures(
+        control,
+        {
+          awaits: REASON_KEYS.beneficiaryChangeAwaitsSecondApproval,
+          notDistinct: REASON_KEYS.beneficiaryChangeApproverNotDistinct,
+        },
+        approval.actorId,
+      ),
     );
-    if (approval.actorId !== request.requestedBy) approvers.add(approval.actorId);
-    if (approvers.size < policy.beneficiary.requiredApprovals) {
-      failures.push(REASON_KEYS.beneficiaryChangeAwaitsSecondApproval);
-    }
-    if (approval.actorId === request.requestedBy) {
-      failures.push(REASON_KEYS.beneficiaryChangeApproverNotDistinct);
-    }
   }
   if (failures.length > 0) return failure(Object.freeze(failures));
 

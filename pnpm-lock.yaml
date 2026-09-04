@@ -80,9 +80,24 @@ importers:
       '@sdelka/domain':
         specifier: workspace:*
         version: link:../domain
+      '@sdelka/intake':
+        specifier: workspace:*
+        version: link:../intake
       '@sdelka/ledger':
         specifier: workspace:*
         version: link:../ledger
+      '@sdelka/money':
+        specifier: workspace:*
+        version: link:../money
+
+  packages/intake:
+    dependencies:
+      '@sdelka/compliance':
+        specifier: workspace:*
+        version: link:../compliance
+      '@sdelka/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@sdelka/money':
         specifier: workspace:*
         version: link:../money

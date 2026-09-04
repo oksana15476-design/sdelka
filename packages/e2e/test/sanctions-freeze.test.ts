@@ -17,7 +17,6 @@ import {
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-  unlockFundsFromTranche,
 } from '../src/index';
 import {
   BANK_RESPONSE_SOURCE,
@@ -191,7 +190,6 @@ describe('санкционная заморозка', () => {
     expect(dealStatusOf(world, DEAL)).toBe('unwinding');
     expect(trancheStatusOf(world, TRANCHE)).toBe('refund_pending');
 
-    world = unlockFundsFromTranche(world, TRANCHE, DEAL_AMOUNT);
     world = applyTrancheEvent(world, TRANCHE, { type: 'refund_initiated' }, ROLLBACK).world;
     world = applyTrancheEvent(world, TRANCHE, { type: 'payout_result', outcome: 'settled' }, ROLLBACK).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('refunded');

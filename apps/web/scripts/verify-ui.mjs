@@ -218,6 +218,10 @@ const MONEY_STATES = [
   ['m10', 'submitted'], ['m11', 'releasePending'], ['m12', 'released'],
   ['m13', 'payoutUnknown'], ['m14', 'rollbackInProgress'], ['m15', 'releasedToAccount'],
   ['m16', 'refundInProgress'], ['m17', 'refunded'], ['m18', 'frozen'],
+  // Откат резерва по сроку: положение денег то же самое (`M-06`), но приходят
+  // в него сверху, а не снизу, и экран обязан объяснить, откуда деньги снова
+  // свободны (`CABINETS.md` §3.2 блок 6).
+  ['m19', 'onAccount-afterReserve'],
 ];
 
 const RECEIVING = [
@@ -385,6 +389,24 @@ async function waitForServer(timeoutMs) {
   return false;
 }
 
+/**
+ * Нужна ли пересборка.
+ *
+ * Раньше здесь стояло «есть каталог `.next` — не собираем», и это была дыра
+ * ровно того же рода, что все остальные, которые ловит этот скрипт: обход шёл
+ * по **вчерашней** сборке и заканчивался зелёным на коде, которого в ней нет.
+ * Поймано на добавленной фикстуре — новый экран отвечал 404, хотя в исходниках
+ * он был. Сравнивается отметка `BUILD_ID` с самым свежим исходником: проверка,
+ * которую нельзя забыть провести, не должна проверять не то, что лежит на диске.
+ */
+function staleBuild() {
+  const marker = join(APP_ROOT, '.next', 'BUILD_ID');
+  if (!existsSync(marker)) return true;
+  const builtAt = statSync(marker).mtimeMs;
+  const inputs = [...SOURCE_FILES, join(APP_ROOT, 'package.json')].filter((file) => existsSync(file));
+  return inputs.some((file) => statSync(file).mtimeMs > builtAt);
+}
+
 async function main() {
   process.stdout.write('Проверка интерфейса «Сделка»\n\n');
   checkVocabulary();
@@ -397,8 +419,8 @@ async function main() {
     process.exit(1);
   }
 
-  if (!existsSync(join(APP_ROOT, '.next'))) {
-    process.stdout.write('Сборки нет — собираем.\n');
+  if (staleBuild()) {
+    process.stdout.write('Сборка отсутствует или старее исходников — собираем.\n');
     const build = spawn('npx', ['next', 'build'], { cwd: APP_ROOT, stdio: 'inherit' });
     const code = await new Promise((done) => build.on('exit', done));
     if (code !== 0) {

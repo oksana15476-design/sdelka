@@ -53,7 +53,14 @@ describe('каждый guard проходит и не проходит', () => {
     // а путь через `release_blocked` в `collected` не заходит вовсе — и транш
     // без единого лари за ним доходил до `paid_out`, не оставляя в учёте даже
     // записи.
-    expect(GUARD_IDS).toHaveLength(17);
+    //
+    // Восемнадцатый — `g_funds_locked`: средства **заперты под этим траншем**.
+    // Отдельно от собранных, потому что после переноса запирания на вход в
+    // `reserved` эти два ответа разошлись: путь `collected → refund_pending →
+    // refunding → release_blocked → release_pending → paying_out` в `reserved`
+    // не заходит, деньги остаются в свободной части счёта покупателя, а расчёт
+    // дебетует пустой файл транша — то есть берёт деньги других сделок.
+    expect(GUARD_IDS).toHaveLength(18);
     expect(GUARD_IDS).not.toContain('g_seller_is_owner');
     expect(GUARD_IDS).not.toContain('g_no_stale_break');
     expect(GUARD_IDS).toContain('g_condition_agreed');
@@ -61,6 +68,27 @@ describe('каждый guard проходит и не проходит', () => {
     expect(GUARD_IDS).toContain('g_beneficiary_verified');
     expect(GUARD_IDS).toContain('g_unfreeze_approvers_distinct');
     expect(GUARD_IDS).toContain('g_funds_collected');
+    expect(GUARD_IDS).toContain('g_funds_locked');
+  });
+
+  it('g_funds_locked', () => {
+    expect(check('g_funds_locked', {})).toBe(true);
+    // Деньги собраны, но под траншем не заперты: путь мимо `reserved`.
+    expect(check('g_funds_locked', { lockedAmount: null })).toBe(false);
+    expect(check('g_funds_locked', { lockedAmount: money('GEL', 0n) })).toBe(false);
+    // Частично запертый файл — не «мало», а расхождение: расчёт увёл бы
+    // остаток клиентского счёта в минус на разницу.
+    expect(
+      check('g_funds_locked', { lockedAmount: money('GEL', AMOUNT.minor - 1n) }),
+    ).toBe(false);
+    // Больше запертого, чем собрано, — законно: остаток остаётся в файле.
+    expect(
+      check('g_funds_locked', { lockedAmount: money('GEL', AMOUNT.minor + 1n) }),
+    ).toBe(true);
+    // Другая валюта — «не те деньги», как и у собранных.
+    expect(check('g_funds_locked', { lockedAmount: money('USD', AMOUNT.minor) })).toBe(false);
+    // Собранного нет вовсе — сравнивать не с чем, отказ закрытый.
+    expect(check('g_funds_locked', { collectedAmount: null })).toBe(false);
   });
 
   it('g_funds_collected', () => {

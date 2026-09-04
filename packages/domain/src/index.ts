@@ -13,5 +13,6 @@ export * from './payout';
 export * from './reachability';
 export * from './release-condition';
 export * from './result';
+export * from './schedule';
 export * from './tranche';
 export * from './tranche-events';

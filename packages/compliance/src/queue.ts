@@ -25,6 +25,17 @@ export const REVIEW_TASK_KINDS = [
   'related_parties',
   'beneficiary_change',
   'source_of_funds',
+  /**
+   * Непознанное поступление: референса нет, либо кандидатов больше одного
+   * (`ROADMAP.md` И2.2). Собственный вид, а не `payer_hold`: там удержание по
+   * плательщику, здесь неизвестна сама сделка, и норматив разбора у них разный.
+   */
+  'intake_unmatched',
+  /**
+   * Недоплата сверх допуска: транш остаётся в `collecting`, стороне показана
+   * недостающая сумма, **оператор видит задачу** (И2.1, критерий 3).
+   */
+  'intake_underpayment',
 ] as const;
 export type ReviewTaskKind = (typeof REVIEW_TASK_KINDS)[number];
 

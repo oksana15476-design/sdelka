@@ -398,6 +398,37 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
     confirmationNo: null,
   }),
   scenario({
+    id: 'm19',
+    ref: 'SD-7K60',
+    role: 'paying',
+    property: 'gonio',
+    counterparty: 'kobalia',
+    requiredMinor: 14_500_000n,
+    /**
+     * Откат резерва по сроку — `reserved --reserve_expired--> collected`.
+     *
+     * Фикстура существует потому, что `CABINETS.md` §3.2 блок 6 обещает
+     * дословно: «резерв будет снят автоматически **и деньги останутся у вас.
+     * Сделку можно будет провести заново**». До того как расфиксация стала
+     * намерением автомата, обещание было ложным в учёте: деньги оставались
+     * запертыми под траншем, который экран уже считал свободным, — и ни один
+     * инвариант этого не видел, потому что запись сходится в ноль с обеих
+     * сторон. Здесь оба конца обещания проверяются: положение денег `M-06`
+     * («на счёте, можете забрать»), а не `M-09`, и пустой файл транша.
+     */
+    steps: [
+      ...opened(90),
+      ...funded(60, 14_500_000n),
+      ...reserved(40),
+      tranche(6, { type: 'reserve_expired' }),
+    ],
+    payment: NO_PAYMENT_FACTS,
+    modifiers: NO_MODIFIERS,
+    overrides: BASE_OVERRIDES,
+    expect: 'onAccount',
+    confirmationNo: null,
+  }),
+  scenario({
     id: 'm16',
     ref: 'SD-7K57',
     role: 'paying',

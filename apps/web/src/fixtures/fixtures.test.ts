@@ -47,6 +47,49 @@ describe('фикстуры', () => {
     }
   });
 
+  it('запирание средств делает автомат, а не фикстура', async () => {
+    // Пока запирание было шагом приложения, момент его выбирала фикстура, и
+    // три проекции запирали деньги в трёх разных статусах. Проверяется тот
+    // конец, который видит клиент: в `reserved` свободного остатка по сделке
+    // нет, а файл транша покрывает требуемое (`STATE-MACHINES.md` §1.5).
+    const held = await getDeal('m09');
+    expect(held?.trancheStatus).toBe('reserved');
+    expect(held?.locked.minor).toBe(held?.required.minor);
+    expect(held?.credited.minor).toBe(0n);
+  });
+
+  it('снятие резерва по сроку оставляет деньги свободными, а не запертыми', async () => {
+    // `CABINETS.md` §3.2 блок 6: «резерв будет снят автоматически и деньги
+    // останутся у вас». До того как расфиксация стала намерением автомата,
+    // обещание было ложным в учёте, и запись сходилась в ноль с обеих сторон —
+    // то есть ни один инвариант её не ловил.
+    const rolled = await getDeal('m19');
+    expect(rolled?.trancheStatus).toBe('collected');
+    expect(rolled?.moneyStateCode).toBe('M-06');
+    expect(rolled?.locked.minor).toBe(0n);
+    expect(rolled?.credited.minor).toBe(rolled?.required.minor);
+    const account = await getAccount();
+    // Снятый резерв исчезает из запертых частей: экран «Мой счёт» перестаёт
+    // показывать сделку среди причин, по которым остаток недоступен.
+    expect(account.lockedParts.some((part) => part.dealId === 'm19')).toBe(false);
+  });
+
+  it('«возвращено на ваш счёт» подтверждается журналом, а не флагом приложения', async () => {
+    // `M-15` — единственное положение, где клиент выбирает: вывести или
+    // провести заново. Раньше оно держалось на том, что приложение не
+    // исполняло намерение внешнего вывода; теперь у него есть вторая опора,
+    // проверяемая учётом, — деньги действительно лежат в свободной части счёта
+    // покупателя и действительно отвязаны от транша.
+    const returned = await getDeal('m15');
+    expect(returned?.moneyStateCode).toBe('M-15');
+    expect(returned?.locked.minor).toBe(0n);
+    expect(returned?.credited.minor).toBe(returned?.required.minor);
+    const account = await getAccount();
+    expect(account.free.minor > 0n).toBe(true);
+    // Кнопка вывода доступна: `W-04` — «выводить нечего».
+    expect(account.withdrawState).not.toBe('W-04');
+  });
+
   it('расчёт по сделке, где клиент получает, приходит на счёт со знаком плюс', async () => {
     const account = await getAccount();
     const settlement = account.records.find(

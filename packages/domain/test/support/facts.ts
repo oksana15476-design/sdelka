@@ -68,6 +68,11 @@ export function facts(overrides: Partial<TrancheFacts> = {}): TrancheFacts {
   return {
     requiredAmount: AMOUNT,
     collectedAmount: AMOUNT,
+    // Базовая фикстура описывает счастливый путь: деньги собраны и заперты под
+    // траншем. Тесты путей, где резерва не было (возврат из `collecting`,
+    // списание транша, до которого деньги не дошли), передают `null` явно —
+    // именно там разница между собранным и запертым и проверяется.
+    lockedAmount: AMOUNT,
     buyerPayerKey: 'buyer-1',
     buyer: BUYER,
     conditionAct: CONDITION_ACT,

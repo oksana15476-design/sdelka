@@ -2,6 +2,7 @@ export * from './beneficiary';
 export * from './concentration';
 export * from './decision';
 export * from './detectors/index';
+export * from './dual-control';
 export * from './errors';
 export * from './identity';
 export * from './keys';

@@ -1,9 +1,12 @@
 import {
   type Journal,
+  accountBalance,
   appendEntries,
   balanceByCurrency,
   checkLedgerInvariants,
   coverage,
+  clientKey,
+  clientLockedAccount,
   coverageByTranche,
   emptyJournal,
   isEveryTrancheCovered,
@@ -221,6 +224,15 @@ describe('свойства на случайных последовательн�
         const facts: TrancheFacts = {
           requiredAmount: required,
           collectedAmount: collected,
+          // Запертое читается **из журнала**, а не отслеживается вторым
+          // счётчиком рядом: это ровно та величина, которую домен объявил
+          // приходящей из учёта. Второй счётчик проверял бы модель против
+          // самой себя, а этот — против того, что записано.
+          lockedAmount: accountBalance(
+            runJournal,
+            clientLockedAccount(clientKey(`client-${run}`), dealId, trancheId),
+            'GEL',
+          ),
           buyerPayerKey: 'buyer-1',
           // Покупатель и его счёт — одно значение: назвать стороной одного, а
           // дебетовать счёт другого больше нечем (§2.1).

@@ -44,24 +44,35 @@ describe('возврат: два момента, а не один', () => {
     { type: 'payout_result', outcome: 'settled' },
   ];
 
-  function drive(from: TrancheState = stateAt('refund_pending')): {
+  /**
+   * Реальный путь, а не подстановка состояния.
+   *
+   * Прежняя редакция принимала деньги в `collecting`, **выбрасывала** полученное
+   * состояние и продолжала с `stateAt('refund_pending')` — то есть через
+   * `reserved` сценарий не проходил, и деньги в его модели ни разу не
+   * запирались. Тест жил ровно на той склейке, которую этот батч разбирает:
+   * пока `funds_received` означал «зачислить и запереть», файл транша появлялся
+   * и без резерва, и подстановка сходилась.
+   *
+   * Теперь путь пройден целиком — `collecting → collected → reserved →
+   * refund_pending → refunding → refunded`, — и это строже прежнего, а не мягче.
+   */
+  function drive(): {
     journal: Journal;
     intents: readonly Intent[];
     state: TrancheState;
   } {
     const ctx = context();
     let journal: Journal = emptyJournal;
-    let state = from;
+    let state: TrancheState = stateAt('collecting');
     let intents: Intent[] = [];
-    // Деньги под траншем: до возврата они пришли и заперты.
-    const funded = accept(
-      stateAt('collecting'),
+    const path: readonly TrancheEvent[] = [
       { type: 'funds_received', amount: AMOUNT, sender: 'buyer-1', reference: 'ref-1' },
-      ctx,
-    );
-    journal = projectIntents(journal, funded.intents, { feeRate: FEE_RATE });
-    intents = [...funded.intents];
-    for (const event of events) {
+      { type: 'reserve_requested' },
+      { type: 'condition_failed' },
+      ...events,
+    ];
+    for (const event of path) {
       const step = accept(state, event, ctx);
       state = step.state;
       journal = projectIntents(journal, step.intents, { feeRate: FEE_RATE });
@@ -92,7 +103,14 @@ describe('возврат: два момента, а не один', () => {
   it('emits both moments, in order, at the confirmed refund', () => {
     const { intents, state } = drive();
     expect(state.status).toBe('refunded');
-    expect(templates(intents)).toEqual(['funds_received', 'refund_unlock', 'refund_external']);
+    // Четыре шаблона, а не три: зачисление и запирание — **разные события**
+    // (FUNCTIONAL.md §3.1), и до этого батча автомат называл только первое.
+    expect(templates(intents)).toEqual([
+      'funds_received',
+      'lock_funds',
+      'refund_unlock',
+      'refund_external',
+    ]);
   });
 
   it('leaves the tranche, the client account and the nominal account empty', () => {

@@ -116,7 +116,11 @@ describe('выход из блокировки', () => {
 
     // --- И всё-таки поручение не уходит: денег под траншем нет ---
     const unfunded = rejectTrancheEvent(world, TRANCHE, { type: 'release_authorized' });
-    expect([...unfunded.failedGuards]).toEqual(['g_funds_collected']);
+    // Отказов два, и оба про деньги: собранных нет и заперто ничего не было.
+    // Второй появился вместе с переносом запирания на вход в `reserved` —
+    // «собрано» и «лежит в файле транша» перестали быть одним ответом, и путь
+    // мимо `reserved` теперь виден поимённо, а не через совпадение.
+    expect([...unfunded.failedGuards]).toEqual(['g_funds_collected', 'g_funds_locked']);
     expect(trancheStatusOf(world, TRANCHE)).toBe('release_pending');
     expect(trancheOf(world, TRANCHE).payouts).toEqual([]);
 

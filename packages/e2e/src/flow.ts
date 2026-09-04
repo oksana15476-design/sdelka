@@ -56,13 +56,10 @@ import {
   type EntryMeta,
   type Journal,
   type JournalEntry,
-  type TrancheRef,
   accountBalance,
   appendEntry,
   clientLockedAccount,
   emptyJournal,
-  lockForTranche,
-  unlockToClientAccount,
   writeOffTransitArrived,
 } from '@sdelka/ledger';
 import type { ConvertedAmount, CurrencyCode, Deduction, FxRates, IsoDate, Money, PlatformSpread } from '@sdelka/money';
@@ -220,6 +217,9 @@ export function createTranche(world: World, spec: TrancheSpec): World {
   const facts: TrancheFacts = {
     requiredAmount: spec.requiredAmount,
     collectedAmount: null,
+    // Пересчитывается из журнала в `contextFor` на каждом вызове редьюсера;
+    // здесь только начальное значение, до первого поступления.
+    lockedAmount: null,
     buyerPayerKey: spec.buyerPayerKey,
     buyer: spec.buyer,
     conditionAct: spec.conditionAct,
@@ -429,48 +429,18 @@ export function convertBalance(
   };
 }
 
-function trancheRefOf(runtime: TrancheRuntime): TrancheRef {
-  return { dealId: runtime.dealId, trancheId: runtime.trancheId };
-}
-
 /**
- * Привязка свободных денег клиента к траншу.
+ * Запирания и расфиксации как шагов приложения **больше нет**.
  *
- * Намерения на это у автомата **нет**: `LedgerTemplate` знает четыре шаблона, и
- * ни один из них не про запирание. Отчёт, расхождение 2.
+ * Раньше здесь стояли `lockFundsForTranche` и `unlockFundsFromTranche`: у
+ * автомата не было намерения ни на то, ни на другое, и тест обязан был не
+ * забыть их позвать в нужном месте. Забыть было можно — и тогда транш
+ * становился необеспеченным, а обратный вызов уводил запертую часть в минус.
+ * Сегодня оба шага — намерения входа (`lock_funds` на входе в `reserved`,
+ * `unlock_funds` по `reserve_expired`), и второй двери в журнал у них нет:
+ * оставленный экспорт означал бы двойную проводку у теста, который позовёт и
+ * то и другое.
  */
-export function lockFundsForTranche(
-  world: World,
-  trancheId: string,
-  amount: Money<CurrencyCode>,
-): World {
-  const runtime = trancheOf(world, trancheId);
-  const { meta, seq } = nextMeta(world, 'lock');
-  return sealed({
-    ...world,
-    seq,
-    journal: appendJournal(world, lockForTranche(meta, payerOf(runtime), trancheRefOf(runtime), amount)),
-    checks: world.checks,
-  });
-}
-
-export function unlockFundsFromTranche(
-  world: World,
-  trancheId: string,
-  amount: Money<CurrencyCode>,
-): World {
-  const runtime = trancheOf(world, trancheId);
-  const { meta, seq } = nextMeta(world, 'unlock');
-  return sealed({
-    ...world,
-    seq,
-    journal: appendJournal(
-      world,
-      unlockToClientAccount(meta, payerOf(runtime), trancheRefOf(runtime), amount),
-    ),
-    checks: world.checks,
-  });
-}
 
 /**
  * Комиссия платформы.
@@ -574,6 +544,18 @@ export function contextFor(world: World, runtime: TrancheRuntime): TrancheContex
       ...runtime.facts,
       // Покрытие считает учёт, домен только читает (`g_coverage_ok`).
       coverageOk: coverageOk(world.journal),
+      // Запертое под траншем — тоже из учёта, тем же способом и по той же
+      // причине. Приложение здесь ничего не помнит: остаток файла транша
+      // читается из журнала на каждый вызов, а не ведётся вторым счётчиком
+      // рядом с ним. Раньше эта величина жила в `ProjectionContext` и
+      // существовала ровно ради одного шаблона — отвязки при возврате, — потому
+      // что запирание не было намерением автомата и обратный шаг он порождал
+      // вслепую.
+      lockedAmount: accountBalance(
+        world.journal,
+        clientLockedAccount(payerOf(runtime), runtime.dealId, runtime.trancheId),
+        runtime.facts.requiredAmount.currency,
+      ),
       activePayouts: runtime.payouts.filter((payout) =>
         (['created', 'submitted', 'unknown'] as readonly string[]).includes(payout.status),
       ).length,
@@ -737,11 +719,6 @@ function applyIntents(
           },
           deductions: next.deductions,
           route: options.creditRoute,
-          lockedForTranche: accountBalance(
-            journal,
-            clientLockedAccount(payerOf(next), intent.dealId, intent.trancheId),
-            intent.amount.currency,
-          ),
         });
         if (projected.kind === 'entry') {
           journal = appendEntry(journal, projected.entry);
@@ -768,11 +745,6 @@ function applyIntents(
           },
           deductions: next.deductions,
           route: options.creditRoute,
-          lockedForTranche: accountBalance(
-            journal,
-            clientLockedAccount(payerOf(next), intent.dealId, intent.trancheId),
-            intent.amount.currency,
-          ),
         });
         if (projected.kind === 'entry') {
           journal = appendEntry(journal, projected.entry);

@@ -111,6 +111,10 @@ export const REASON_KEYS = {
   concentrationHighRiskCountryExceeded: 'compliance.concentration.high_risk_country_exceeded',
   concentrationHighRiskAggregateExceeded: 'compliance.concentration.high_risk_aggregate_exceeded',
 
+  /* --- Второе утверждение (общий примитив) --- */
+  dualControlAwaitsSecondApproval: 'compliance.dual_control.awaits_second_approval',
+  dualControlApproverNotDistinct: 'compliance.dual_control.approver_not_distinct',
+
   /* --- Очередь разбора --- */
   queueEscalated: 'compliance.queue.escalated',
 

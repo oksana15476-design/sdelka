@@ -69,6 +69,12 @@ describe('дыра release_blocked → release_pending → paying_out', () => {
       // проводки при этом не возникало вовсе, потому что сумма берётся из
       // собранных средств.
       'g_funds_collected',
+      // Средства заперты **под этим траншем**. Продублирован на тех же рёбрах и
+      // по той же причине: после переноса запирания на вход в `reserved` путь
+      // `collected → refund_pending → refunding → release_blocked →
+      // release_pending → paying_out` в `reserved` не заходит вовсе, и расчёт
+      // дебетовал бы пустой файл транша, то есть средства других сделок.
+      'g_funds_locked',
       'g_approvals_sufficient',
       'g_no_active_payout',
       'g_coverage_ok',

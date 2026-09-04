@@ -79,7 +79,10 @@ class Totals {
  *
  * Каждая ветка — одно предложение о деньгах, а не форма записи:
  *
- * - поступление: на номинальном счёте стало больше, у транша появился долг;
+ * - поступление: на номинальном счёте стало больше, у клиента появился долг в
+ *   свободной части (транша он ещё не касается);
+ * - запирание: долг переехал из свободной части в файл транша;
+ * - расфиксация: тот же долг переехал обратно;
  * - расчёт: долг транша погашен, у получателя в свободной части появилось
  *   нетто, комиссия признана доходом и **ушла с номинального счёта** на
  *   операционный (красная линия №2);
@@ -120,9 +123,21 @@ export function expectedBalances(
     const free = clientFreeAccount(owner);
     const nominal = bankNominal(intent.amount.currency);
     switch (intent.template) {
+      // Зачисление и привязка к сделке разведены и в модели: раньше
+      // `funds_received` был записан здесь как «на номинальном стало больше, у
+      // транша появился долг», то есть модель была склеена ровно так же, как
+      // проекция, и расхождение между ними было невыразимо.
       case 'funds_received':
         totals.add(nominal, intent.amount);
+        totals.add(free, intent.amount);
+        break;
+      case 'lock_funds':
+        totals.subtract(free, intent.amount);
         totals.add(locked, intent.amount);
+        break;
+      case 'unlock_funds':
+        totals.subtract(locked, intent.amount);
+        totals.add(free, intent.amount);
         break;
       case 'refund_unlock':
         totals.subtract(locked, intent.amount);

@@ -55,11 +55,40 @@ describe('транш: основной путь', () => {
     ]);
 
     const reserved = accept(stateAt('collected'), { type: 'reserve_requested' }, ctx);
+    // Список **расширился**, а не ослаб: запирание средств под транш стало
+    // намерением автомата (`lock_funds`). Раньше его не было вовсе, и три
+    // проекции запирали деньги в трёх разных моментах — в `collected`, отдельным
+    // вызовом приложения и на входе в `reserved`. FUNCTIONAL.md §3.1 описывает
+    // проводку привязки, но перехода не называет; STATE-MACHINES.md §6 и
+    // `ROADMAP.md` И12.2 говорят про `collected` «можете забрать», то есть
+    // запирать там нельзя.
     expect(reserved.intents.map((intent) => intent.type)).toEqual([
       'set_deadline',
+      'post_journal_entry',
       'lock_beneficiary',
       'notify',
     ]);
+    expect(reserved.intents).toContainEqual(
+      expect.objectContaining({ type: 'post_journal_entry', template: 'lock_funds' }),
+    );
+
+    // И симметричная половина: снятие резерва расфиксирует средства. Её не было
+    // ни у одной проекции — деньги оставались запертыми под траншем, который в
+    // интерфейсе уже считался свободным (`CABINETS.md` §3.2 блок 6).
+    const rolledBack = accept(stateAt('reserved'), { type: 'reserve_expired' }, ctx);
+    expect(rolledBack.intents).toContainEqual(
+      expect.objectContaining({ type: 'post_journal_entry', template: 'unlock_funds' }),
+    );
+    // То же правило закрывает и второе ребро в `collected`: ключ по событию, а
+    // не по статусу.
+    const fromBlocked = accept(stateAt('release_blocked'), { type: 'reserve_expired' }, ctx);
+    expect(fromBlocked.intents).toContainEqual(
+      expect.objectContaining({ type: 'post_journal_entry', template: 'unlock_funds' }),
+    );
+    // А приход денег в `collected` расфиксации не порождает: запирать ещё нечего.
+    expect(collected.intents).not.toContainEqual(
+      expect.objectContaining({ type: 'post_journal_entry', template: 'unlock_funds' }),
+    );
 
     const releasePending = accept(stateAt('reserved'), conditionEstablished, ctx);
     expect(releasePending.intents).toContainEqual({

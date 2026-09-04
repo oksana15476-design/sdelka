@@ -24,10 +24,14 @@ import {
   reduceTranche,
 } from '@sdelka/domain';
 import {
+  type ClientKey,
   type Journal,
   type TrancheRef,
+  accountBalance,
   appendEntry,
+  clientFreeAccount,
   clientKey,
+  clientLockedAccount,
   clientTopUp,
   emptyJournal,
   lockForTranche,
@@ -137,12 +141,45 @@ interface Mutable {
   deal: DealState;
   payout: PayoutState | null;
   journal: Journal;
+  /**
+   * Сумма, принятая **автоматом** под транш (`facts.collectedAmount`).
+   *
+   * Единственный счётчик, который здесь остался, и он не про деньги на счёте, а
+   * про факт домена: сколько поступлений автомат зачёл этому траншу. Остатки
+   * счетов — свободный и запертый — считает учёт по журналу, и второй копии у
+   * них нет: расхождение проекций, из-за которого запирание разъехалось по трём
+   * моментам, началось ровно со счётчика рядом с журналом.
+   */
   collectedMinor: bigint;
-  creditedMinor: bigint;
-  lockedMinor: bigint;
   entrySeq: number;
   marks: StatusMark[];
   notifications: string[];
+}
+
+/** Владелец обязательства по траншу: плательщик, и никто другой. */
+function payerKey(input: RunInput): ClientKey {
+  return clientKey(input.payer.accountKey);
+}
+
+/** Свободная часть счёта плательщика в валюте транша — из журнала. */
+function freeOf(input: RunInput, state: Mutable): Money<CurrencyCode> {
+  return accountBalance(state.journal, clientFreeAccount(payerKey(input)), input.required.currency);
+}
+
+/**
+ * Остаток файла транша `client:{клиент}:tranche:{сделка}:{транш}` — из журнала.
+ *
+ * Читается на каждый вызов, а не ведётся счётчиком рядом с учётом: на этой
+ * величине стоит `g_funds_locked` (`STATE-MACHINES.md` §1.3), то есть запрет
+ * финансировать выплату средствами других сделок (красная линия №1). Счётчик,
+ * разошедшийся с журналом, снял бы guard, ничего при этом не сломав.
+ */
+function lockedOf(input: RunInput, state: Mutable): Money<CurrencyCode> {
+  return accountBalance(
+    state.journal,
+    clientLockedAccount(payerKey(input), input.dealId, input.trancheId),
+    input.required.currency,
+  );
 }
 
 function conditionActOf(recipient: PartyRef, agreedAt: Instant): ConditionAct {
@@ -162,6 +199,9 @@ function factsOf(input: RunInput, state: Mutable, now: Instant): TrancheFacts {
   return {
     requiredAmount: input.required,
     collectedAmount: money(input.required.currency, state.collectedMinor),
+    // Запертое под траншем приходит из учёта, а не из фактов приложения:
+    // `g_funds_locked` сверяет с ним сумму, которую расчёт спишет с файла.
+    lockedAmount: lockedOf(input, state),
     buyerPayerKey: input.overrides.senderName,
     buyer: input.payer,
     conditionAct: conditionActOf(input.recipient, instant(FIXTURE_NOW - 30 * 24 * HOUR_MS)),
@@ -220,8 +260,23 @@ function applyIntent(
       // Второе зачисление удвоило бы обязательство и сломало покрытие.
       return;
     }
-    if (intent.template === 'refund_unlock') {
-      if (state.lockedMinor === 0n) return;
+    if (intent.template === 'lock_funds') {
+      // Привязка к сделке — намерение автомата на входе в `reserved`, а не шаг
+      // приложения (`STATE-MACHINES.md` §1.5). Раньше запирание стояло здесь
+      // отдельным блоком после редьюсера, и момент его выбирала фикстура: до
+      // тех пор, пока автомат намерения не выдавал, три проекции запирали
+      // деньги в трёх разных статусах, и расхождение было невидимо — каждая
+      // форма сходится в ноль и проходит пофайловое обеспечение.
+      state.journal = appendEntry(
+        state.journal,
+        lockForTranche(meta(state, input.dealId, at), clientKey(intent.clientKey), deal, intent.amount),
+      );
+      return;
+    }
+    if (intent.template === 'unlock_funds') {
+      // Расфиксация по `reserve_expired`: резерв снят, деньги остались у
+      // клиента и снова свободны (`CABINETS.md` §3.2 блок 6 обещает это
+      // дословно). Симметричной половины запирания не было ни у одной проекции.
       state.journal = appendEntry(
         state.journal,
         unlockToClientAccount(
@@ -231,11 +286,23 @@ function applyIntent(
           intent.amount,
         ),
       );
-      state.lockedMinor -= intent.amount.minor;
-      // Деньги вернулись в свободную часть счёта того же клиента: они снова его
-      // и снова отзывны. Без этой строки экран показывал бы «возвращены на ваш
-      // счёт» и нулевой остаток одновременно.
-      state.creditedMinor += intent.amount.minor;
+      return;
+    }
+    if (intent.template === 'refund_unlock') {
+      // Отвязка при возврате: деньги вернулись в свободную часть счёта того же
+      // клиента — они снова его и снова отзывны (красная линия №7). Проверки
+      // «а есть ли что отвязывать» здесь нет: при пустом файле транша автомат
+      // намерения не порождает вовсе, и локальная защита была бы вторым местом,
+      // где принимается то же решение.
+      state.journal = appendEntry(
+        state.journal,
+        unlockToClientAccount(
+          meta(state, input.dealId, at),
+          clientKey(intent.clientKey),
+          deal,
+          intent.amount,
+        ),
+      );
       return;
     }
     if (intent.template === 'refund_external') {
@@ -248,7 +315,6 @@ function applyIntent(
         state.journal,
         refundToSourceAccount(meta(state, input.dealId, at), clientKey(intent.clientKey), intent.amount),
       );
-      state.creditedMinor -= intent.amount.minor;
     }
     return;
   }
@@ -268,7 +334,6 @@ function applyIntent(
         fee,
       ),
     );
-    state.lockedMinor -= intent.amount.minor;
   }
 }
 
@@ -283,8 +348,6 @@ export function runScenario(input: RunInput): RunResult {
     payout: null,
     journal: emptyJournal,
     collectedMinor: 0n,
-    creditedMinor: 0n,
-    lockedMinor: 0n,
     entrySeq: 0,
     marks: [{ status: 'pending', at: FIXTURE_NOW - 72 * HOUR_MS }],
     notifications: [],
@@ -303,9 +366,6 @@ export function runScenario(input: RunInput): RunResult {
           state.journal,
           clientTopUp(meta(state, input.dealId, at), clientKey(input.payer.accountKey), amount),
         );
-        if (step.currency === input.required.currency) {
-          state.creditedMinor += step.minor;
-        }
         break;
       }
       case 'tranche': {
@@ -322,30 +382,12 @@ export function runScenario(input: RunInput): RunResult {
             `${input.dealId}: ${step.event.type} отвергнут автоматом транша — ${JSON.stringify(result.error)}`,
           );
         }
-        const previous = state.tranche.status;
         state.tranche = result.value.state;
         if (step.event.type === 'funds_received' && state.tranche.status === 'collected') {
           state.collectedMinor += step.event.amount.minor;
         }
         for (const intent of result.value.intents) {
           applyIntent(intent, input, state, at);
-        }
-        if (state.tranche.status === 'reserved' && previous !== 'reserved') {
-          // Запирание средств под транш — шаг приложения: у автомата намерения
-          // на него нет. Именно здесь свободная часть счёта превращается в
-          // запертую, и именно это различие показывает экран «Мой счёт».
-          const amount = money(input.required.currency, state.collectedMinor);
-          state.journal = appendEntry(
-            state.journal,
-            lockForTranche(
-              meta(state, input.dealId, at),
-              clientKey(input.payer.accountKey),
-              { dealId: input.dealId, trancheId: input.trancheId },
-              amount,
-            ),
-          );
-          state.lockedMinor += amount.minor;
-          state.creditedMinor -= amount.minor;
         }
         if (state.marks.at(-1)?.status !== state.tranche.status) {
           state.marks.push({ status: state.tranche.status, at });
@@ -397,7 +439,6 @@ export function runScenario(input: RunInput): RunResult {
             amount,
           ),
         );
-        state.creditedMinor -= step.minor;
         break;
       }
     }
@@ -409,7 +450,7 @@ export function runScenario(input: RunInput): RunResult {
     payout: state.payout,
     journal: state.journal,
     collected: money(input.required.currency, state.collectedMinor),
-    creditedTotal: money(input.required.currency, state.creditedMinor),
+    creditedTotal: freeOf(input, state),
     marks: state.marks,
     notifications: state.notifications,
   };

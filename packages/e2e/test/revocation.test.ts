@@ -9,12 +9,10 @@ import {
   attachRegistryExtract,
   dealStatusOf,
   feeForTranche,
-  lockFundsForTranche,
   receiveExternalPayment,
   rejectTrancheEvent,
   trancheOptions,
   trancheStatusOf,
-  unlockFundsFromTranche,
 } from '../src/index';
 import {
   BANK_RESPONSE_SOURCE,
@@ -52,8 +50,7 @@ async function toCollected(dealId: string, trancheId: string): Promise<Started> 
 
 async function toReserved(dealId: string, trancheId: string): Promise<Started> {
   const started = await toCollected(dealId, trancheId);
-  let world = applyTrancheEvent(started.world, trancheId, { type: 'reserve_requested' }, OPTIONS).world;
-  world = lockFundsForTranche(world, trancheId, DEAL_AMOUNT);
+  const world = applyTrancheEvent(started.world, trancheId, { type: 'reserve_requested' }, OPTIONS).world;
   return { ...started, world };
 }
 
@@ -107,7 +104,6 @@ describe('отзыв средств покупателем', () => {
     ).world;
     expect(trancheStatusOf(world, 'tranche-revoke-b')).toBe('refund_pending');
 
-    world = unlockFundsFromTranche(world, 'tranche-revoke-b', DEAL_AMOUNT);
     world = applyDealEvent(world, 'deal-revoke-b', { type: 'revocation_requested' }, OPTIONS);
     world = applyTrancheEvent(world, 'tranche-revoke-b', { type: 'refund_initiated' }, ROLLBACK).world;
     world = applyTrancheEvent(world, 'tranche-revoke-b', { type: 'payout_result', outcome: 'settled' }, ROLLBACK).world;

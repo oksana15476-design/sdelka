@@ -7,7 +7,6 @@ import {
   applyTrancheEvent,
   approve,
   attachRegistryExtract,
-  lockFundsForTranche,
   receiveExternalPayment,
   trancheOptions,
 } from '../../src/index';
@@ -75,8 +74,8 @@ export async function toCollected(options: PathOptions): Promise<Advanced> {
 
 export async function toReserved(options: PathOptions): Promise<Advanced> {
   const collected = await toCollected(options);
-  let world = applyTrancheEvent(collected.world, options.trancheId, { type: 'reserve_requested' }, OPTIONS).world;
-  world = lockFundsForTranche(world, options.trancheId, options.amount ?? DEAL_AMOUNT);
+  // Резерв запирает средства сам: намерение `lock_funds` на входе в `reserved`.
+  const world = applyTrancheEvent(collected.world, options.trancheId, { type: 'reserve_requested' }, OPTIONS).world;
   return { ...collected, world };
 }
 

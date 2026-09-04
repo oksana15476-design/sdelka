@@ -1,0 +1,92 @@
+import { describe, expect, it } from 'vitest';
+import { money } from '@sdelka/money';
+import {
+  type IntakePolicy,
+  type ToleranceDisclosure,
+  INTAKE_REASON_KEYS,
+  PROPOSED_INTAKE_POLICY,
+  effectiveTolerance,
+  intakePolicyVersionId,
+  toleranceFor,
+} from '../src/index';
+import { NOW, at, gel, usd } from './support/fixtures';
+
+const REQUIRED = gel(20_000_000n);
+
+function disclosure(overrides: Partial<ToleranceDisclosure> = {}): ToleranceDisclosure {
+  const byPolicy = toleranceFor(REQUIRED, PROPOSED_INTAKE_POLICY);
+  return {
+    dealId: 'deal-1',
+    trancheId: 't1',
+    requiredAmount: REQUIRED,
+    tolerance: byPolicy.kind === 'declared' ? byPolicy.amount : gel(0n),
+    policyVersionId: PROPOSED_INTAKE_POLICY.version,
+    disclosedAt: at(-60_000),
+    ...overrides,
+  };
+}
+
+describe('раскрытие допуска — записанный факт, а не свойство экрана', () => {
+  it('раскрытый допуск применяется', () => {
+    const effective = effectiveTolerance(REQUIRED, PROPOSED_INTAKE_POLICY, disclosure(), NOW);
+    // 200 000 лари × 0,5% = 1000 лари = 100 000 минорных; абсолют 50 лари меньше.
+    expect(effective.amount.minor).toBe(5_000n);
+    expect(effective.reasons).toContain(INTAKE_REASON_KEYS.toleranceApplied);
+  });
+
+  it('факта раскрытия нет — допуск ноль', () => {
+    const effective = effectiveTolerance(REQUIRED, PROPOSED_INTAKE_POLICY, null, NOW);
+    expect(effective.amount.minor).toBe(0n);
+    expect(effective.reasons).toContain(INTAKE_REASON_KEYS.toleranceNotDisclosed);
+  });
+
+  it('раскрыто позже поступления — то же, что не раскрыто вовсе', () => {
+    const late = disclosure({ disclosedAt: at(60_000) });
+    const effective = effectiveTolerance(REQUIRED, PROPOSED_INTAKE_POLICY, late, NOW);
+    expect(effective.amount.minor).toBe(0n);
+    expect(effective.reasons).toContain(INTAKE_REASON_KEYS.toleranceDisclosedAfterPayment);
+  });
+
+  it('раскрыто под другую требуемую сумму — факт устарел, допуск ноль', () => {
+    const stale = disclosure({ requiredAmount: gel(19_000_000n) });
+    const effective = effectiveTolerance(REQUIRED, PROPOSED_INTAKE_POLICY, stale, NOW);
+    expect(effective.amount.minor).toBe(0n);
+    expect(effective.reasons).toContain(INTAKE_REASON_KEYS.toleranceDisclosureStale);
+  });
+
+  it('раскрыто в другой валюте — факт устарел, допуск ноль', () => {
+    const stale = disclosure({ requiredAmount: usd(20_000_000n) });
+    const effective = effectiveTolerance(REQUIRED, PROPOSED_INTAKE_POLICY, stale, NOW);
+    expect(effective.amount.minor).toBe(0n);
+  });
+});
+
+describe('смена политики не расширяет допуск задним числом', () => {
+  const otherVersion = intakePolicyVersionId('intake/2026-01-01.1');
+
+  it('объявили меньше, чем позволяет нынешняя политика — применяется объявленное', () => {
+    const modest = disclosure({ tolerance: gel(1_000n), policyVersionId: otherVersion });
+    const effective = effectiveTolerance(REQUIRED, PROPOSED_INTAKE_POLICY, modest, NOW);
+    expect(effective.amount.minor).toBe(1_000n);
+    expect(effective.reasons).toContain(INTAKE_REASON_KEYS.toleranceDisclosureOlderPolicy);
+  });
+
+  it('объявили больше, чем позволяет нынешняя политика — применяется нынешняя', () => {
+    const generous = disclosure({ tolerance: gel(999_999n), policyVersionId: otherVersion });
+    const effective = effectiveTolerance(REQUIRED, PROPOSED_INTAKE_POLICY, generous, NOW);
+    expect(effective.amount.minor).toBe(5_000n);
+  });
+
+  it('политика перестала объявлять допуск для валюты — допуск ноль', () => {
+    const narrowed: IntakePolicy = Object.freeze({
+      ...PROPOSED_INTAKE_POLICY,
+      tolerance: Object.freeze({
+        ...PROPOSED_INTAKE_POLICY.tolerance,
+        absolute: Object.freeze([money('USD', 2_000n)]),
+      }),
+    });
+    const effective = effectiveTolerance(REQUIRED, narrowed, disclosure(), NOW);
+    expect(effective.amount.minor).toBe(0n);
+    expect(effective.reasons).toContain(INTAKE_REASON_KEYS.toleranceCurrencyNotDeclared);
+  });
+});

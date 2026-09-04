@@ -65,11 +65,20 @@ const FEE = money('GEL', AMOUNT.minor / 200n);
  * учёт молчит, и что модель по намерениям — нет.
  */
 describe('исчезновение обязательства перед получателем', () => {
+  /**
+   * Деньги под траншем: пришли и **заперты**. Резерв в сценарии появился не для
+   * красоты — запирание перестало быть склеенным с зачислением и стало
+   * намерением входа в `reserved` (FUNCTIONAL.md §3.1). Без этого шага файл
+   * транша пуст, и мутация ниже дебетовала бы не «исчезнувшее обязательство», а
+   * счёт, на котором ничего не было, — то есть тест проверял бы другое.
+   */
   function fundedJournal(): { journal: Journal; expected: ReturnType<typeof expectedBalances> } {
-    const step = accept(stateAt('collecting'), fundsReceived, context());
+    const received = accept(stateAt('collecting'), fundsReceived, context());
+    const reserved = accept(received.state, { type: 'reserve_requested' }, context());
+    const intents = [...received.intents, ...reserved.intents];
     return {
-      journal: projectIntents(emptyJournal, step.intents, { feeRate: FEE_RATE }),
-      expected: expectedBalances(step.intents, FEE_RATE),
+      journal: projectIntents(emptyJournal, intents, { feeRate: FEE_RATE }),
+      expected: expectedBalances(intents, FEE_RATE),
     };
   }
 

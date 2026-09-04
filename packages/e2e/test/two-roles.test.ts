@@ -18,7 +18,6 @@ import {
   attachRegistryExtract,
   dealStatusOf,
   feeForTranche,
-  lockFundsForTranche,
   receiveExternalPayment,
   toClientKey,
   trancheOptions,
@@ -120,7 +119,6 @@ describe('один клиент в двух ролях', () => {
     ).world;
     world = applyDealEvent(world, DEAL_B, { type: 'funds_received' }, OPTIONS);
     world = applyTrancheEvent(world, TRANCHE_B, { type: 'reserve_requested' }, OPTIONS).world;
-    world = lockFundsForTranche(world, TRANCHE_B, SMALL_AMOUNT);
 
     // --- Один счёт, две части ---
     const statement = clientStatement(world.journal, clientKey);

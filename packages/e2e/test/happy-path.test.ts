@@ -12,7 +12,6 @@ import {
   convertBalance,
   dealStatusOf,
   feeForTranche,
-  lockFundsForTranche,
   receiveExternalPayment,
   trancheOf,
   trancheOptions,
@@ -86,7 +85,9 @@ describe('счастливый путь', () => {
     expect(trancheStatusOf(world, TRANCHE)).toBe('reserved');
     // Реквизиты получателя заперты входом в резерв, а не решением оператора.
     expect(trancheOf(world, TRANCHE).beneficiary.locked).toBe(true);
-    world = lockFundsForTranche(world, TRANCHE, DEAL_AMOUNT);
+    // Запирание средств под транш — намерение входа в `reserved`, а не шаг
+    // приложения. Ручного вызова здесь больше нет: тест, забывший его позвать,
+    // получал необеспеченный транш, а позвавший дважды — двойную проводку.
     expect(
       accountBalance(world.journal, clientLockedAccount(opened.buyerKey, DEAL, TRANCHE), GEL).minor,
     ).toBe(20_000_000n);
