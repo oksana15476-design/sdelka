@@ -13,13 +13,15 @@ import {
 import { accountBalance, bankNominal, bankOperating, clientFreeAccount, coverage } from '@sdelka/ledger';
 import { money, rational } from '@sdelka/money';
 import {
-  applyTrancheEvent,
-  convertBalance,
-  receiveExternalPayment,
   rejectTrancheEvent,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyTrancheEvent,
+  convertBalance,
+  receiveExternalPayment,
+} from './support/acting';
 import {
   BUYER,
   CREATED_ON,

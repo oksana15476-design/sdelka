@@ -1,5 +1,4 @@
 import {
-  type AuditActor,
   type AuditRoleId,
   type NonEmpty,
   type RawSourceRef,
@@ -8,7 +7,15 @@ import {
   auditRef,
   policyRef,
 } from '@sdelka/audit';
+import { requireAuditRole } from '@sdelka/auth';
 import type { DealEvent, Rejection } from '@sdelka/domain';
+import {
+  type Authority,
+  actingAccount,
+  actingRole,
+  assertOrigin,
+  journalActor,
+} from './authority';
 import { type TrancheEventOptions, applyDealEvent, rejectDealEvent } from './flow';
 import {
   type UnwindApproval,
@@ -64,41 +71,29 @@ import {
 /* ------------------------------------------------------------------------- */
 
 /**
- * Роли, которым разрешено поднимать разбор и подписываться под ним.
+ * Перечня ролей `UNWIND_SIGNING_ROLES` здесь **больше нет**, и это то самое
+ * [открыто], которое стояло в прошлой редакции этого файла и в
+ * `docs/product/APP-LAYER.md` §5.
  *
- * Перечень **сужающий**, и каждое исключение — ссылка, а не наше решение:
+ * Прежде подписывать откат разрешалось по **роли актора журнала** —
+ * `operator`, `approver`, `compliance_analyst`, — а сам актор приезжал полем
+ * `options.actor`, то есть его называл вызывающий. Проверка сводилась к
+ * «назовись подходящей ролью». Комментарий тогда честно писал: «настоящее место
+ * этой проверки — `@sdelka/auth` (проверка сессии); до тех пор здесь стоит самый
+ * строгий из выразимых вариантов».
  *
- * - `system`, `oracle` — разбор человеком автоматическим не является. Домен
- *   говорит это прямо: у события `unwind_authorized` намеренно нет часов, его
- *   нельзя породить тиком (`deal.ts`, комментарий к событию). Машина, ставящая
- *   подпись, — это и есть автооткат, только окольным путём.
- * - `client`, `representative` — подпись стороны здесь означала бы право
- *   покупателя забрать деньги после подачи заявления. Это **второй разбор
- *   развилки** (`STATE-MACHINES.md` §3.2, таблица трёх разборов), и он
- *   [открыто]: решает владелец. Реализован первый — разбор нашими сотрудниками,
- *   — и пускать сюда сторону значило бы принять решение за владельца молча.
- * - `support` — поддержка read-only по построению: в `SUPPORT_ROLE`
- *   (`packages/compliance/src/roles.ts`) нет ни одного полномочия на
- *   утверждение.
+ * Место найдено. Подпись под откатом — это `approve_lift_block`: «вторая
+ * подпись» `ACTORS.md` §5.3, класс `release`, второй фактор, и четыре
+ * несовместимости сразу — Н1 (не готовил), Н4 (не заявлял реквизиты), Н5 (не
+ * вызвал расхождение), Н6 (не видит маржу). Носителей ровно два: ФК и РО, то
+ * есть те же, кто даёт уровни утверждения. Оператор и аналитик, которым прежняя
+ * редакция подписывать позволяла, подписывать больше не могут — и это
+ * **ужесточение**, а не смена вкуса: они готовят разбор, а не утверждают его.
  *
- * ⚠ **[открыто].** Это проверка **роли**, а не полномочия: в `CAPABILITIES`
- * полномочия «утвердить откат» нет вовсе, а поле `capability` у актора журнала
- * — свободная строка, которую никто не сверяет. Настоящее место этой проверки —
- * `@sdelka/compliance` (перечень полномочий) и `@sdelka/auth` (проверка
- * сессии); там она и должна оказаться. До тех пор здесь стоит самый строгий из
- * выразимых вариантов.
+ * Сторона (`party`, `representative`) не подписывает по-прежнему: у неё этого
+ * полномочия нет вовсе, и второй разбор развилки `STATE-MACHINES.md` §3.2
+ * остаётся решением владельца.
  */
-export const UNWIND_SIGNING_ROLES: readonly AuditRoleId[] = Object.freeze([
-  'operator',
-  'approver',
-  'compliance_analyst',
-]);
-
-function requireStaff(actor: AuditActor, dealId: string): void {
-  if (!UNWIND_SIGNING_ROLES.includes(actor.roleId)) {
-    throw new Error(`app.unwind.role_not_allowed:${actor.roleId}:${dealId}`);
-  }
-}
 
 /* ------------------------------------------------------------------------- */
 /* Заявка на разбор                                                          */
@@ -151,10 +146,11 @@ export function requestUnwind(
   world: World,
   dealId: string,
   request: UnwindRequest,
+  authority: Authority<'create_deal'>,
   options: TrancheEventOptions,
 ): World {
+  assertOrigin(['create_deal'], authority, 'unwind.request');
   const deal = dealOf(world, dealId);
-  requireStaff(options.actor, dealId);
   if (deal.unwindReview !== null) {
     // Вторая заявка по той же сделке — это не второй разбор, а потерянный
     // первый: подписи под ним пришлось бы куда-то деть.
@@ -165,7 +161,7 @@ export function requestUnwind(
   }
   const evidence = requireEvidence(request.evidence, dealId);
   const review: UnwindReview = {
-    requestedBy: options.actor.actorId,
+    requestedBy: actingAccount(authority),
     reasonKey: request.reasonKey,
     openedAt: world.now,
     evidence,
@@ -180,7 +176,7 @@ export function requestUnwind(
     chain: appendRecord(world.chain, {
       recordId: `${world.chain.chainId}:r${seq}`,
       recordedAt: auditInstant(world.now),
-      actor: options.actor,
+      actor: journalActor(authority),
       subject: auditRef('deal', dealId),
       related: deal.trancheIds.map((trancheId) => auditRef('tranche', trancheId)),
       body: {
@@ -206,13 +202,19 @@ export function requestUnwind(
  * утверждающих проверяет домен, и проверять его дважды значит перестать
  * проверять вовсе.
  */
-export function approveUnwind(world: World, dealId: string, options: TrancheEventOptions): World {
+export function approveUnwind(
+  world: World,
+  dealId: string,
+  authority: Authority<'approve_lift_block'>,
+  options: TrancheEventOptions,
+): World {
+  assertOrigin(['approve_lift_block'], authority, 'unwind.approve');
   const deal = dealOf(world, dealId);
   const review = reviewOf(world, dealId);
-  requireStaff(options.actor, dealId);
+  const roleId: AuditRoleId = requireAuditRole(actingRole(authority));
   const approval: UnwindApproval = {
-    userId: options.actor.actorId,
-    roleId: options.actor.roleId,
+    userId: actingAccount(authority),
+    roleId,
     at: world.now,
   };
 
@@ -227,7 +229,7 @@ export function approveUnwind(world: World, dealId: string, options: TrancheEven
     chain: appendRecord(world.chain, {
       recordId: `${world.chain.chainId}:r${seq}`,
       recordedAt: auditInstant(world.now),
-      actor: options.actor,
+      actor: journalActor(authority),
       subject: auditRef('deal', dealId),
       related: deal.trancheIds.map((trancheId) => auditRef('tranche', trancheId)),
       body: {
@@ -258,10 +260,11 @@ export function approveUnwind(world: World, dealId: string, options: TrancheEven
 export function authorizeUnwind(
   world: World,
   dealId: string,
+  authority: Authority<'approve_lift_block'>,
   options: TrancheEventOptions,
 ): World {
   const review = reviewOf(world, dealId);
-  return applyDealEvent(world, dealId, unwindEvent(review), options);
+  return applyDealEvent(world, dealId, unwindEvent(review), authority, options);
 }
 
 /** Отказ автомата как значение: тест, который его ждёт, обязан его разобрать. */

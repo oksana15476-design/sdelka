@@ -18,6 +18,46 @@
  * Теперь этим слоем может пользоваться и `apps/web`, и будущий сервер, а
  * `packages/e2e` остаётся тем, чем называется, — сквозными сценариями.
  */
+/**
+ * ⚠ **`authority.ts` реэкспортируется поимённо, а не звёздочкой.**
+ *
+ * В нём живут два конструктора машинных разрешений — `clockAuthority` и
+ * `oracleAuthority`, — и наружу они не выходят намеренно. Иначе «шаг без
+ * сессии» был бы доступен любому, кто их позовёт: события часов
+ * (`reserve_expired`, `deadline_reached`) подавал бы кто угодно, а
+ * `condition_established` — вообще любой, минуя машину наблюдения. Внутри
+ * пакета их зовут ровно два места: `tick` и исполнитель намерений оракула.
+ *
+ * `export *` здесь был бы дырой, которую не видно на ревью: она открывается не
+ * строкой кода, а её отсутствием.
+ */
+export {
+  type ActionSubject,
+  type Authority,
+  type OpenedSession,
+  type SessionOpening,
+  type StepOrigin,
+  AuthorityError,
+  ORACLE_ACTOR,
+  PLATFORM_SUBJECT,
+  SYSTEM_ACTOR,
+  actingAccount,
+  actingPerson,
+  actingRole,
+  actionContextFor,
+  authorize,
+  dealSubject,
+  journalActor,
+  openSession,
+  requireAuthority,
+  requireSamePerson,
+  revokeSession,
+  sessionOf,
+  statusOfSession,
+  touchSession,
+  trancheSubject,
+} from './authority';
+export * from './origins';
 export * from './flow';
 export * from './keys';
 export * from './ledger-app';
@@ -25,4 +65,43 @@ export * from './ports';
 export * from './scheduler';
 export * from './unwind';
 export * from './withdrawal';
-export * from './world';
+/**
+ * ⚠ **`world.ts` тоже вывозится поимённо.**
+ *
+ * Наружу не выходят `sealed`, `recorded`, `withTranche`, `withDeal` и
+ * `seedWorld`. Каждая из них принимает уже существующий мир и возвращает новый —
+ * то есть даёт собрать транш с любыми фактами и любыми подписями, минуя и
+ * полномочие, и автомат: `sealed({ ...world, tranches: withTranche(world, {
+ * ...runtime, approvalRecords: [подделка] }) })` набирал бы кворум без единой
+ * сессии. Внутри пакета они и есть переходы мира; снаружи вход один — шаги
+ * `flow.ts`, `unwind.ts`, `withdrawal.ts` и `scheduler.ts`, и каждый требует
+ * `Authority`.
+ *
+ * Проверок, чтения и вспомогательных величин это не касается — они ниже.
+ */
+export {
+  type ActingParty,
+  type ActionFact,
+  type ActionFactKind,
+  type AppInvariant,
+  type DealRuntime,
+  type InvariantViolation,
+  type MachineOrigin,
+  type Notification,
+  type ObservationTask,
+  type SuppressedEntry,
+  type TrancheRuntime,
+  type UnwindApproval,
+  type UnwindReview,
+  type World,
+  ACTION_FACT_KINDS,
+  APP_INVARIANTS,
+  AppInvariantError,
+  coverageOk,
+  dealOf,
+  invariantViolations,
+  moneyLabel,
+  payerOf,
+  recipientOf,
+  trancheOf,
+} from './world';

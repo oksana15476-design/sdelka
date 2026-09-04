@@ -19,16 +19,18 @@ import { accountBalance, bankNominal, clientFreeAccount, clientLockedAccount, co
 import { money } from '@sdelka/money';
 import {
   AppInvariantError,
-  absorbIncomingShortfall,
-  applyDealEvent,
-  applyTrancheEvent,
-  fundIncomingShortfall,
-  receiveExternalPayment,
   rejectTrancheEvent,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  absorbIncomingShortfall,
+  applyDealEvent,
+  applyTrancheEvent,
+  fundIncomingShortfall,
+  receiveExternalPayment,
+} from './support/acting';
 import { BUYER, DEAL_AMOUNT, GEL, NOW, POLICY_VERSION, SELLER, THIRD_PARTY } from './support/fixtures';
 import { openDeal } from './support/open';
 

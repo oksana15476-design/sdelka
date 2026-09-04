@@ -4,23 +4,26 @@ import { compareNames, payerKeyForDomain, reconcileOwner } from '@sdelka/complia
 import { payoutIdempotencyKey, reduceTranche } from '@sdelka/domain';
 import { money } from '@sdelka/money';
 import { accountBalance, bankNominal, bankOperating, clientFreeAccount, clientLockedAccount, coverage } from '@sdelka/ledger';
+import { STAFF } from './support/actors';
+import {
+  contextFor,
+  dealFactsOf,
+  dealStatusOf,
+  feeForTranche,
+  trancheOf,
+  trancheOptions,
+  trancheStatusOf,
+} from '@sdelka/app';
 import {
   applyDealEvent,
   applyObservationEvent,
   applyTrancheEvent,
   approve,
-  contextFor,
   convertBalance,
-  dealFactsOf,
-  dealStatusOf,
-  feeForTranche,
   receiveExternalPayment,
   receivePaidExtract,
   receiveTrancheFee,
-  trancheOf,
-  trancheOptions,
-  trancheStatusOf,
-} from '@sdelka/app';
+} from './support/acting';
 import {
   APPLICATION_ID,
   BANK_RESPONSE_SOURCE,
@@ -195,8 +198,8 @@ describe('счастливый путь', () => {
       expect(deadlocked.error.failedGuards).toContain('g_no_active_payout');
     }
     // --- Два утверждения: автоматического релиза нет при любой сумме ---
-    world = approve(world, TRANCHE, 'approver-1');
-    world = approve(world, TRANCHE, 'approver-2');
+    world = approve(world, TRANCHE, STAFF.controller);
+    world = approve(world, TRANCHE, STAFF.head);
     world = applyTrancheEvent(world, TRANCHE, { type: 'release_authorized' }, OPTIONS).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('paying_out');
     expect(trancheOf(world, TRANCHE).payouts).toHaveLength(1);

@@ -11,12 +11,14 @@ import {
 } from '@sdelka/ledger';
 import {
   advance,
+} from '@sdelka/app';
+import {
   convertBalance,
   executeBalanceConversion,
   receiveConvertedBalance,
   receiveExternalPayment,
   sendBalanceForConversion,
-} from '@sdelka/app';
+} from './support/acting';
 import { openDeal } from './support/open';
 import { CREATED_ON, DAY_MS, DEAL_AMOUNT_USD, FX_RATES, GEL, SELLER, BUYER, USD } from './support/fixtures';
 

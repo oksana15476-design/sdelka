@@ -30,8 +30,20 @@ import {
  * обязан связывать действие со входом).
  *
  * Подделать нельзя, не выписав; выписать нельзя иначе как через `decide`.
+ *
+ * ⚠ **Утверждение выше держалось прозой, а не типом.** Все поля примитивны, и
+ * `const grant: Grant<'approve_payout'> = { … }` собирался у любого вызывающего:
+ * доказательство полномочия изготавливалось на месте применения, ровно там, где
+ * его надо было предъявить. Поэтому у записи есть метка `grantBrand` —
+ * объявленный, но не существующий символ. Значения у него нет и быть не может,
+ * литерал с ним не собирается, и единственный способ получить `Grant` — пройти
+ * через `decideCapability`, где стоит приведение (одно на пакет, ниже).
  */
+declare const grantBrand: unique symbol;
+
 export interface Grant<C extends Capability> {
+  /** Метка происхождения: значения не существует, литералом не собирается. */
+  readonly [grantBrand]: 'decided';
   readonly accountId: AccountId;
   readonly personId: PersonId;
   readonly roleId: RoleId;
@@ -121,6 +133,12 @@ export function decideCapability(request: AuthorizationRequest): Result<Grant<Ca
     return failure(denial(capability, first.reason, violations));
   }
 
+  /*
+   * Единственное приведение к `Grant` в проекте. Метка `grantBrand` не имеет
+   * значения, поэтому объект-литерал ей не удовлетворяет ни здесь, ни у
+   * вызывающего; разница в том, что здесь над ним уже отработали четыре
+   * проверки выше, а у вызывающего — ни одной.
+   */
   return ok(
     Object.freeze({
       accountId: session.accountId,
@@ -131,7 +149,7 @@ export function decideCapability(request: AuthorizationRequest): Result<Grant<Ca
       onDuty: session.onDuty,
       decidedAt: now,
       journaled: spec.journaled,
-    }),
+    }) as unknown as Grant<Capability>,
   );
 }
 

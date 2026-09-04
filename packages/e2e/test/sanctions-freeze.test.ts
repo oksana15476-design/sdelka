@@ -5,19 +5,20 @@ import { assessRefundDestination, accountFingerprint } from '@sdelka/compliance'
 import { dealState, reduceDeal } from '@sdelka/domain';
 import { accountBalance, clientLockedAccount } from '@sdelka/ledger';
 import {
-  ANALYST_ACTOR,
   advance,
-  applyDealEvent,
-  applyTrancheEvent,
   dealFactsOf,
   dealStatusOf,
   feeForTranche,
-  recordDecision,
   rejectTrancheEvent,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyDealEvent,
+  applyTrancheEvent,
+  recordDecision,
+} from './support/acting';
 import {
   BANK_RESPONSE_SOURCE,
   BUYER,
@@ -77,10 +78,9 @@ describe('санкционная заморозка', () => {
     expect(sanctions.outcome).toBe('confirmed_match');
     expect(sanctionsToDetectorOutcome(sanctions.outcome)).toBe('block');
 
-    world = recordDecision(world, {
+    world = recordDecision(world, DEAL, {
       subject: auditRef('party', BUYER.partyId),
       related: [auditRef('deal', DEAL), auditRef('tranche', TRANCHE)],
-      actor: ANALYST_ACTOR,
       outcome: sanctions.outcome,
       policy: POLICY_VERSION,
       reasonKeys: sanctions.reasons,

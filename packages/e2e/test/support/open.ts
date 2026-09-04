@@ -17,17 +17,17 @@ import type { ClientKey } from '@sdelka/ledger';
 import type { CurrencyCode, Deduction, Money } from '@sdelka/money';
 import {
   type World,
-  ANALYST_ACTOR,
-  OPERATOR_ACTOR,
-  applyDealEvent,
-  createDeal,
-  createTranche,
   emptyWorld,
-  recordConditionAct,
-  recordDecision,
   toClientKey,
   trancheOptions,
 } from '@sdelka/app';
+import {
+  applyDealEvent,
+  createDeal,
+  createTranche,
+  recordConditionAct,
+  recordDecision,
+} from './acting';
 import {
   CADASTRAL_CODE,
   CONDITION_ACT_SOURCE,
@@ -136,27 +136,28 @@ export async function openDeal(options: OpenOptions): Promise<OpenedDeal> {
     ...sanctions.map((item) => sanctionsToDetectorOutcome(item.outcome)),
   ]);
 
+  // Готовивший больше не поле спецификации: им становится тот, под чьим
+  // полномочием заведена сделка. `STAFF.operator` — учётная запись `operator-1`,
+  // то есть в фактах домена стоит та же строка, что и прежде, но теперь она
+  // выведена из сессии, а не написана здесь.
   let world = createDeal(options.world ?? emptyWorld({ now: NOW, chainId: 'sdelka-audit' }), {
     dealId: options.dealId,
     conditionAct: conditionAct(partyRef(options.seller)),
-    preparedBy: 'operator-1',
     objectCadastralCode: options.objectCadastralCode ?? CADASTRAL_CODE,
   });
 
-  world = recordDecision(world, {
+  world = recordDecision(world, options.dealId, {
     subject: auditRef('deal', options.dealId),
     related: [auditRef('party', options.buyer.partyId), auditRef('party', options.seller.partyId)],
-    actor: ANALYST_ACTOR,
     outcome: counterparty.outcome,
     policy: POLICY_VERSION,
     reasonKeys: counterparty.reasons,
     evidence: [CONDITION_ACT_SOURCE],
   });
   for (const item of sanctions) {
-    world = recordDecision(world, {
+    world = recordDecision(world, options.dealId, {
       subject: auditRef('party', item.subjectRef),
       related: [auditRef('deal', options.dealId)],
-      actor: ANALYST_ACTOR,
       outcome: item.outcome,
       policy: POLICY_VERSION,
       reasonKeys: item.reasons,
@@ -183,7 +184,6 @@ export async function openDeal(options: OpenOptions): Promise<OpenedDeal> {
     deductions: options.deductions ?? PLATFORM_FEE,
     tariffVersionId: TARIFF_VERSION,
     beneficiary: options.beneficiary ?? beneficiaryFor(options.seller, 500),
-    preparedBy: 'operator-1',
     sourceAccountKnown: options.sourceAccountKnown ?? true,
     ...(options.feeCeilingPolicy === undefined
       ? {}
@@ -205,5 +205,3 @@ export async function openDeal(options: OpenOptions): Promise<OpenedDeal> {
 
   return { world, dealId: options.dealId, trancheId: options.trancheId, buyerKey, sellerKey, admission, sanctions };
 }
-
-export { OPERATOR_ACTOR };

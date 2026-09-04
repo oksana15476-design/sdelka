@@ -2,13 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { accountFingerprint, assessRefundDestination, payerKeyForDomain } from '@sdelka/compliance';
 import { accountBalance, bankNominal, clientFreeAccount } from '@sdelka/ledger';
 import {
-  applyTrancheEvent,
-  patchFacts,
-  receiveExternalPayment,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyTrancheEvent,
+  patchFacts,
+  receiveExternalPayment,
+} from './support/acting';
 import {
   BUYER,
   DEAL_AMOUNT,

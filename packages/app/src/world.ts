@@ -1,5 +1,6 @@
 import type { Anchor, AuditChain, AuditRoleId, NonEmpty, RawSourceRef } from '@sdelka/audit';
 import { verifyChain } from '@sdelka/audit';
+import type { ActorRef, ApprovalRecord, Capability, RoleId, Session } from '@sdelka/auth';
 import type { BeneficiaryState, NameObservation, ReviewTask } from '@sdelka/compliance';
 import {
   type Audience,
@@ -60,6 +61,18 @@ export interface TrancheRuntime {
    */
   readonly tariffVersionId: string;
   readonly payouts: readonly PayoutState[];
+  /**
+   * Подписи под выплатой **с уровнем роли** (`ACTORS.md` §5.2).
+   *
+   * Рядом с `facts.approvals`, а не вместо них: домен знает об утверждающих
+   * только имя (`Approval { userId }`, чужой пакет), и по имени различает
+   * подписи. Порог же берётся **набором уровней**: одна подпись — уровень 1
+   * (ФК), две — уровень 1 плюс уровень 2 (ФК и РО). Держать уровень в фактах
+   * домена нечем, а без него «две подписи» означало бы две любые учётные
+   * записи — ровно тот дефект, который `ACTORS.md` §0 п.3 называет
+   * невыполненным обещанием.
+   */
+  readonly approvalRecords: readonly ApprovalRecord[];
   readonly beneficiary: BeneficiaryState;
   /**
    * Имена покупателя как наблюдения: вход сверки собственника из выписки.
@@ -189,7 +202,81 @@ export interface ObservationTask {
   readonly policyVersionId: string;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Кто что делал: факты для разделения обязанностей                          */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Происхождение шага, у которого человека нет.
+ *
+ * Два и только два: часы приложения (`tick`) и источник наблюдения (реестр,
+ * через машину `@sdelka/oracle`). Оба уже присутствовали в журнале аудита как
+ * `SYSTEM_ACTOR` и `ORACLE_ACTOR`; здесь у них появляется тип, потому что
+ * «шаг без сессии» обязан быть либо одним из этих двух, либо невозможным.
+ */
+export type MachineOrigin = 'clock' | 'oracle_source';
+
+/**
+ * Кто совершил шаг: человек по сессии либо машина.
+ *
+ * Разметка, а не `ActorRef | null`. `null` означал бы «человека нет» и
+ * «человека не выяснили» одновременно — ровно та склейка, из-за которой
+ * разделение обязанностей отключалось молчанием (`@sdelka/auth`, `UNKNOWN_FACT`).
+ */
+export type ActingParty =
+  | {
+      readonly kind: 'person';
+      readonly ref: ActorRef;
+      readonly roleId: RoleId;
+      readonly sessionId: string;
+    }
+  | { readonly kind: 'machine'; readonly origin: MachineOrigin };
+
+/**
+ * Вид факта о прошлом действии. Ровно четыре — по числу вопросов, которые
+ * задаёт `ActionContext` в `@sdelka/auth`: кто готовил (Н1), кто вносил
+ * наблюдение (Н2), кто заявлял реквизиты (Н4), кто вызвал расхождение (Н5).
+ *
+ * Пятого вида здесь быть не должно: перечень определён не нами, а тем, что
+ * проверяет `evaluateSeparation`.
+ */
+export const ACTION_FACT_KINDS = ['prepared', 'observed', 'beneficiary_requested', 'caused'] as const;
+export type ActionFactKind = (typeof ACTION_FACT_KINDS)[number];
+
+/**
+ * Запись «кто что сделал» — **след авторизованного шага, а не заявление
+ * вызывающего**.
+ *
+ * Кладётся только изнутри шага мира, из выписанного `Authority`, и нигде больше:
+ * функции, принимающей такую запись снаружи, в пакете нет. Именно поэтому
+ * `evaluateSeparation` можно кормить отсюда — факт «оператор готовил транш»
+ * возникает в тот момент, когда оператор его действительно завёл, под своим
+ * полномочием.
+ */
+export interface ActionFact {
+  readonly kind: ActionFactKind;
+  readonly dealId: string;
+  /** `null` — факт о сделке целиком, а не о конкретном транше. */
+  readonly trancheId: string | null;
+  readonly by: ActingParty;
+  readonly capability: Capability | MachineOrigin;
+  readonly at: Instant;
+}
+
+/**
+ * Метка происхождения мира.
+ *
+ * Значения у символа не существует, поэтому объект-литерал `World` не
+ * собирается ни у кого: единственный вход — `emptyWorld`, единственный переход —
+ * `sealed`/`recorded`, принимающие уже существующий мир. Без метки перечень
+ * сессий и перечень фактов ниже были бы декорацией: любой вызывающий собрал бы
+ * мир с нужной ему сессией и нужным ему «кто готовил».
+ */
+declare const worldBrand: unique symbol;
+
 export interface World {
+  /** См. `worldBrand`: мир нельзя собрать литералом, только провести через `sealed`. */
+  readonly [worldBrand]: 'sealed';
   readonly now: Instant;
   readonly journal: Journal;
   readonly chain: AuditChain;
@@ -206,10 +293,44 @@ export interface World {
    * Гасятся ключом, а не молчанием: повтор обязан быть виден. Отчёт, расхождение 13.
    */
   readonly reissuedPayouts: readonly string[];
+  /**
+   * Действующие сессии, по идентификатору сессии.
+   *
+   * Живут в мире, а не приезжают аргументом в шаг. Разница не в удобстве:
+   * сессия-аргумент — это сессия, которую вызывающий собрал сам, и тогда
+   * «истёкшая» и «отозванная» перестают существовать как состояния. Здесь она
+   * попадает только через `openSession` (то есть через `establishSession` с его
+   * политикой роли), а `authorize` берёт её отсюда по идентификатору и меряет
+   * `world.now`, а не своими часами.
+   */
+  readonly sessions: ReadonlyMap<string, Session>;
+  /**
+   * Кто что делал раньше. Единственный источник фактов для разделения
+   * обязанностей: `actionContextFor` читает **отсюда**, а не из аргументов.
+   */
+  readonly facts: readonly ActionFact[];
   /** Сколько раз инварианты проверялись. Растёт на каждом шаге, тест это видит. */
   readonly checks: number;
   /** Счётчик идентификаторов записей журнала и аудита. */
   readonly seq: number;
+}
+
+/**
+ * Кандидат в миры: всё то же самое, кроме счётчика проверок.
+ *
+ * Метка происхождения в нём **остаётся**, и это и есть весь приём: собрать
+ * такое значение можно только раскрытием уже существующего мира
+ * (`{ ...world, … }`), а первый мир выдаёт `emptyWorld` — единственное место с
+ * приведением.
+ */
+export type WorldCandidate = Omit<World, 'checks'> & { readonly checks: number };
+
+/**
+ * Первый мир. Единственное приведение к `World` в пакете: до него мира нет, и
+ * раскрывать нечего.
+ */
+export function seedWorld(seed: Omit<World, typeof worldBrand>): World {
+  return seed as World;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -436,7 +557,7 @@ export class AppInvariantError extends Error {
  *   То есть после признания в мире не может произойти ничего, кроме довнесения.
  */
 export function recorded(
-  next: Omit<World, 'checks'> & { readonly checks: number },
+  next: WorldCandidate,
   tolerated: readonly AppInvariant[],
 ): { readonly world: World; readonly violations: readonly InvariantViolation[] } {
   const candidate: World = Object.freeze({ ...next, checks: next.checks + 1 });
@@ -455,7 +576,7 @@ export function recorded(
  * поэтому «инварианты проверяются после каждого шага» держится структурой, а не
  * дисциплиной тестов.
  */
-export function sealed(next: Omit<World, 'checks'> & { readonly checks: number }): World {
+export function sealed(next: WorldCandidate): World {
   const candidate: World = Object.freeze({ ...next, checks: next.checks + 1 });
   const violations = invariantViolations(candidate);
   if (violations.length > 0) {

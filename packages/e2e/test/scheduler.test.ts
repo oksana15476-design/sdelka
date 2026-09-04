@@ -3,12 +3,14 @@ import { DEFAULT_ESCALATION_POLICY, dueTrancheEvent } from '@sdelka/domain';
 import { accountBalance, clientFreeAccount, clientLockedAccount } from '@sdelka/ledger';
 import {
   advance,
-  applyTrancheEvent,
   tick,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyTrancheEvent,
+} from './support/acting';
 import { DAY_MS, GEL, POLICY_VERSION } from './support/fixtures';
 import { toCollected, toReserved } from './support/paths';
 

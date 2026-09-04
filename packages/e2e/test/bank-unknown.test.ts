@@ -9,16 +9,18 @@ import {
 } from '@sdelka/domain';
 import { accountBalance, bankNominal, bankOperating, clientFreeAccount } from '@sdelka/ledger';
 import {
-  applyDealEvent,
-  applyTrancheEvent,
   advance,
   dealStatusOf,
   feeForTranche,
-  receiveTrancheFee,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyDealEvent,
+  applyTrancheEvent,
+  receiveTrancheFee,
+} from './support/acting';
 import { BANK_RESPONSE_SOURCE, DAY_MS, DEAL_AMOUNT, GEL, POLICY_VERSION, STATEMENT_SOURCE, bankPort, settledOutcome, unknownOutcome } from './support/fixtures';
 import { toPayingOut } from './support/paths';
 

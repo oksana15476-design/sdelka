@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { STAFF } from './support/actors';
 import {
   appendEntry,
   accountBalance,
@@ -22,17 +23,19 @@ import type { ClientKey, JournalEntry } from '@sdelka/ledger';
 import { type Intent, reduceTranche } from '@sdelka/domain';
 import { money } from '@sdelka/money';
 import {
-  applyTrancheEvent,
-  approve,
   contextFor,
   coverageOk,
   payerOf,
-  receiveTrancheFee,
   recipientOf,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyTrancheEvent,
+  approve,
+  receiveTrancheFee,
+} from './support/acting';
 import {
   BANK_RESPONSE_SOURCE,
   BUYER,
@@ -380,8 +383,8 @@ describe('красные линии в сквозном прогоне', () => {
     const pending = await toReleasePending({ dealId: DEAL, trancheId: TRANCHE });
     // Два утверждения набраны: единственное, чего может не хватать ниже, —
     // покрытие.
-    let world = approve(pending.world, TRANCHE, 'approver-1');
-    world = approve(world, TRANCHE, 'approver-2');
+    let world = approve(pending.world, TRANCHE, STAFF.controller);
+    world = approve(world, TRANCHE, STAFF.head);
     const runtime = trancheOf(world, TRANCHE);
     const healthy = contextFor(world, runtime);
     expect(healthy.facts.coverageOk).toBe(true);

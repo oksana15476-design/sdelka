@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { assessPayer, compareNames, payerKeyForDomain } from '@sdelka/compliance';
 import { planAllocationToDeal } from '@sdelka/domain';
+import { STAFF } from './support/actors';
 import {
   clientLockedAccount,
   clientStatement,
@@ -12,17 +13,18 @@ import {
 import { money } from '@sdelka/money';
 import {
   type World,
-  applyDealEvent,
-  applyTrancheEvent,
-  approve,
-  attachObservation,
   dealStatusOf,
   feeForTranche,
-  receiveExternalPayment,
   toClientKey,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyDealEvent,
+  applyTrancheEvent,
+  approve,
+  receiveExternalPayment,
+} from './support/acting';
 import {
   BANK_RESPONSE_SOURCE,
   BUYER,
@@ -35,11 +37,10 @@ import {
   TWO_ROLE,
   beneficiaryFor,
   CADASTRAL_CODE,
-  POLICY,
   registryWithTransfer,
 } from './support/fixtures';
 import { openDeal } from './support/open';
-import { toPayingOut } from './support/paths';
+import { establishCondition, toPayingOut } from './support/paths';
 
 const OPTIONS = trancheOptions(POLICY_VERSION);
 const ATTACHED = trancheOptions(POLICY_VERSION, { creditRoute: 'already_on_client_account' });
@@ -139,8 +140,8 @@ describe('один клиент в двух ролях', () => {
         free: freeBalance(world.journal, clientKey, GEL),
         locked: [],
         requestedAmount: overFreeBalance,
-        sourceAccount: null,
         preparedBy: 'operator-1',
+        sourceAccount: null,
         approvals: [],
         activeWithdrawals: 0,
       },
@@ -201,16 +202,10 @@ describe('один клиент в двух ролях', () => {
     expect(
       compareNames(TWO_ROLE.names, TWO_ROLE.names, { strongThresholdBp: 9_500 }).sufficientAlone,
     ).toBe(false);
-    world = attachObservation(world, TRANCHE_B, answer.value, 'evidence-b', POLICY);
-    world = applyTrancheEvent(
-      world,
-      TRANCHE_B,
-      { type: 'condition_established', evidenceBundleId: 'evidence-b', conditionType: 'registration_transfer' },
-      OPTIONS,
-    ).world;
+    world = establishCondition(world, TRANCHE_B, answer.value, 'evidence-b');
     world = applyDealEvent(world, DEAL_B, { type: 'condition_established', conditionType: 'registration_transfer' }, OPTIONS);
     // 100 000 ₾ — первая ступень: одна подпись, но не ноль.
-    world = approve(world, TRANCHE_B, 'approver-1');
+    world = approve(world, TRANCHE_B, STAFF.controller);
     world = applyTrancheEvent(world, TRANCHE_B, { type: 'release_authorized' }, OPTIONS).world;
     world = applyTrancheEvent(world, TRANCHE_B, { type: 'payout_result', outcome: 'settled' }, SETTLED).world;
     expect(trancheStatusOf(world, TRANCHE_B)).toBe('paid_out');

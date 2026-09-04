@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { toBeneficiaryLock } from '@sdelka/compliance';
 import { accountBalance, bankNominal, clientFreeAccount, clientLockedAccount } from '@sdelka/ledger';
+import { STAFF } from './support/actors';
 import {
-  applyTrancheEvent,
-  approve,
-  attachObservation,
-  patchFacts,
   rejectTrancheEvent,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyTrancheEvent,
+  approve,
+  attachObservation,
+  patchFacts,
+} from './support/acting';
 import {
   BANK_RESPONSE_SOURCE,
   CADASTRAL_CODE,
@@ -83,8 +86,8 @@ describe('пакет доказательств', () => {
     world = patchFacts(world, TRANCHE, {
       beneficiary: toBeneficiaryLock({ ...beneficiary, locked: true }),
     });
-    world = approve(world, TRANCHE, 'approver-1');
-    world = approve(world, TRANCHE, 'approver-2');
+    world = approve(world, TRANCHE, STAFF.controller);
+    world = approve(world, TRANCHE, STAFF.head);
     const refusedAgain = rejectTrancheEvent(world, TRANCHE, { type: 'release_authorized' });
     expect([...refusedAgain.failedGuards]).toEqual(['g_fields_match']);
 

@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { type ConditionAct, instant } from '@sdelka/domain';
 import { accountBalance, clientFreeAccount } from '@sdelka/ledger';
+import { STAFF } from './support/actors';
 import {
-  applyTrancheEvent,
-  approve,
-  patchFacts,
   recipientOf,
   rejectTrancheEvent,
   toClientKey,
@@ -12,6 +10,11 @@ import {
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyTrancheEvent,
+  approve,
+  patchFacts,
+} from './support/acting';
 import {
   BANK_RESPONSE_SOURCE,
   BUYER,
@@ -164,8 +167,8 @@ describe('акт получателя об условии', () => {
     const TRANCHE = 'tranche-act-recipient';
 
     const pending = await toReleasePending({ dealId: DEAL, trancheId: TRANCHE });
-    let world = approve(pending.world, TRANCHE, 'approver-1');
-    world = approve(world, TRANCHE, 'approver-2');
+    let world = approve(pending.world, TRANCHE, STAFF.controller);
+    world = approve(world, TRANCHE, STAFF.head);
     world = applyTrancheEvent(world, TRANCHE, { type: 'release_authorized' }, OPTIONS).world;
     world = applyTrancheEvent(world, TRANCHE, { type: 'payout_result', outcome: 'settled' }, SETTLED).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('paid_out');

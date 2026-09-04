@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { payerKeyForDomain, toBeneficiaryLock } from '@sdelka/compliance';
+import { STAFF } from './support/actors';
 import {
   accountBalance,
   bankNominal,
@@ -8,16 +9,18 @@ import {
   coverageByTranche,
 } from '@sdelka/ledger';
 import {
-  applyTrancheEvent,
-  approve,
-  attachObservation,
-  holdThirdPartyPayment,
-  patchFacts,
   rejectTrancheEvent,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyTrancheEvent,
+  approve,
+  attachObservation,
+  holdThirdPartyPayment,
+  patchFacts,
+} from './support/acting';
 import {
   DEAL_AMOUNT,
   GEL,
@@ -96,7 +99,10 @@ describe('выход из блокировки', () => {
 
     // --- Расхождение снято: транш возвращается к выпуску поручения ---
     world = patchFacts(world, TRANCHE, { mismatchResolved: true });
-    world = applyTrancheEvent(world, TRANCHE, { type: 'approval_added', userId: 'analyst-1' }, OPTIONS).world;
+    // Подпись ставит утверждающий, а не аналитик: `approval_added` разрешается
+    // полномочием `approve_payout`, а его у аналитика нет. Имя в событии и лицо
+    // в сессии при этом одно — иначе шаг падает.
+    world = applyTrancheEvent(world, TRANCHE, { type: 'approval_added', userId: 'approver-1' }, OPTIONS).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('release_pending');
 
     // Дальше собрано **всё остальное**: платная выписка приложена, все пять
@@ -114,8 +120,8 @@ describe('выход из блокировки', () => {
     world = patchFacts(world, TRANCHE, {
       beneficiary: toBeneficiaryLock({ ...beneficiary, locked: true }),
     });
-    world = approve(world, TRANCHE, 'approver-1');
-    world = approve(world, TRANCHE, 'approver-2');
+    world = approve(world, TRANCHE, STAFF.controller);
+    world = approve(world, TRANCHE, STAFF.head);
 
     // --- И всё-таки поручение не уходит: денег под траншем нет ---
     const unfunded = rejectTrancheEvent(world, TRANCHE, { type: 'release_authorized' });

@@ -16,13 +16,15 @@ import {
   unclaimedLiability,
 } from '@sdelka/ledger';
 import {
-  applyTrancheEvent,
-  receiveWriteOffTransit,
   rejectTrancheEvent,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyTrancheEvent,
+  receiveWriteOffTransit,
+} from './support/acting';
 import { DEAL_AMOUNT, GEL, POLICY_VERSION } from './support/fixtures';
 import { toCollected, toReserved } from './support/paths';
 

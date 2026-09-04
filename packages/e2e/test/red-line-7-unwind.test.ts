@@ -1,26 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { auditActor } from '@sdelka/audit';
+import { STAFF, party } from './support/actors';
 import { accountBalance, bankNominal, clientFreeAccount, coverage } from '@sdelka/ledger';
 import {
   type World,
-  OPERATOR_ACTOR,
   SCHEDULER_INTERVAL_MS,
   advance,
-  applyDealEvent,
-  applyObservationEvent,
-  applyTrancheEvent,
-  approveUnwind,
-  authorizeUnwind,
   dealFactsOf,
   dealStatusOf,
   rejectDealEvent,
   rejectUnwind,
-  requestUnwind,
   tick,
   trancheOptions,
   trancheStatusOf,
   unwindReviewOf,
 } from '@sdelka/app';
+import {
+  applyDealEvent,
+  applyObservationEvent,
+  applyTrancheEvent,
+  approveUnwind,
+  authorizeUnwind,
+  requestUnwind,
+} from './support/acting';
 import {
   CADASTRAL_CODE,
   CONDITION_ACT_SOURCE,
@@ -71,12 +72,19 @@ const ROLLBACK = trancheOptions(POLICY_VERSION, { creditRoute: 'already_on_clien
  * ⚠ Полномочие названо `lift_block`: полномочия «утвердить откат» в
  * `CAPABILITIES` нет вовсе, и это [открыто] — см. `UNWIND_SIGNING_ROLES`.
  */
-const ANALYST_2 = auditActor('analyst-2', 'compliance_analyst', 'lift_block');
-const ANALYST_3 = auditActor('analyst-3', 'compliance_analyst', 'lift_block');
-
-const BY_OPERATOR = trancheOptions(POLICY_VERSION, { actor: OPERATOR_ACTOR });
-const BY_ANALYST_2 = trancheOptions(POLICY_VERSION, { actor: ANALYST_2 });
-const BY_ANALYST_3 = trancheOptions(POLICY_VERSION, { actor: ANALYST_3 });
+/**
+ * Подписывают откат **финансовый контролёр и руководитель операций**, а не
+ * аналитики.
+ *
+ * Прежняя редакция принимала подпись оператора, «утверждающего» и аналитика —
+ * по роли **актора журнала**, которую называл сам вызывающий. Сегодня подпись
+ * идёт под полномочием `approve_lift_block` («вторая подпись» `ACTORS.md`
+ * §5.3), а его носители ровно два: ФК (уровень 1) и РО (уровень 2). Оператор и
+ * аналитик подписывать больше не могут — это ужесточение, и оно закреплено
+ * сценарием «кто подписать не вправе» ниже.
+ */
+const FIRST_SIGNER = STAFF.controller;
+const SECOND_SIGNER = STAFF.head;
 
 /** Ключ локализации, а не текст: причина возврата видна клиенту (три языка). */
 const REASON = 'deal.unwind.registry_silent';
@@ -107,7 +115,7 @@ async function withOpenReview(
     silent,
     dealId,
     { reasonKey: REASON, evidence: [CONDITION_ACT_SOURCE] },
-    BY_OPERATOR,
+    OPTIONS,
   );
   return { world: requested, dealId, trancheId };
 }
@@ -166,7 +174,7 @@ describe('красная линия №7: от бездействия до во�
       world,
       DEAL,
       { reasonKey: REASON, evidence: [CONDITION_ACT_SOURCE] },
-      BY_OPERATOR,
+      OPTIONS,
     );
     const review = unwindReviewOf(world, DEAL);
     expect(review?.requestedBy).toBe('operator-1');
@@ -177,17 +185,17 @@ describe('красная линия №7: от бездействия до во�
     expect(dealStatusOf(world, DEAL)).toBe('filed');
 
     // --- Одной подписи мало ---
-    world = approveUnwind(world, DEAL, BY_ANALYST_2);
+    world = approveUnwind(world, DEAL, OPTIONS, FIRST_SIGNER);
     expect([...rejectUnwind(world, DEAL).failedGuards]).toEqual(['g_unwind_approvers_distinct']);
     expect(dealStatusOf(world, DEAL)).toBe('filed');
 
     // --- Вторая подпись, другого человека: дверь открывается ---
-    world = approveUnwind(world, DEAL, BY_ANALYST_3);
+    world = approveUnwind(world, DEAL, OPTIONS, SECOND_SIGNER);
     expect(unwindReviewOf(world, DEAL)?.approvals.map((item) => item.userId)).toEqual([
-      'analyst-2',
-      'analyst-3',
+      'approver-1',
+      'approver-2',
     ]);
-    world = authorizeUnwind(world, DEAL, BY_ANALYST_3);
+    world = authorizeUnwind(world, DEAL, OPTIONS, SECOND_SIGNER);
     expect(dealStatusOf(world, DEAL)).toBe('unwinding');
 
     // Решение восстановимо по журналу: две подписи разными людьми и переход.
@@ -195,7 +203,14 @@ describe('красная линия №7: от бездействия до во�
       (record) =>
         record.body.kind === 'decision_made' && record.body.outcomeKey === 'deal.unwind_approved',
     );
-    expect(decisions.map((record) => record.actor.actorId)).toEqual(['analyst-2', 'analyst-3']);
+    expect(decisions.map((record) => record.actor.actorId)).toEqual(['approver-1', 'approver-2']);
+    // Актор записи выведен из сессии, а не назван вызывающим: роль журнала —
+    // `approver`, полномочие — то самое, под которым шаг и прошёл.
+    expect(decisions.map((record) => record.actor.roleId)).toEqual(['approver', 'approver']);
+    expect(decisions.map((record) => record.actor.capability)).toEqual([
+      'approve_lift_block',
+      'approve_lift_block',
+    ]);
     expect(
       world.chain.records.some(
         (record) =>
@@ -254,7 +269,7 @@ describe('красная линия №7: от бездействия до во�
     ]);
 
     const single = await withOpenReview('single', empty.world);
-    const signedOnce = approveUnwind(single.world, single.dealId, BY_ANALYST_2);
+    const signedOnce = approveUnwind(single.world, single.dealId, OPTIONS, FIRST_SIGNER);
     expect([...rejectUnwind(signedOnce, single.dealId).failedGuards]).toEqual([
       'g_unwind_approvers_distinct',
     ]);
@@ -263,61 +278,63 @@ describe('красная линия №7: от бездействия до во�
     // правило домена, и второй его экземпляр здесь сделал бы guard
     // непроверяемым.
     const twice = await withOpenReview('twice', signedOnce);
-    let repeated = approveUnwind(twice.world, twice.dealId, BY_ANALYST_2);
-    repeated = approveUnwind(repeated, twice.dealId, BY_ANALYST_2);
+    let repeated = approveUnwind(twice.world, twice.dealId, OPTIONS, FIRST_SIGNER);
+    repeated = approveUnwind(repeated, twice.dealId, OPTIONS, FIRST_SIGNER);
     expect(unwindReviewOf(repeated, twice.dealId)?.approvals).toHaveLength(2);
     expect([...rejectUnwind(repeated, twice.dealId).failedGuards]).toEqual([
       'g_unwind_approvers_distinct',
     ]);
 
-    // Готовивший сделку не считается утверждающим — как у разморозки.
-    // `openDeal` кладёт `preparedBy: 'operator-1'`, и подпись `operator-1`
-    // оставляет ровно одного различимого утверждающего.
+    // Готовивший разбор подписать его больше **не может вовсе**: у оператора нет
+    // полномочия `approve_lift_block`. Прежде подпись ставилась и отсеивалась
+    // guard'ом `g_unwind_approvers_distinct` — теперь рубеж стоит раньше, на
+    // праве, а guard остаётся вторым (проверяется строкой ниже).
     const preparer = await withOpenReview('preparer', repeated);
-    let byPreparer = approveUnwind(preparer.world, preparer.dealId, BY_OPERATOR);
-    byPreparer = approveUnwind(byPreparer, preparer.dealId, BY_ANALYST_2);
-    expect(unwindReviewOf(byPreparer, preparer.dealId)?.approvals.map((item) => item.userId)).toEqual(
-      ['operator-1', 'analyst-2'],
+    expect(() => approveUnwind(preparer.world, preparer.dealId, OPTIONS, STAFF.operator)).toThrow(
+      'app.authority.denied',
     );
-    expect([...rejectUnwind(byPreparer, preparer.dealId).failedGuards]).toEqual([
+
+    // Одна подпись — и guard домена по-прежнему её не принимает.
+    const byFirst = approveUnwind(preparer.world, preparer.dealId, OPTIONS, FIRST_SIGNER);
+    expect([...rejectUnwind(byFirst, preparer.dealId).failedGuards]).toEqual([
       'g_unwind_approvers_distinct',
     ]);
 
-    // И тот же разбор с третьей подписью — уже другого человека — проходит.
+    // И тот же разбор со второй подписью — уже другого человека — проходит.
     // Без этой строки предыдущие четыре доказывали бы только, что дверь
     // заперта всегда.
-    const opened = approveUnwind(byPreparer, preparer.dealId, BY_ANALYST_3);
-    const unwinding = authorizeUnwind(opened, preparer.dealId, BY_ANALYST_3);
+    const opened = approveUnwind(byFirst, preparer.dealId, OPTIONS, SECOND_SIGNER);
+    const unwinding = authorizeUnwind(opened, preparer.dealId, OPTIONS, SECOND_SIGNER);
     expect(dealStatusOf(unwinding, preparer.dealId)).toBe('unwinding');
   });
 
-  it('не принимает подпись машины и подпись стороны', async () => {
+  it('подписать откат не вправе ни машина, ни сторона, ни поддержка, ни аналитик', async () => {
     const review = await withOpenReview('roles');
 
     // Разбор человеком автоматическим не является: у события намеренно нет
-    // часов, и подписывающая машина — это тот же автооткат окольным путём.
-    expect(() =>
-      approveUnwind(review.world, review.dealId, trancheOptions(POLICY_VERSION, {
-        actor: auditActor('scheduler', 'system', null),
-      })),
-    ).toThrow('app.unwind.role_not_allowed:system');
-
-    // Подпись покупателя означала бы право отозвать деньги после подачи
-    // заявления — второй разбор развилки (`STATE-MACHINES.md` §3.2), который
-    // [открыто] и решается владельцем, а не нами молча.
-    expect(() =>
-      approveUnwind(review.world, review.dealId, trancheOptions(POLICY_VERSION, {
-        actor: auditActor('party-buyer', 'client', 'read_deal'),
-      })),
-    ).toThrow('app.unwind.role_not_allowed:client');
-
-    // Поддержка read-only по построению: в `SUPPORT_ROLE` нет ни одного
-    // полномочия на утверждение.
-    expect(() =>
-      approveUnwind(review.world, review.dealId, trancheOptions(POLICY_VERSION, {
-        actor: auditActor('support-1', 'support', 'read_deal'),
-      })),
-    ).toThrow('app.unwind.role_not_allowed:support');
+    // часов. Машина подписать не может **структурно**: разрешение часов из
+    // пакета не выходит, и собрать его сценарию нечем — этот запрет держится
+    // отсутствием экспорта, а не проверкой роли, которую вызывающий сам и
+    // называл.
+    //
+    // Три остальных запрета — по полномочию, а не по имени роли в журнале.
+    for (const actor of [
+      // Сторона: подпись покупателя означала бы право отозвать деньги после
+      // подачи заявления — второй разбор развилки (`STATE-MACHINES.md` §3.2),
+      // который [открыто] и решается владельцем, а не нами молча.
+      party('party-buyer'),
+      // Поддержка read-only по построению.
+      STAFF.support,
+      // Аналитик комплаенса: прежняя редакция его подпись принимала. Больше
+      // нет — уровня утверждения у него нет, и `approve_lift_block` тоже.
+      STAFF.analyst,
+      // Оператор оракула: устанавливает факт, но не утверждает (Н2).
+      STAFF.oracle,
+    ]) {
+      expect(() => approveUnwind(review.world, review.dealId, OPTIONS, actor)).toThrow(
+        'app.authority.denied',
+      );
+    }
   });
 
   it('не принимает подпись под заявкой, которой нет, и решение без основания', async () => {
@@ -328,7 +345,7 @@ describe('красная линия №7: от бездействия до во�
 
     // Подпись под неподнятым разбором: иначе «кто поднял» останется без ответа
     // именно тогда, когда ответ нужен.
-    expect(() => approveUnwind(ordered.world, 'deal-unwind-none', BY_ANALYST_2)).toThrow(
+    expect(() => approveUnwind(ordered.world, 'deal-unwind-none', OPTIONS, FIRST_SIGNER)).toThrow(
       'app.unwind.not_requested:deal-unwind-none',
     );
 
@@ -339,7 +356,7 @@ describe('красная линия №7: от бездействия до во�
         ordered.world,
         'deal-unwind-none',
         { reasonKey: REASON, evidence: [] },
-        BY_OPERATOR,
+        OPTIONS,
       ),
     ).toThrow('app.unwind.evidence_required:deal-unwind-none');
   });

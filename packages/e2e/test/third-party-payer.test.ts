@@ -14,17 +14,19 @@ import { accountBalance, bankNominal } from '@sdelka/ledger';
 import { money } from '@sdelka/money';
 import {
   AppInvariantError,
-  applyDealEvent,
-  applyTrancheEvent,
   dealFactsOf,
   dealStatusOf,
-  holdThirdPartyPayment,
-  patchFacts,
-  returnHeldPayment,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyDealEvent,
+  applyTrancheEvent,
+  holdThirdPartyPayment,
+  patchFacts,
+  returnHeldPayment,
+} from './support/acting';
 import {
   BUYER,
   GEL,

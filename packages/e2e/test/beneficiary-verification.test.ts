@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { STAFF } from './support/actors';
 import {
   APPROVER_ROLE,
   OPERATOR_ROLE,
@@ -22,15 +23,17 @@ import {
 } from '@sdelka/ledger';
 import {
   advance,
-  applyTrancheEvent,
-  approve,
   dealStatusOf,
-  patchFacts,
   rejectTrancheEvent,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyTrancheEvent,
+  approve,
+  patchFacts,
+} from './support/acting';
 import {
   BANK_RESPONSE_SOURCE,
   DEAL_AMOUNT,
@@ -126,8 +129,8 @@ describe('реквизиты выплаты: доказательство вла
     // `release_pending → paying_out`: оператор снимает блокировку, транш
     // возвращается в `release_pending`, и если бы проверка стояла только на
     // входе из `reserved`, выплата ушла бы отсюда.
-    world = approve(world, TRANCHE, 'approver-1');
-    world = approve(world, TRANCHE, 'approver-2');
+    world = approve(world, TRANCHE, STAFF.controller);
+    world = approve(world, TRANCHE, STAFF.head);
     world = applyTrancheEvent(world, TRANCHE, { type: 'approval_added', userId: 'approver-1' }, OPTIONS).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('release_pending');
 
@@ -189,8 +192,8 @@ describe('реквизиты выплаты: доказательство вла
     const TRANCHE = 'tranche-blackout';
 
     const pending = await toReleasePending({ dealId: DEAL, trancheId: TRANCHE });
-    let world = approve(pending.world, TRANCHE, 'approver-1');
-    world = approve(world, TRANCHE, 'approver-2');
+    let world = approve(pending.world, TRANCHE, STAFF.controller);
+    world = approve(world, TRANCHE, STAFF.head);
     expect(trancheStatusOf(world, TRANCHE)).toBe('release_pending');
 
     const state = trancheOf(world, TRANCHE).beneficiary;

@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applyDealEvent,
-  createDeal,
   dealStatusOf,
   emptyWorld,
   rejectDealEvent,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyDealEvent,
+  createDeal,
+} from './support/acting';
 import { CADASTRAL_CODE, NOW, POLICY_VERSION } from './support/fixtures';
 import { toCollected, toConditionReady, toReleasePending } from './support/paths';
 
@@ -42,7 +44,6 @@ describe('автомат сделки: правила, которые обяза
     let world = createDeal(emptyWorld({ now: NOW, chainId: 'sdelka-deal-guards' }), {
       dealId: deal,
       conditionAct: null,
-      preparedBy: 'operator-1',
       objectCadastralCode: CADASTRAL_CODE,
     });
     world = applyDealEvent(world, deal, { type: 'parties_check_started' }, OPTIONS);

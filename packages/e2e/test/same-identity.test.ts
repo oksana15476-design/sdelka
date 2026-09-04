@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { CounterpartyFacts } from '@sdelka/compliance';
 import { assessCounterparty, compareNames, identityKey, sameIdentity, selfDealingPairs } from '@sdelka/compliance';
-import { dealStatusOf, trancheOptions } from '@sdelka/app';
+import {
+  dealStatusOf,
+  trancheOptions,
+} from '@sdelka/app';
 import {
   BUYER,
   BUYER_DOCUMENT,

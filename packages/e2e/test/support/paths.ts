@@ -2,8 +2,14 @@ import type { FeeCeilingPolicy } from '@sdelka/domain';
 import type { ClientKey } from '@sdelka/ledger';
 import type { BeneficiaryState, PartyProfile } from '@sdelka/compliance';
 import { payerKeyForDomain } from '@sdelka/compliance';
+import { STAFF } from './actors';
 import {
+  type RegistryExtract,
   type World,
+  trancheOf,
+  trancheOptions,
+} from '@sdelka/app';
+import {
   applyDealEvent,
   applyTrancheEvent,
   approve,
@@ -11,8 +17,7 @@ import {
   attachObservation,
   receiveExternalPayment,
   receivePaidExtract,
-  trancheOptions,
-} from '@sdelka/app';
+} from './acting';
 import { type CurrencyCode, type Deduction, type Money, money } from '@sdelka/money';
 import {
   APPLICATION_ID,
@@ -206,10 +211,63 @@ export async function toReleasePending(options: PathOptions): Promise<Advanced> 
   return { ...ordered, world };
 }
 
+/**
+ * Довести машину наблюдения от `reserved` до установленного условия.
+ *
+ * Появилась потому, что событие `condition_established` у транша перестало быть
+ * доступно человеку: его порождает **только** машина наблюдения
+ * (`ORACLE.md` §8). Сценарии, которые прежде прикладывали выписку
+ * (`attachObservation`) и подавали событие руками, проверяли контур, которого в
+ * продукте нет: у оракула не было ни заявления, ни заказанной выписки, а
+ * условие оказывалось установленным.
+ *
+ * Здесь тот же путь, что в `toExtractOrdered`, но по уже заведённому траншу:
+ * наблюдение начато, номер заявления назван стороной и подтверждён карточкой,
+ * регламентный срок истёк, выписка заказана и получена.
+ */
+export function establishCondition(
+  world: World,
+  trancheId: string,
+  extract: RegistryExtract,
+  evidenceBundleId: string,
+): World {
+  const buyerPartyId = trancheOf(world, trancheId).facts.buyer.partyId;
+  let next = applyObservationEvent(world, trancheId, { type: 'observation_started' }, OPTIONS).world;
+  next = applyObservationEvent(
+    next,
+    trancheId,
+    { type: 'filing_claimed', applicationId: APPLICATION_ID, byParty: buyerPartyId },
+    OPTIONS,
+  ).world;
+  const card = cardOf(registryWithApplicationCard(), APPLICATION_ID);
+  next = applyObservationEvent(
+    next,
+    trancheId,
+    {
+      type: 'filing_card_observed',
+      applicationId: card.applicationId,
+      cadastralCode: card.cadastralCode,
+      applicationStatus: card.applicationStatus,
+    },
+    OPTIONS,
+  ).world;
+  next = applyObservationEvent(next, trancheId, { type: 'statutory_term_elapsed' }, OPTIONS).world;
+  next = applyObservationEvent(
+    next,
+    trancheId,
+    { type: 'extract_ordered', cost: EXTRACT_COST },
+    OPTIONS,
+  ).world;
+  return receivePaidExtract(next, trancheId, extract, evidenceBundleId, POLICY, OPTIONS).world;
+}
+
 export async function toPayingOut(options: PathOptions): Promise<Advanced> {
   const pending = await toReleasePending(options);
-  let world = approve(pending.world, options.trancheId, 'approver-1');
-  world = approve(world, options.trancheId, 'approver-2');
+  // Две подписи — **разных уровней**: ФК даёт уровень 1, РО — уровень 2
+  // (`ACTORS.md` §5.2). Две подписи одного уровня кворум не набирают, и это
+  // проверяется отдельным сценарием.
+  let world = approve(pending.world, options.trancheId, STAFF.controller);
+  world = approve(world, options.trancheId, STAFF.head);
   world = applyTrancheEvent(world, options.trancheId, { type: 'release_authorized' }, OPTIONS).world;
   return { ...pending, world };
 }

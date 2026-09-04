@@ -11,12 +11,14 @@ import {
 } from '@sdelka/ledger';
 import {
   advance,
-  applyTrancheEvent,
-  receiveExternalPayment,
-  receiveTrancheFee,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyTrancheEvent,
+  receiveExternalPayment,
+  receiveTrancheFee,
+} from './support/acting';
 import {
   BANK_RESPONSE_SOURCE,
   DAY_MS,

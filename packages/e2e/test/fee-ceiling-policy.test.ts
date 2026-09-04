@@ -1,6 +1,12 @@
 import { LedgerError, LedgerErrorCode, accountBalance, clientFreeAccount } from '@sdelka/ledger';
 import { feeCeilingPolicy } from '@sdelka/domain';
-import { applyTrancheEvent, trancheOptions, trancheStatusOf } from '@sdelka/app';
+import {
+  trancheOptions,
+  trancheStatusOf,
+} from '@sdelka/app';
+import {
+  applyTrancheEvent,
+} from './support/acting';
 import { rational } from '@sdelka/money';
 import { describe, expect, it } from 'vitest';
 import { BANK_RESPONSE_SOURCE, GEL, POLICY_VERSION } from './support/fixtures';

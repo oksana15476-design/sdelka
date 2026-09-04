@@ -8,7 +8,6 @@ import {
   type PolicyRef,
   type RawSourceRef,
   appendRecord,
-  auditActor,
   auditAmount,
   auditFingerprint,
   auditInstant,
@@ -62,7 +61,14 @@ import {
   reducePayout,
   reduceTranche,
   releaseObservation,
+  requiredApprovals,
 } from '@sdelka/domain';
+import {
+  type ActorRef,
+  UNKNOWN_FACT,
+  evaluateQuorum,
+  recordApproval,
+} from '@sdelka/auth';
 import {
   type ClientKey,
   type EntryMeta,
@@ -103,6 +109,32 @@ import {
   reduceObservation,
   sourcedObservation,
 } from '@sdelka/oracle';
+import {
+  type Authority,
+  type StepOrigin,
+  AuthorityError,
+  actionContextFor,
+  ORACLE_ACTOR,
+  SYSTEM_ACTOR,
+  actingAccount,
+  actingPerson,
+  actingRole,
+  assertOrigin,
+  dealSubject,
+  journalActor,
+  oracleAuthority,
+  recordFact,
+  requireSamePerson,
+  trancheSubject,
+} from './authority';
+import {
+  type DealOrigin,
+  type ObservationOrigin,
+  type TrancheOrigin,
+  dealOriginsOf,
+  observationOriginsOf,
+  trancheOriginsOf,
+} from './origins';
 import type { RegistryApplicationCard, RegistryExtract } from './ports';
 import {
   type DealRuntime,
@@ -117,6 +149,7 @@ import {
   payerOf,
   recorded,
   sealed,
+  seedWorld,
   trancheOf,
   withDeal,
   withTranche,
@@ -126,18 +159,26 @@ import {
 /* Акторы журнала аудита                                                     */
 /* ------------------------------------------------------------------------- */
 
-/** Переход по дедлайну и прочее действие без человека. */
-export const SYSTEM_ACTOR: AuditActor = auditActor('scheduler', 'system', null);
-/** Наблюдение из реестра: `condition_established` порождается оракулом (§8). */
-export const ORACLE_ACTOR: AuditActor = auditActor('registry-oracle', 'oracle', null);
 /**
- * Полномочия названы буква в букву как в `compliance/src/roles.ts`: у записи
- * журнала аудита поле `capability` — свободная строка, и сверить её оттуда
- * нечем (см. `test/cross-package.test.ts`).
+ * Свободных акторов у шагов мира **больше нет**.
+ *
+ * Здесь стояли три константы — `OPERATOR_ACTOR`, `ANALYST_ACTOR`,
+ * `APPROVER_ACTOR`, — и каждый шаг принимал одну из них полем `options.actor`.
+ * Это значило ровно то, что написано: кто записан в вечный журнал, решал
+ * вызывающий, и `trancheOptions(policy, { actor: APPROVER_ACTOR })` подписывал
+ * утверждающим действие, которое совершал кто угодно. Полномочие в записи
+ * (`AuditActor.capability`) при этом было свободной строкой и не сверялось ни с
+ * чем (`packages/e2e/test/cross-package.test.ts`, тест-надгробие).
+ *
+ * Сегодня актор **выводится** из разрешения (`journalActor` в `authority.ts`):
+ * учётная запись — из сессии, роль — через `requireAuditRole`, полномочие — из
+ * выписанного гранта. Разойтись «кто это сделал» и «кто записан» больше нечему.
+ *
+ * Два нечеловеческих актора остались и переехали в `authority.ts`, где у них
+ * появилось происхождение: `SYSTEM_ACTOR` — часы, `ORACLE_ACTOR` — источник
+ * наблюдения. Оттуда же они и вывозятся наружу — для отчётности и сверок, а не
+ * для подстановки в шаг: подставить их некуда, поле исчезло.
  */
-export const OPERATOR_ACTOR: AuditActor = auditActor('operator-1', 'operator', 'read_deal');
-export const ANALYST_ACTOR: AuditActor = auditActor('analyst-1', 'compliance_analyst', 'lift_block');
-export const APPROVER_ACTOR: AuditActor = auditActor('approver-1', 'approver', 'approve_payout');
 
 /* ------------------------------------------------------------------------- */
 /* Мир                                                                       */
@@ -150,21 +191,27 @@ export interface WorldSeed {
 
 export function emptyWorld(seed: WorldSeed): World {
   const chain: AuditChain = genesisChain(seed.chainId, auditInstant(seed.now), SYSTEM_ACTOR);
-  return sealed({
-    now: seed.now,
-    journal: emptyJournal,
-    chain,
-    anchors: Object.freeze<Anchor[]>([]),
-    deals: new Map<string, DealRuntime>(),
-    tranches: new Map<string, TrancheRuntime>(),
-    tasks: Object.freeze<ReviewTask[]>([]),
-    observationTasks: Object.freeze<ObservationTask[]>([]),
-    notifications: Object.freeze<Notification[]>([]),
-    suppressed: Object.freeze<SuppressedEntry[]>([]),
-    reissuedPayouts: Object.freeze<string[]>([]),
-    checks: 0,
-    seq: 0,
-  });
+  return sealed(
+    seedWorld({
+      now: seed.now,
+      journal: emptyJournal,
+      chain,
+      anchors: Object.freeze<Anchor[]>([]),
+      deals: new Map<string, DealRuntime>(),
+      tranches: new Map<string, TrancheRuntime>(),
+      tasks: Object.freeze<ReviewTask[]>([]),
+      observationTasks: Object.freeze<ObservationTask[]>([]),
+      notifications: Object.freeze<Notification[]>([]),
+      suppressed: Object.freeze<SuppressedEntry[]>([]),
+      reissuedPayouts: Object.freeze<string[]>([]),
+      // Ни одной сессии и ни одного факта о прошлом: мир, в котором ещё никто
+      // не входил, обязан отказывать всему, что требует полномочия.
+      sessions: new Map(),
+      facts: Object.freeze([]),
+      checks: 0,
+      seq: 0,
+    }),
+  );
 }
 
 function nextMeta(world: World, label: string): { readonly meta: EntryMeta; readonly seq: number } {
@@ -204,7 +251,6 @@ export function advance(world: World, milliseconds: number): World {
 export interface DealSpec {
   readonly dealId: string;
   readonly conditionAct: ConditionAct | null;
-  readonly preparedBy: string | null;
   /**
    * Кадастровый код объекта. Обязателен и непустой: пустой код у
    * `observationSatisfies` и у `g_no_open_filing` читается как «сверяться не с
@@ -214,7 +260,21 @@ export interface DealSpec {
   readonly objectCadastralCode: string;
 }
 
-export function createDeal(world: World, spec: DealSpec): World {
+/**
+ * Заведение сделки.
+ *
+ * `preparedBy` полем спецификации **больше нет**: готовивший — это тот, кто
+ * завёл, и брать его имя из аргумента значило разрешить оператору назвать
+ * готовившим кого угодно. А от готовившего зависит Н1 («готовил ≠ утверждает»),
+ * то есть свободное поле здесь отменяло разделение обязанностей на выплате.
+ * Теперь имя берётся из разрешения и в тот же момент ложится фактом мира.
+ */
+export function createDeal(
+  world: World,
+  spec: DealSpec,
+  authority: Authority<'create_deal'>,
+): World {
+  assertOrigin(['create_deal'], authority, 'deal.create');
   if (spec.objectCadastralCode.length === 0) {
     throw new Error('app.deal.object_cadastral_code_required');
   }
@@ -222,7 +282,7 @@ export function createDeal(world: World, spec: DealSpec): World {
     dealId: spec.dealId,
     state: dealState('draft'),
     conditionAct: spec.conditionAct,
-    preparedBy: spec.preparedBy,
+    preparedBy: actingAccount(authority),
     trancheIds: Object.freeze([]),
     objectCadastralCode: spec.objectCadastralCode,
     filings: Object.freeze<DealFiling[]>([]),
@@ -231,7 +291,8 @@ export function createDeal(world: World, spec: DealSpec): World {
     // человек уже принял решение возвращать деньги.
     unwindReview: null,
   };
-  return sealed({ ...world, deals: withDeal(world, runtime), checks: world.checks });
+  const created = sealed({ ...world, deals: withDeal(world, runtime), checks: world.checks });
+  return recordFact(created, 'prepared', dealSubject(spec.dealId), authority);
 }
 
 export interface TrancheSpec {
@@ -276,7 +337,6 @@ export interface TrancheSpec {
    */
   readonly tariffVersionId: string;
   readonly beneficiary: BeneficiaryState;
-  readonly preparedBy: string | null;
   readonly sourceAccountKnown: boolean;
   /**
    * Потолок удержания этого транша (`@sdelka/domain`, `tariff.ts`, эпик E16).
@@ -294,7 +354,20 @@ export interface TrancheSpec {
   readonly feeCeilingPolicy?: FeeCeilingPolicy;
 }
 
-export function createTranche(world: World, spec: TrancheSpec): World {
+/**
+ * Заведение транша.
+ *
+ * Кладёт **два** факта о прошлом, а не один: «готовил» (Н1) и «заявил реквизиты
+ * выплаты» (Н4). Второй именно здесь потому, что реквизиты приезжают в
+ * спецификации транша: тот, кто их внёс, не может утверждать их изменение, и
+ * узнать это позже будет неоткуда — журнал не редактируется.
+ */
+export function createTranche(
+  world: World,
+  spec: TrancheSpec,
+  authority: Authority<'create_deal'>,
+): World {
+  assertOrigin(['create_deal'], authority, 'tranche.create');
   const deal = dealOf(world, spec.dealId);
   const facts: TrancheFacts = {
     requiredAmount: spec.requiredAmount,
@@ -322,7 +395,7 @@ export function createTranche(world: World, spec: TrancheSpec): World {
     expectedCadastralCode: deal.objectCadastralCode,
     observationPolicy: DEFAULT_OBSERVATION_POLICY,
     beneficiary: toBeneficiaryLock(spec.beneficiary),
-    preparedBy: spec.preparedBy,
+    preparedBy: actingAccount(authority),
     approvals: Object.freeze([]),
     approvalPolicy: DEFAULT_APPROVAL_POLICY,
     createdOn: spec.createdOn,
@@ -344,18 +417,26 @@ export function createTranche(world: World, spec: TrancheSpec): World {
     deductions: spec.deductions,
     tariffVersionId: spec.tariffVersionId,
     payouts: Object.freeze([]),
+    approvalRecords: Object.freeze([]),
     beneficiary: spec.beneficiary,
     buyerNames: spec.buyerNames,
     evidence: Object.freeze([]),
     suspendedRemaining: null,
     observation: initialObservationState,
   };
-  return sealed({
+  const created = sealed({
     ...world,
     deals: withDeal(world, { ...deal, trancheIds: [...deal.trancheIds, spec.trancheId] }),
     tranches: withTranche(world, runtime),
     checks: world.checks,
   });
+  const subject = trancheSubject(created, spec.trancheId);
+  return recordFact(
+    recordFact(created, 'prepared', subject, authority),
+    'beneficiary_requested',
+    subject,
+    authority,
+  );
 }
 
 /* ------------------------------------------------------------------------- */
@@ -365,14 +446,26 @@ export function createTranche(world: World, spec: TrancheSpec): World {
 export interface DecisionRecord {
   readonly subject: AuditRef;
   readonly related: readonly AuditRef[];
-  readonly actor: AuditActor;
   readonly outcome: DetectorOutcome | string;
   readonly policy: PolicyVersionId;
   readonly reasonKeys: readonly string[];
   readonly evidence: readonly RawSourceRef[];
 }
 
-export function recordDecision(world: World, input: DecisionRecord): World {
+/**
+ * Решение комплаенса в журнал.
+ *
+ * Полномочие — `adjudicate_screening`: это решение, после которого деньги идут
+ * дальше (`ACTORS.md` §4.1 A7), поэтому у него класс `release`, второй фактор и
+ * несовместимость Н6 (видит маржу ⇒ не двигает деньги). Актора у записи больше
+ * нет полем: он выводится из разрешения.
+ */
+export function recordDecision(
+  world: World,
+  input: DecisionRecord,
+  authority: Authority<'adjudicate_screening'>,
+): World {
+  assertOrigin(['adjudicate_screening'], authority, 'decision.record');
   const seq = world.seq + 1;
   return sealed({
     ...world,
@@ -380,7 +473,7 @@ export function recordDecision(world: World, input: DecisionRecord): World {
     chain: record(world, {
       recordId: auditId(world, seq),
       recordedAt: auditInstant(world.now),
-      actor: input.actor,
+      actor: journalActor(authority),
       subject: input.subject,
       related: input.related,
       body: {
@@ -406,7 +499,14 @@ export function recordConditionAct(
   act: ConditionAct,
   source: RawSourceRef,
   policy: PolicyVersionId,
+  authority: Authority<'record_condition_act'>,
 ): World {
+  assertOrigin(['record_condition_act'], authority, 'condition_act.record');
+  // Акт совершает **получатель, названный в самом акте** (ст. 27(2), `CORE.md`
+  // Ф13). Раньше запись журнала брала его имя из акта, а совершал шаг кто
+  // угодно: «кто записан» и «кто это сделал» были не связаны ничем. Расхождение
+  // здесь — ошибка, а не подстановка.
+  requireSamePerson(authority, act.recipient.partyId, 'condition_act.recipient');
   const seq = world.seq + 1;
   const runtime = trancheOf(world, trancheId);
   return sealed({
@@ -416,7 +516,7 @@ export function recordConditionAct(
     chain: record(world, {
       recordId: auditId(world, seq),
       recordedAt: auditInstant(world.now),
-      actor: auditActor(act.recipient.partyId, 'client', 'sign_condition_act'),
+      actor: journalActor(authority),
       subject: auditRef('tranche', trancheId),
       related: [auditRef('deal', dealId)],
       body: {
@@ -439,11 +539,31 @@ function appendJournal(world: World, entry: JournalEntry): Journal {
   return appendEntry(world.journal, entry);
 }
 
+/**
+ * ⚠ **Полномочия «вести расчёт» в `ACTORS.md` §5.1 нет — [открыто].**
+ *
+ * Шаги ниже двигают деньги в учёте по банковской выписке: зачисление на счёт
+ * клиента, невыясненное поступление и его возврат, приход списанного, признание
+ * и покрытие недостачи корреспондента, получение комиссии, три момента
+ * конвертации. До этой правки каждый из них выполнялся **вообще без проверки
+ * полномочия**: подписи `receiveExternalPayment(world, owner, amount)` хватало,
+ * чтобы завести обязательство перед клиентом.
+ *
+ * Полномочия, называющего это действие, в перечне нет, а завести его здесь
+ * нельзя: перечень зеркалится в `sdelka.capability` (`packages/db`, `0010`), и
+ * односторонняя правка развалила бы гранты базы. Поэтому взят **самый узкий из
+ * существующих** — `create_deal`: одна роль-носитель (`operator`), класс
+ * `prepare`, ни одной несовместимости. Он не разрешает ничего сверх «оператор
+ * ведёт сделку», и в записи журнала стоит именно он, а не похожее по звучанию
+ * `approve_payout`. Развилка — в отчёте.
+ */
 export function receiveExternalPayment(
   world: World,
   owner: ClientKey,
   amount: Money<CurrencyCode>,
+  authority: Authority<'create_deal'>,
 ): World {
+  assertOrigin(['create_deal'], authority, 'ledger.top_up');
   const { meta, seq } = nextMeta(world, 'top-up');
   return sealed({
     ...world,
@@ -454,7 +574,12 @@ export function receiveExternalPayment(
 }
 
 /** Платёж третьего лица: деньги в учёте есть, обязательства перед покупателем нет. */
-export function holdThirdPartyPayment(world: World, amount: Money<CurrencyCode>): World {
+export function holdThirdPartyPayment(
+  world: World,
+  amount: Money<CurrencyCode>,
+  authority: Authority<'create_deal'>,
+): World {
+  assertOrigin(['create_deal'], authority, 'ledger.suspense');
   const { meta, seq } = nextMeta(world, 'suspense');
   return sealed({
     ...world,
@@ -464,7 +589,12 @@ export function holdThirdPartyPayment(world: World, amount: Money<CurrencyCode>)
   });
 }
 
-export function returnHeldPayment(world: World, amount: Money<CurrencyCode>): World {
+export function returnHeldPayment(
+  world: World,
+  amount: Money<CurrencyCode>,
+  authority: Authority<'create_deal'>,
+): World {
+  assertOrigin(['create_deal'], authority, 'ledger.suspense_return');
   const { meta, seq } = nextMeta(world, 'suspense-return');
   return sealed({
     ...world,
@@ -482,7 +612,12 @@ export function returnHeldPayment(world: World, amount: Money<CurrencyCode>): Wo
  * момента, а не один»). До этого шага долг перед невостребованными стоит против
  * транзита — и это видно в отчётности, как и требует документ.
  */
-export function receiveWriteOffTransit(world: World, amount: Money<CurrencyCode>): World {
+export function receiveWriteOffTransit(
+  world: World,
+  amount: Money<CurrencyCode>,
+  authority: Authority<'create_deal'>,
+): World {
+  assertOrigin(['create_deal'], authority, 'ledger.write_off_transit');
   const { meta, seq } = nextMeta(world, 'write-off-transit');
   return sealed({
     ...world,
@@ -536,7 +671,9 @@ export function absorbIncomingShortfall(
   owner: ClientKey,
   received: Money<CurrencyCode>,
   shortfall: Money<CurrencyCode>,
+  authority: Authority<'create_deal'>,
 ): ShortfallRecognition {
+  assertOrigin(['create_deal'], authority, 'ledger.shortfall_absorbed');
   const { meta, seq } = nextMeta(world, 'shortfall-absorbed');
   const recognised = absorbShortfall(meta, owner, received, shortfall);
   const step = recorded(
@@ -569,7 +706,12 @@ export function absorbIncomingShortfall(
  * без проверки входа. Второй контур на низкоуровневую дверь остался в самом
  * учёте (`shortfallOverfunded`).
  */
-export function fundIncomingShortfall(world: World, recognised: RecognisedShortfall): World {
+export function fundIncomingShortfall(
+  world: World,
+  recognised: RecognisedShortfall,
+  authority: Authority<'create_deal'>,
+): World {
+  assertOrigin(['create_deal'], authority, 'ledger.shortfall_funded');
   const { meta, seq } = nextMeta(world, 'shortfall-funded');
   return sealed({
     ...world,
@@ -594,7 +736,9 @@ export function receiveTrancheFee(
   dealId: string,
   trancheId: string,
   amount: Money<CurrencyCode>,
+  authority: Authority<'create_deal'>,
 ): World {
+  assertOrigin(['create_deal'], authority, 'ledger.fee_received');
   const { meta, seq } = nextMeta(world, 'fee-received');
   return sealed({
     ...world,
@@ -625,7 +769,9 @@ export function sendBalanceForConversion(
   world: World,
   owner: ClientKey,
   execution: FxExecution,
+  authority: Authority<'create_deal'>,
 ): World {
+  assertOrigin(['create_deal'], authority, 'ledger.fx_sent');
   const { meta, seq } = nextMeta(world, 'fx-sent');
   return sealed({
     ...world,
@@ -650,7 +796,9 @@ export function executeBalanceConversion(
   world: World,
   owner: ClientKey,
   execution: FxExecution,
+  authority: Authority<'create_deal'>,
 ): World {
+  assertOrigin(['create_deal'], authority, 'ledger.fx_executed');
   const { meta, seq } = nextMeta(world, 'fx-executed');
   return sealed({
     ...world,
@@ -673,7 +821,9 @@ export function receiveConvertedBalance(
   owner: ClientKey,
   execution: FxExecution,
   spread: PlatformSpread<CurrencyCode>,
+  authority: Authority<'create_deal'>,
 ): World {
+  assertOrigin(['create_deal'], authority, 'ledger.fx_received');
   const { meta, seq } = nextMeta(world, 'fx-received');
   return sealed({
     ...world,
@@ -699,6 +849,7 @@ export function convertBalance(
   source: Money<CurrencyCode>,
   rates: FxRates,
   asOf: IsoDate,
+  authority: Authority<'create_deal'>,
 ): ConversionResult {
   const converted = convert(source, rates, asOf, 'trunc');
   const spread = platformSpread(converted, 'trunc');
@@ -708,10 +859,10 @@ export function convertBalance(
   // Объявление обмена: курс становится фактом записи. Восстановить его из двух
   // сумм задним числом нельзя — усечение необратимо (`entry.ts`, `fxExecution`).
   const execution = fxExecution(conversionId, converted);
-  const sent = sendBalanceForConversion(world, owner, execution);
-  const executed = executeBalanceConversion(sent, owner, execution);
+  const sent = sendBalanceForConversion(world, owner, execution, authority);
+  const executed = executeBalanceConversion(sent, owner, execution, authority);
   return {
-    world: receiveConvertedBalance(executed, owner, execution, spread),
+    world: receiveConvertedBalance(executed, owner, execution, spread, authority),
     converted,
     spread,
     execution,
@@ -751,7 +902,22 @@ export function feeForTranche(world: World, trancheId: string, gross: Money<Curr
 /* Факты транша                                                              */
 /* ------------------------------------------------------------------------- */
 
-export function patchFacts(world: World, trancheId: string, patch: Partial<TrancheFacts>): World {
+/**
+ * Правка фактов транша.
+ *
+ * ⚠ **Чёрный ход, и он назван.** Функция ставит любое поле фактов, включая
+ * денежные, минуя автомат. Убрать её этим батчем нельзя — на ней стоят сценарии
+ * guard'ов, — но выполнить её теперь можно только под тем же полномочием, что и
+ * прочие шаги оператора. Развилка «убрать вовсе, заменив сценарии на события» —
+ * в отчёте.
+ */
+export function patchFacts(
+  world: World,
+  trancheId: string,
+  patch: Partial<TrancheFacts>,
+  authority: Authority<'create_deal'>,
+): World {
+  assertOrigin(['create_deal'], authority, 'tranche.patch_facts');
   const runtime = trancheOf(world, trancheId);
   return sealed({
     ...world,
@@ -760,13 +926,43 @@ export function patchFacts(world: World, trancheId: string, patch: Partial<Tranc
   });
 }
 
-export function approve(world: World, trancheId: string, userId: string): World {
+/**
+ * Подпись под выплатой.
+ *
+ * Имя подписавшего — **из разрешения**, а не из аргумента. Свободный `userId`
+ * означал ровно то, что «четыре глаза» набирались перечислением строк: два
+ * вызова `approve(world, tranche, 'approver-1')` и `approve(world, tranche,
+ * 'approver-2')` давали кворум, за которым не стояло ни одной сессии, ни одной
+ * роли и ни одного уровня утверждения (`ACTORS.md` §5.2).
+ *
+ * Кроме имени в фактах домена (там оно по-прежнему строка — `TrancheFacts`
+ * чужие) кладётся запись утверждения с **уровнем роли**: ФК даёт уровень 1, РО —
+ * уровень 2, прочие роли уровня не дают вовсе, и `recordApproval` такую подпись
+ * не выпускает. По этим записям считается кворум на `release_authorized`.
+ */
+export function approve(
+  world: World,
+  trancheId: string,
+  authority: Authority<'approve_payout'>,
+): World {
+  assertOrigin(['approve_payout'], authority, 'tranche.approve');
   const runtime = trancheOf(world, trancheId);
+  const person = actingPerson(authority);
+  const recorded = recordApproval(person, actingRole(authority), world.now);
+  if (!recorded.ok) {
+    // Роль без уровня утверждения. Сюда сегодня не дойти — `approve_payout`
+    // есть только у ФК и РО, — но перечни живут отдельно, и разъехаться могут.
+    throw new AuthorityError(`app.approval.level_missing:${recorded.error}`);
+  }
   return sealed({
     ...world,
     tranches: withTranche(world, {
       ...runtime,
-      facts: { ...runtime.facts, approvals: [...runtime.facts.approvals, { userId }] },
+      facts: {
+        ...runtime.facts,
+        approvals: [...runtime.facts.approvals, { userId: person.accountId }],
+      },
+      approvalRecords: [...runtime.approvalRecords, recorded.value],
     }),
     checks: world.checks,
   });
@@ -866,13 +1062,30 @@ export function observationFromCard(card: RegistryApplicationCard): ReleaseObser
  * Имена покупателя берутся **с транша**, а не из аргумента: параметр позволял
  * бы сверить выписку с именами постороннего лица.
  */
+/**
+ * Наблюдение приложено к траншу.
+ *
+ * Полномочие — `record_observation` (`ACTORS.md` §5.1, Ф7): его носит оператор
+ * оракула, и шаг кладёт факт «этот вносил наблюдение». Из этого факта потом
+ * работает Н2: тот, кто установил факт регистрации, не утверждает выплату по той
+ * же сделке.
+ *
+ * ⚠ **[открыто]** Актор записи `evidence_attached` остаётся `ORACLE_ACTOR` —
+ * источником, а не человеком. Причина названа в `ACTORS.md` §13: в `AUDIT_ROLES`
+ * (`@sdelka/audit`, восемь значений) роли `oracle_operator` нет, а подставить
+ * похожую нельзя — журнал не редактируется. Запись говорит «приложен ответ
+ * источника», и это правда; кто именно его приложил, в цепочке сегодня не
+ * появляется. Чинится строкой в чужом пакете.
+ */
 export function attachObservation(
   world: World,
   trancheId: string,
   extract: RegistryExtract,
   evidenceBundleId: string,
   policy: CompliancePolicy,
+  authority: Authority<'record_observation'>,
 ): World {
+  assertOrigin(['record_observation'], authority, 'observation.attach');
   const runtime = trancheOf(world, trancheId);
   const observation = observationFromExtract(extract, runtime.buyerNames, policy);
   const seq = world.seq + 1;
@@ -881,7 +1094,7 @@ export function attachObservation(
     facts: { ...runtime.facts, observation, evidenceBundleId },
     evidence: [...runtime.evidence, extract.rawSource],
   };
-  return sealed({
+  const attached = sealed({
     ...world,
     seq,
     tranches: withTranche(world, next),
@@ -895,6 +1108,7 @@ export function attachObservation(
     }),
     checks: world.checks,
   });
+  return recordFact(attached, 'observed', trancheSubject(attached, trancheId), authority);
 }
 
 /**
@@ -913,9 +1127,10 @@ export function receivePaidExtract(
   extract: RegistryExtract,
   evidenceBundleId: string,
   policy: CompliancePolicy,
+  authority: Authority<'record_observation'>,
   options: TrancheEventOptions,
 ): ObservationStepResult {
-  const attached = attachObservation(world, trancheId, extract, evidenceBundleId, policy);
+  const attached = attachObservation(world, trancheId, extract, evidenceBundleId, policy, authority);
   const observation = trancheOf(attached, trancheId).facts.observation;
   if (observation === null) {
     throw new Error(`app.observation.missing_after_attach:${trancheId}`);
@@ -930,6 +1145,7 @@ export function receivePaidExtract(
     attached,
     trancheId,
     { type: 'extract_received', observation: sourced },
+    authority,
     options,
   );
 }
@@ -957,12 +1173,14 @@ export interface ObservationStepResult {
  * автомата сделки. Они возвращаются вызывающему списком — исполненное и
  * неисполненное различимы, а не молчат.
  */
-export function applyObservationEvent(
+export function applyObservationEvent<E extends ObservationEvent>(
   world: World,
   trancheId: string,
-  event: ObservationEvent,
+  event: E,
+  authority: Authority<ObservationOrigin<E>>,
   options: TrancheEventOptions,
 ): ObservationStepResult {
+  assertOrigin(observationOriginsOf(event), authority, `observation.${event.type}`);
   const runtime = trancheOf(world, trancheId);
   const deal = dealOf(world, runtime.dealId);
   const act = runtime.facts.conditionAct;
@@ -991,6 +1209,12 @@ export function applyObservationEvent(
   for (const intent of result.value.intents) {
     next = applyObservationIntent(next, trancheId, intent, options);
   }
+  // Наблюдение внесено человеком — след остаётся в мире, и из него потом
+  // работает Н2. Событие `extract_received` уже оставило его в
+  // `attachObservation`; повтор не страшен — `peopleOf` схлопывает лицо.
+  if (event.type === 'extract_received') {
+    next = recordFact(next, 'observed', trancheSubject(next, trancheId), authority);
+  }
   return { world: next, state: result.value.state, intents: result.value.intents };
 }
 
@@ -1005,17 +1229,27 @@ function applyObservationIntent(
     case 'register_filing':
       // Единственное место, где источник подачи известен достоверно (И3.2).
       // Дальше он живёт в факте сделки и в guard'е `g_no_open_filing`.
-      return registerFiling(world, runtime.dealId, intent.applicationId, intent.source, {
-        ...options,
-        actor: ORACLE_ACTOR,
-      });
+      //
+      // Разрешение — машинное: подачу зарегистрировала машина наблюдения, а не
+      // человек. Выдать его снаружи нельзя — `oracleAuthority` из `index.ts` не
+      // экспортируется, и попасть сюда можно только пройдя шаг с полномочием
+      // `record_observation`.
+      return registerFiling(
+        world,
+        runtime.dealId,
+        intent.applicationId,
+        intent.source,
+        oracleAuthority(world),
+        options,
+      );
     case 'emit_tranche_event': {
       if (intent.event === 'mismatch_detected') {
         return applyTrancheEvent(
           world,
           trancheId,
           { type: 'mismatch_detected', field: intent.field },
-          { ...options, actor: ORACLE_ACTOR },
+          oracleAuthority(world),
+          options,
         ).world;
       }
       // Наблюдение кладётся в факты **до** события: транш проверит его сам
@@ -1044,7 +1278,8 @@ function applyObservationIntent(
           evidenceBundleId,
           conditionType: intent.conditionType,
         },
-        { ...options, actor: ORACLE_ACTOR },
+        oracleAuthority(world),
+        options,
       ).world;
     }
     case 'enqueue_operator_task': {
@@ -1096,8 +1331,16 @@ export function observationSettled(world: World, trancheId: string): boolean {
 /* Автомат транша                                                            */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * Всё, чего нет ни в событии, ни в разрешении.
+ *
+ * Поля `actor` здесь **больше нет**, и это главное изменение подписи: кто
+ * совершает шаг, задаётся `Authority`, а не строкой рядом с настройками
+ * маршрута. Прежде эти два ответа жили в одном объекте и ни разу не сверялись —
+ * `trancheOptions(policy, { actor: ANALYST_ACTOR })` записывал аналитика под
+ * шагом, разрешённым кем угодно.
+ */
 export interface TrancheEventOptions {
-  readonly actor: AuditActor;
   readonly creditRoute: CreditRoute;
   /** Сырой ответ провайдера — обязателен у `settled` и `rejected`. */
   readonly payoutResponse: RawSourceRef | null;
@@ -1166,6 +1409,7 @@ function applyIntents(
   runtime: TrancheRuntime,
   transition: TrancheTransitionResult,
   event: TrancheEvent,
+  actor: AuditActor,
   options: TrancheEventOptions,
 ): Applied {
   let next: TrancheRuntime = { ...runtime, state: transition.state };
@@ -1248,7 +1492,7 @@ function applyIntents(
         chain = appendRecord(chain, {
           recordId: `${chain.chainId}:r${seq}`,
           recordedAt: auditInstant(world.now),
-          actor: options.actor,
+          actor,
           subject: auditRef('payout', intent.idempotencyKey),
           related: [auditRef('tranche', runtime.trancheId), auditRef('deal', runtime.dealId)],
           body: {
@@ -1345,7 +1589,7 @@ function applyIntents(
   chain = appendRecord(chain, {
     recordId: `${chain.chainId}:r${seq}`,
     recordedAt: auditInstant(world.now),
-    actor: options.actor,
+    actor,
     subject: auditRef('tranche', runtime.trancheId),
     related: [auditRef('deal', runtime.dealId)],
     body: {
@@ -1362,7 +1606,6 @@ function applyIntents(
 }
 
 const DEFAULT_OPTIONS: Omit<TrancheEventOptions, 'policy'> = {
-  actor: OPERATOR_ACTOR,
   creditRoute: 'external_arrival',
   payoutResponse: null,
   payoutReasonKey: null,
@@ -1382,17 +1625,43 @@ export interface TrancheStepResult {
 }
 
 /**
- * Один шаг автомата транша: редьюсер, проекция намерений, запись в журнал
- * аудита и проверка инвариантов. Отказ здесь — исключение: тест, ожидающий
- * отказа, пользуется `rejectTrancheEvent`.
+ * Один шаг автомата транша: разрешение, редьюсер, проекция намерений, запись в
+ * журнал аудита и проверка инвариантов. Отказ автомата здесь — исключение:
+ * тест, ожидающий отказа, пользуется `rejectTrancheEvent`.
+ *
+ * **Разрешение параметризовано событием.** `Authority<TrancheOrigin<E>>` — это
+ * компиляционный рубеж: `applyTrancheEvent(world, id, { type:
+ * 'release_authorized' }, operatorAuthority, options)` не собирается, потому что
+ * у выпуска поручения происхождение `approve_payout`, а не `create_deal`.
+ * Рантайм-рубеж (`assertOrigin` внутри) дублирует его для случая, когда событие
+ * приехало из-за границы процесса и типа при нём не осталось.
  */
-export function applyTrancheEvent(
+export function applyTrancheEvent<E extends TrancheEvent>(
+  world: World,
+  trancheId: string,
+  event: E,
+  authority: Authority<TrancheOrigin<E>>,
+  options: TrancheEventOptions,
+): TrancheStepResult {
+  return applyTrancheEventInternal(world, trancheId, event, authority, options);
+}
+
+/**
+ * То же без параметризации по событию: каскад сделки и намерения оракула
+ * подают событие, тип которого на месте вызова не известен статически. Проверка
+ * происхождения от этого не исчезает — она рантайм-ная и стоит первой строкой.
+ */
+function applyTrancheEventInternal(
   world: World,
   trancheId: string,
   event: TrancheEvent,
+  authority: Authority<StepOrigin>,
   options: TrancheEventOptions,
 ): TrancheStepResult {
+  assertOrigin(trancheOriginsOf(event), authority, `tranche.${event.type}`);
   const runtime = trancheOf(world, trancheId);
+  guardTrancheIdentity(world, runtime, event, authority);
+  const actor = journalActor(authority);
 
   // Машина выплаты ведётся отдельно и **раньше** машины транша: у неё легально
   // состояние «неизвестно», которого у транша нет (`STATE-MACHINES.md` §2).
@@ -1429,7 +1698,7 @@ export function applyTrancheEvent(
     );
   }
 
-  const applied = applyIntents(world, withPayouts, result.value, event, options);
+  const applied = applyIntents(world, withPayouts, result.value, event, actor, options);
 
   let chain = applied.chain;
   let seq = applied.seq;
@@ -1441,7 +1710,7 @@ export function applyTrancheEvent(
       chain = appendRecord(chain, {
         recordId: `${chain.chainId}:r${seq}`,
         recordedAt: auditInstant(world.now),
-        actor: options.actor,
+        actor,
         subject: auditRef('payout', last.idempotencyKey),
         related: [auditRef('tranche', trancheId), auditRef('deal', runtime.dealId)],
         body:
@@ -1462,21 +1731,113 @@ export function applyTrancheEvent(
     }
   }
 
+  const stepped = sealed({
+    ...world,
+    seq,
+    journal: applied.journal,
+    chain,
+    tranches: withTranche(world, applied.runtime),
+    tasks: applied.tasks,
+    notifications: applied.notifications,
+    suppressed: applied.suppressed,
+    reissuedPayouts: applied.reissued,
+    checks: world.checks,
+  });
+
   return {
-    world: sealed({
-      ...world,
-      seq,
-      journal: applied.journal,
-      chain,
-      tranches: withTranche(world, applied.runtime),
-      tasks: applied.tasks,
-      notifications: applied.notifications,
-      suppressed: applied.suppressed,
-      reissuedPayouts: applied.reissued,
-      checks: world.checks,
-    }),
+    world: BLOCKING_TRANCHE_EVENTS.includes(event.type)
+      ? recordFact(stepped, 'caused', trancheSubject(stepped, trancheId), authority)
+      : stepped,
     transition: result.value,
   };
+}
+
+/**
+ * События, после которых транш стоит: расхождение, удержание комплаенса, спор.
+ *
+ * След «кто это вызвал» кладётся именно здесь и нигде больше — из него потом
+ * работает Н5: тот, чьё действие вызвало остановку, её не снимает. Без следа
+ * `actionContextFor` вернул бы по заблокированному траншу `UNKNOWN_FACT`, и
+ * снять удержание не смог бы вообще никто — что тоже отказ, но не тот.
+ */
+const BLOCKING_TRANCHE_EVENTS: readonly TrancheEvent['type'][] = Object.freeze([
+  'mismatch_detected',
+  'operator_blocked',
+  'compliance_hold',
+  'dispute_raised',
+]);
+
+/**
+ * Шаги, у которых предмет сам называет исполнителя.
+ *
+ * Отзыв заявляет **покупатель этого транша**, а не любой обладатель полномочия
+ * стороны; новую редакцию акта принимают те, кто в ней назван. Без этой сверки
+ * полномочие `freeze_participation` означало бы «любая сторона может отозвать
+ * чужую сделку», а `record_condition_act` — «любая сторона может подписать
+ * чужой акт».
+ */
+function guardTrancheIdentity(
+  world: World,
+  runtime: TrancheRuntime,
+  event: TrancheEvent,
+  authority: Authority<StepOrigin>,
+): void {
+  if (event.type === 'revocation_requested') {
+    requireSamePerson(authority, runtime.facts.buyer.partyId, 'tranche.revocation.buyer');
+    return;
+  }
+  if (event.type === 'condition_act_amended') {
+    const acting = actingAccount(authority);
+    if (!event.acceptedBy.includes(acting)) {
+      throw new AuthorityError(`app.authority.actor_not_in_acceptance:${acting}`);
+    }
+    return;
+  }
+  if (event.type === 'approval_added') {
+    // Подпись ставится своим именем: имя в событии и лицо в сессии — одно.
+    requireSamePerson(authority, event.userId, 'tranche.approval.user');
+    return;
+  }
+  if (event.type === 'release_authorized') {
+    requireQuorum(world, runtime);
+  }
+}
+
+/**
+ * Кворум перед выпуском поручения — **по набору уровней, а не по числу строк**.
+ *
+ * `g_approvals_sufficient` в домене считает **имена**: две различные строки, ни
+ * одна из которых не равна готовившему. Этого мало ровно так, как говорит
+ * `ACTORS.md` §0 п.3: учётная запись поддержки, попавшая в список утверждающих,
+ * набирает кворум. Здесь тот же порог берётся ещё раз — набором уровней
+ * (`evaluateQuorum`, `@sdelka/auth`): одна подпись = уровень 1 (ФК), две =
+ * уровень 1 плюс уровень 2 (ФК и РО), и записи с уровнем выдаёт только
+ * `recordApproval`.
+ *
+ * Второй экземпляр правила это **не** делает: guard домена сравнивает имена,
+ * кворум — уровни, и снятие любого из двух меняет поведение (что и проверяется
+ * сценариями). Готовивший приходит из фактов мира, а не из аргумента; если мир
+ * его не знает — отказ, а не «никто не готовил».
+ */
+function requireQuorum(world: World, runtime: TrancheRuntime): void {
+  const amount = runtime.facts.collectedAmount ?? runtime.facts.requiredAmount;
+  const required = requiredApprovals(
+    runtime.facts.approvalPolicy,
+    amount,
+    runtime.facts.officialRateAtCreation,
+    runtime.facts.createdOn,
+  );
+  const prepared = actionContextFor(world, trancheSubject(world, runtime.trancheId)).preparedBy;
+  const preparedBy: ActorRef | typeof UNKNOWN_FACT =
+    prepared === UNKNOWN_FACT ? UNKNOWN_FACT : (prepared[0] ?? UNKNOWN_FACT);
+  const quorum = evaluateQuorum({
+    required,
+    preparedBy,
+    approvals: runtime.approvalRecords,
+  });
+  if (!quorum.ok) {
+    throw new AuthorityError(`app.quorum.not_met:${quorum.error}`);
+  }
 }
 
 function requireResponse(response: RawSourceRef | null): RawSourceRef {
@@ -1595,8 +1956,10 @@ export function registerFiling(
   dealId: string,
   applicationId: string,
   source: FilingSource,
+  authority: Authority<'oracle_source' | 'create_deal'>,
   options: TrancheEventOptions,
 ): World {
+  assertOrigin(['oracle_source', 'create_deal'], authority, 'deal.filing_registered');
   const deal = dealOf(world, dealId);
   const event: DealEvent = { type: 'filing_registered', applicationId, source };
   // Сделка уже прошла точку подачи: заявление у неё есть, и второй факт о том
@@ -1611,15 +1974,31 @@ export function registerFiling(
       checks: world.checks,
     });
   }
-  return applyDealEvent(world, dealId, event, options);
+  return applyDealEventInternal(world, dealId, event, authority, options);
 }
 
-export function applyDealEvent(
+/**
+ * Шаг автомата сделки. Разрешение параметризовано событием — тот же
+ * компиляционный рубеж, что у транша (`DEAL_EVENT_ORIGINS` в `origins.ts`).
+ */
+export function applyDealEvent<E extends DealEvent>(
+  world: World,
+  dealId: string,
+  event: E,
+  authority: Authority<DealOrigin<E>>,
+  options: TrancheEventOptions,
+): World {
+  return applyDealEventInternal(world, dealId, event, authority, options);
+}
+
+function applyDealEventInternal(
   world: World,
   dealId: string,
   event: DealEvent,
+  authority: Authority<StepOrigin>,
   options: TrancheEventOptions,
 ): World {
+  assertOrigin(dealOriginsOf(event), authority, `deal.${event.type}`);
   const deal = dealOf(world, dealId);
   const result = reduceDeal(deal.state, event, {
     dealId,
@@ -1642,7 +2021,7 @@ export function applyDealEvent(
     chain: record(world, {
       recordId: auditId(world, seq),
       recordedAt: auditInstant(world.now),
-      actor: options.actor,
+      actor: journalActor(authority),
       subject: auditRef('deal', dealId),
       related: [],
       body: {
@@ -1660,15 +2039,30 @@ export function applyDealEvent(
   // Каскад на транши. Без него комплаенс замораживает сделку, а её транши идут
   // к автовозврату по дедлайну (`CORE.md` Ф17).
   for (const intent of result.value.intents) {
-    next = applyDealCascade(next, dealId, intent, options);
+    next = applyDealCascade(next, dealId, intent, authority, options);
+  }
+  // След «кто вызвал остановку» — на сделке целиком: замораживает её один
+  // человек, а снимать будут двое, и Н5 обязана видеть первого.
+  if (event.type === 'compliance_hold' || event.type === 'dispute_raised') {
+    next = recordFact(next, 'caused', dealSubject(dealId), authority);
   }
   return next;
 }
 
+/**
+ * Каскад «сделка → транши».
+ *
+ * Разрешение передаётся то же, что у события сделки, и это законно ровно потому,
+ * что происхождения совпадают: `compliance_hold` и `dispute_raised` у сделки и у
+ * транша разрешены одним `run_screening`, `unfreeze` — одним `lift_block`
+ * (`origins.ts`). Совпадение не подразумевается — его проверяет `assertOrigin`
+ * внутри шага транша, и разъехавшиеся карты уронят каскад, а не пропустят его.
+ */
 function applyDealCascade(
   world: World,
   dealId: string,
   intent: Intent,
+  authority: Authority<StepOrigin>,
   options: TrancheEventOptions,
 ): World {
   const deal = dealOf(world, dealId);
@@ -1682,14 +2076,15 @@ function applyDealCascade(
         intent.reason === 'dispute'
           ? { type: 'dispute_raised', frozenBy: intent.frozenBy }
           : { type: 'compliance_hold', reason: intent.reason, frozenBy: intent.frozenBy };
-      next = applyTrancheEvent(next, trancheId, event, options).world;
+      next = applyTrancheEventInternal(next, trancheId, event, authority, options).world;
       continue;
     }
     if (intent.type === 'unfreeze_tranches') {
-      next = applyTrancheEvent(
+      next = applyTrancheEventInternal(
         next,
         trancheId,
         { type: 'unfreeze', userIds: intent.userIds, resume: intent.resume },
+        authority,
         options,
       ).world;
     }

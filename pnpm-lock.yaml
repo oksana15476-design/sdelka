@@ -57,6 +57,9 @@ importers:
       '@sdelka/audit':
         specifier: workspace:*
         version: link:../audit
+      '@sdelka/auth':
+        specifier: workspace:*
+        version: link:../auth
       '@sdelka/compliance':
         specifier: workspace:*
         version: link:../compliance
@@ -139,6 +142,9 @@ importers:
       '@sdelka/audit':
         specifier: workspace:*
         version: link:../audit
+      '@sdelka/auth':
+        specifier: workspace:*
+        version: link:../auth
       '@sdelka/compliance':
         specifier: workspace:*
         version: link:../compliance

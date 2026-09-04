@@ -2,20 +2,23 @@ import { describe, expect, it } from 'vitest';
 import { assessRefundDestination, accountFingerprint, payerKeyForDomain } from '@sdelka/compliance';
 import { accountBalance, bankNominal, clientFreeAccount, coverage } from '@sdelka/ledger';
 import { toBeneficiaryLock } from '@sdelka/compliance';
+import { STAFF } from './support/actors';
 import {
   advance,
-  applyDealEvent,
-  applyTrancheEvent,
-  approve,
-  attachObservation,
   dealStatusOf,
-  patchFacts,
-  receiveExternalPayment,
   rejectTrancheEvent,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyDealEvent,
+  applyTrancheEvent,
+  approve,
+  attachObservation,
+  patchFacts,
+  receiveExternalPayment,
+} from './support/acting';
 import {
   BUYER,
   CADASTRAL_CODE,
@@ -183,8 +186,8 @@ describe('регистрация не состоялась', () => {
       OPTIONS,
     ).world;
     expect(trancheStatusOf(world, TRANCHE_B)).toBe('release_blocked');
-    world = approve(world, TRANCHE_B, 'approver-1');
-    world = approve(world, TRANCHE_B, 'approver-2');
+    world = approve(world, TRANCHE_B, STAFF.controller);
+    world = approve(world, TRANCHE_B, STAFF.head);
     world = applyTrancheEvent(world, TRANCHE_B, { type: 'approval_added', userId: 'approver-1' }, OPTIONS).world;
     expect(trancheStatusOf(world, TRANCHE_B)).toBe('release_pending');
 

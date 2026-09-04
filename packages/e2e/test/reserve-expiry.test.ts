@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { dueTrancheEvent } from '@sdelka/domain';
+import { STAFF } from './support/actors';
 import {
   type ClientKey,
   accountBalance,
@@ -8,25 +9,28 @@ import {
   clientLockedAccount,
 } from '@sdelka/ledger';
 import {
-  OPERATOR_ACTOR,
   advance,
-  applyTrancheEvent,
   rejectTrancheEvent,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyTrancheEvent,
+} from './support/acting';
 import { DAY_MS, DEAL_AMOUNT, GEL, POLICY_VERSION, STATEMENT_SOURCE } from './support/fixtures';
 import { toReserved } from './support/paths';
 import {
   type WithdrawalStepOptions,
   type WithdrawalWorld,
-  applyWithdrawalEvent,
-  approveWithdrawal,
   rejectWithdrawalEvent,
-  requestWithdrawal,
   withWithdrawals,
 } from '@sdelka/app';
+import {
+  applyWithdrawalEvent,
+  approveWithdrawal,
+  requestWithdrawal,
+} from './support/acting';
 
 const OPTIONS = trancheOptions(POLICY_VERSION);
 /** Деньги уже на счёте клиента: откат резерва их туда возвращает, а не зачисляет. */
@@ -35,8 +39,7 @@ const DEAL = 'deal-reserve-expiry';
 const TRANCHE = 'tranche-reserve-expiry';
 
 const WITHDRAWAL_STEP: WithdrawalStepOptions = {
-  actor: OPERATOR_ACTOR,
-  policy: POLICY_VERSION,
+    policy: POLICY_VERSION,
   evidence: [STATEMENT_SOURCE],
 };
 
@@ -58,10 +61,9 @@ function preparedWithdrawal(
     withdrawalId: id,
     owner,
     amount: DEAL_AMOUNT,
-    preparedBy: 'operator-1',
   });
-  scene = approveWithdrawal(scene, id, 'approver-1');
-  return approveWithdrawal(scene, id, 'approver-2');
+  scene = approveWithdrawal(scene, id, STAFF.controller);
+  return approveWithdrawal(scene, id, STAFF.head);
 }
 
 /**

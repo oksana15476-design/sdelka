@@ -39,7 +39,14 @@ describe('назначение роли', () => {
 });
 
 describe('смена роли, когда полномочие будет выдано', () => {
-  const authority: Grant<'manage_access'> = Object.freeze({
+  /*
+   * ⚠ Приведение здесь — не небрежность, а следствие того, что `manage_access`
+   * не выдан ни одной роли: `decideCapability` такой грант не выпишет никогда,
+   * а проверить остальную часть `changeAccountRole` надо. Метка `grantBrand`
+   * ровно для того и заведена, чтобы этот литерал нельзя было написать нигде
+   * больше — приведение видно, и оно одно на весь проект вне `decide.ts`.
+   */
+  const authority = Object.freeze({
     accountId: accountId('acc-admin'),
     personId: personId('per-admin'),
     roleId: 'head_of_operations',
@@ -48,7 +55,7 @@ describe('смена роли, когда полномочие будет выд
     onDuty: false,
     decidedAt: NOW,
     journaled: true,
-  });
+  }) as unknown as Grant<'manage_access'>;
 
   it('роль себе не назначают', () => {
     const result = changeAccountRole(

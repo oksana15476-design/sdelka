@@ -2,24 +2,27 @@ import { describe, expect, it } from 'vitest';
 import { observationSatisfies } from '@sdelka/domain';
 import { money } from '@sdelka/money';
 import { accountBalance, clientLockedAccount } from '@sdelka/ledger';
+import { STAFF } from './support/actors';
 import {
   advance,
-  applyDealEvent,
-  applyObservationEvent,
-  applyTrancheEvent,
-  approve,
-  attachObservation,
   dealFactsOf,
   dealStatusOf,
   observationFromCard,
   observationSettled,
-  receivePaidExtract,
   rejectDealEvent,
   rejectTrancheEvent,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyDealEvent,
+  applyObservationEvent,
+  applyTrancheEvent,
+  approve,
+  attachObservation,
+  receivePaidExtract,
+} from './support/acting';
 import {
   APPLICATION_ID,
   CADASTRAL_CODE,
@@ -223,8 +226,8 @@ describe('оракул регистрации', () => {
 
     // Выход из разбора утверждением оператора не открывает выплату: guard'ы
     // доказательств стоят и на втором ребре.
-    let world = approve(received.world, TRANCHE, 'approver-1');
-    world = approve(world, TRANCHE, 'approver-2');
+    let world = approve(received.world, TRANCHE, STAFF.controller);
+    world = approve(world, TRANCHE, STAFF.head);
     world = applyTrancheEvent(
       world,
       TRANCHE,
@@ -328,16 +331,16 @@ describe('оракул регистрации', () => {
     let world = attachObservation(ordered.world, TRANCHE, answer.value, 'evidence-stale', POLICY);
 
     // Сегодня она годится: тот же документ, тот же транш — переход проходит.
+    // Событие порождает машина наблюдения: человеческого происхождения у
+    // `condition_established` нет, и подать его руками больше нечем.
     expect(
       trancheStatusOf(
-        applyTrancheEvent(
-          world,
+        receivePaidExtract(
+          ordered.world,
           TRANCHE,
-          {
-            type: 'condition_established',
-            evidenceBundleId: 'evidence-stale',
-            conditionType: 'registration_transfer',
-          },
+          answer.value,
+          'evidence-stale',
+          POLICY,
           OPTIONS,
         ).world,
         TRANCHE,

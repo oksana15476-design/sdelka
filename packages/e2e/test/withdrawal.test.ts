@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { verifyChain } from '@sdelka/audit';
+import { STAFF } from './support/actors';
 import {
   type ClientKey,
   accountBalance,
@@ -12,12 +13,13 @@ import { money } from '@sdelka/money';
 import {
   type World,
   AppInvariantError,
-  OPERATOR_ACTOR,
   advance,
-  applyTrancheEvent,
-  receiveExternalPayment,
   trancheOptions,
 } from '@sdelka/app';
+import {
+  applyTrancheEvent,
+  receiveExternalPayment,
+} from './support/acting';
 import {
   BANK_RESPONSE_SOURCE,
   DAY_MS,
@@ -31,19 +33,20 @@ import {
   type WithdrawalStepOptions,
   type WithdrawalWorld,
   FOREIGN_SOURCE_ACCOUNT,
-  applyWithdrawalEvent,
-  approveWithdrawal,
   rejectWithdrawalEvent,
-  requestWithdrawal,
   withWithdrawals,
   withdrawalStatusOf,
 } from '@sdelka/app';
+import {
+  applyWithdrawalEvent,
+  approveWithdrawal,
+  requestWithdrawal,
+} from './support/acting';
 
 const ROLLBACK = trancheOptions(POLICY_VERSION, { creditRoute: 'already_on_client_account' });
 
 const STEP: WithdrawalStepOptions = {
-  actor: OPERATOR_ACTOR,
-  policy: POLICY_VERSION,
+    policy: POLICY_VERSION,
   evidence: [STATEMENT_SOURCE],
 };
 
@@ -102,17 +105,16 @@ describe('вывод свободных денег со счёта клиент�
       withdrawalId: 'wd-1',
       owner: buyer,
       amount: PART,
-      preparedBy: 'operator-1',
     });
 
     // --- Одной подписи мало: guard называется поимённо ---
-    scene = approveWithdrawal(scene, 'wd-1', 'approver-1');
+    scene = approveWithdrawal(scene, 'wd-1', STAFF.controller);
     const one = rejectWithdrawalEvent(scene, 'wd-1', { type: 'withdrawal_approved' });
     expect(one.code).toBe('domain.guard.failed');
     expect(one.failedGuards).toEqual(['g_approvals_sufficient']);
 
     // --- Две разные подписи ---
-    scene = approveWithdrawal(scene, 'wd-1', 'approver-2');
+    scene = approveWithdrawal(scene, 'wd-1', STAFF.head);
     scene = applyWithdrawalEvent(scene, 'wd-1', { type: 'withdrawal_approved' }, STEP);
     expect(withdrawalStatusOf(scene, 'wd-1')).toBe('approved');
 
@@ -158,7 +160,6 @@ describe('вывод свободных денег со счёта клиент�
       withdrawalId: 'wd-6',
       owner: start.buyer,
       amount: PART,
-      preparedBy: 'operator-1',
     });
 
     // Три подписи, из которых различных — две: `g_approvals_sufficient`
@@ -166,9 +167,9 @@ describe('вывод свободных денег со счёта клиент�
     // намеренно: guard, который никогда не отказывает в одиночку, невозможно
     // проверить поимённо (`STATE-MACHINES.md` §7) — его отказ всегда объясним
     // соседом.
-    scene = approveWithdrawal(scene, 'wd-6', 'approver-1');
-    scene = approveWithdrawal(scene, 'wd-6', 'approver-2');
-    scene = approveWithdrawal(scene, 'wd-6', 'approver-1');
+    scene = approveWithdrawal(scene, 'wd-6', STAFF.controller);
+    scene = approveWithdrawal(scene, 'wd-6', STAFF.head);
+    scene = approveWithdrawal(scene, 'wd-6', STAFF.controller);
     const repeated = rejectWithdrawalEvent(scene, 'wd-6', { type: 'withdrawal_approved' });
     expect(repeated.failedGuards).toEqual(['g_withdrawal_approvers_distinct']);
 
@@ -178,10 +179,12 @@ describe('вывод свободных денег со счёта клиент�
       withdrawalId: 'wd-6b',
       owner: start.buyer,
       amount: PART,
-      preparedBy: 'operator-1',
     });
-    own = approveWithdrawal(own, 'wd-6b', 'approver-1');
-    own = approveWithdrawal(own, 'wd-6b', 'operator-1');
+    own = approveWithdrawal(own, 'wd-6b', STAFF.controller);
+    // Подпись готовившего заявку теперь невозможна вовсе: `approve_payout` у
+    // оператора нет. Прежде она ставилась и отсеивалась guard'ом; рубеж
+    // переехал на право, а guard остался вторым — строкой ниже.
+    expect(() => approveWithdrawal(own, 'wd-6b', STAFF.operator)).toThrow('e2e.withdrawal.denied');
     const prepared = rejectWithdrawalEvent(own, 'wd-6b', { type: 'withdrawal_approved' });
     expect(prepared.failedGuards).toContain('g_approvals_sufficient');
   });
@@ -206,10 +209,9 @@ describe('вывод свободных денег со счёта клиент�
       withdrawalId: 'wd-2',
       owner: buyer,
       amount: DEAL_AMOUNT,
-      preparedBy: 'operator-1',
     });
-    scene = approveWithdrawal(scene, 'wd-2', 'approver-1');
-    scene = approveWithdrawal(scene, 'wd-2', 'approver-2');
+    scene = approveWithdrawal(scene, 'wd-2', STAFF.controller);
+    scene = approveWithdrawal(scene, 'wd-2', STAFF.head);
 
     const locked = rejectWithdrawalEvent(scene, 'wd-2', { type: 'withdrawal_approved' });
     expect(locked.failedGuards).toEqual(['g_free_balance_sufficient']);
@@ -235,10 +237,9 @@ describe('вывод свободных денег со счёта клиент�
       owner: buyer,
       amount: PART,
       sourceAccount: FOREIGN_SOURCE_ACCOUNT,
-      preparedBy: 'operator-1',
     });
-    scene = approveWithdrawal(scene, 'wd-3', 'approver-1');
-    scene = approveWithdrawal(scene, 'wd-3', 'approver-2');
+    scene = approveWithdrawal(scene, 'wd-3', STAFF.controller);
+    scene = approveWithdrawal(scene, 'wd-3', STAFF.head);
 
     // Ребро с отрицанием guard'а: чужой или неизвестный счёт-источник — это не
     // отказ клиенту, а работа человека. Вывод создаётся, но идёт в `blocked`.
@@ -254,10 +255,9 @@ describe('вывод свободных денег со счёта клиент�
       owner: buyer,
       amount: PART,
       sourceAccount: null,
-      preparedBy: 'operator-1',
     });
-    unknown = approveWithdrawal(unknown, 'wd-3b', 'approver-1');
-    unknown = approveWithdrawal(unknown, 'wd-3b', 'approver-2');
+    unknown = approveWithdrawal(unknown, 'wd-3b', STAFF.controller);
+    unknown = approveWithdrawal(unknown, 'wd-3b', STAFF.head);
     unknown = applyWithdrawalEvent(unknown, 'wd-3b', { type: 'withdrawal_approved' }, STEP);
     expect(withdrawalStatusOf(unknown, 'wd-3b')).toBe('blocked');
   });
@@ -272,10 +272,9 @@ describe('вывод свободных денег со счёта клиент�
         withdrawalId: id,
         owner: buyer,
         amount: PART,
-        preparedBy: 'operator-1',
       });
-      scene = approveWithdrawal(scene, id, 'approver-1');
-      scene = approveWithdrawal(scene, id, 'approver-2');
+      scene = approveWithdrawal(scene, id, STAFF.controller);
+      scene = approveWithdrawal(scene, id, STAFF.head);
       scene = applyWithdrawalEvent(scene, id, { type: 'withdrawal_approved' }, STEP);
     }
 
@@ -308,10 +307,9 @@ describe('вывод свободных денег со счёта клиент�
       withdrawalId: 'wd-5',
       owner: buyer,
       amount: PART,
-      preparedBy: 'operator-1',
     });
-    scene = approveWithdrawal(scene, 'wd-5', 'approver-1');
-    scene = approveWithdrawal(scene, 'wd-5', 'approver-2');
+    scene = approveWithdrawal(scene, 'wd-5', STAFF.controller);
+    scene = approveWithdrawal(scene, 'wd-5', STAFF.head);
     scene = applyWithdrawalEvent(scene, 'wd-5', { type: 'withdrawal_approved' }, STEP);
     scene = applyWithdrawalEvent(scene, 'wd-5', { type: 'withdrawal_dispatched' }, STEP);
 
@@ -371,10 +369,9 @@ describe('вывод свободных денег со счёта клиент�
       withdrawalId: 'wd-7',
       owner: buyer,
       amount: PART,
-      preparedBy: 'operator-1',
     });
-    scene = approveWithdrawal(scene, 'wd-7', 'approver-1');
-    scene = approveWithdrawal(scene, 'wd-7', 'approver-2');
+    scene = approveWithdrawal(scene, 'wd-7', STAFF.controller);
+    scene = approveWithdrawal(scene, 'wd-7', STAFF.head);
 
     // Все пять guard'ов вывода пропускают: свободный остаток есть, источник
     // известен, подписей две и они разные, других поручений нет.

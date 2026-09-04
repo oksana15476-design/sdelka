@@ -9,7 +9,13 @@ import {
   isTerminalTrancheStatus,
   trancheStateAge,
 } from '@sdelka/domain';
-import { SYSTEM_ACTOR, type TrancheEventOptions, applyTrancheEvent } from './flow';
+import {
+  type TrancheEventOptions,
+  type TrancheStepResult,
+  applyDealEvent,
+  applyTrancheEvent,
+} from './flow';
+import { clockAuthority } from './authority';
 import { type TrancheRuntime, type World, trancheOf } from './world';
 
 /**
@@ -41,6 +47,50 @@ import { type TrancheRuntime, type World, trancheOf } from './world';
  *   таблице часов закрывает именно она: дедлайн двигает деньги, возраст поднимает
  *   человека, и смешивать их нельзя (`STATE-MACHINES.md` §5).
  */
+
+/**
+ * Один шаг часов по одному траншу.
+ *
+ * Экспортируется, и это не удобство: события `reserve_expired` и
+ * `deadline_reached` разрешены **только** происхождением `clock`, а разрешение
+ * часов из пакета не выходит. Значит подать их иначе, чем через часы, нельзя
+ * вовсе — и это правильно: сегодня их подавал кто угодно, в том числе на
+ * траншe, у которого срок ещё не наступил.
+ *
+ * `null` — часы молчат: срок не наступил либо состояние часов не имеет
+ * (`frozen` — у него нет поля дедлайна вовсе). Молчание возвращается значением,
+ * а не исключением: «ещё не пора» — это ответ, а не ошибка.
+ */
+export function tickTranche(
+  world: World,
+  trancheId: string,
+  options: TrancheEventOptions,
+): TrancheStepResult | null {
+  const runtime = trancheOf(world, trancheId);
+  if (isTerminalTrancheStatus(runtime.state.status)) return null;
+  const due = dueTrancheEvent(runtime.state, world.now);
+  if (due === null) return null;
+  return applyTrancheEvent(world, trancheId, due, clockAuthority(world), options);
+}
+
+/**
+ * Срок сделки истёк — вход часов на автомате сделки.
+ *
+ * ⚠ **[открыто] и названо, а не спрятано.** У сделки нет часов:
+ * `packages/domain/src/schedule.ts` описывает `dueTrancheEvent` и прямо
+ * оговаривает, что события называются только для транша. Значит проверить
+ * «а наступил ли срок» здесь **нечем** — в отличие от `tickTranche`, где срок
+ * лежит в состоянии.
+ *
+ * Что эта функция всё-таки даёт: событие `deadline_reached` у сделки перестаёт
+ * быть доступно человеку. Разрешение — часы, а `clockAuthority` из пакета не
+ * выходит; guard `g_no_open_filing` (запрет автооткрата при поданном
+ * заявлении) стоит на своём месте и роняет шаг там, где должен. До появления
+ * `dueDealEvent` это самое строгое, что выразимо.
+ */
+export function expireDeal(world: World, dealId: string, options: TrancheEventOptions): World {
+  return applyDealEvent(world, dealId, { type: 'deadline_reached' }, clockAuthority(world), options);
+}
 
 /** Что тик сделал с одним траншем. Событие — то, которое вернул домен. */
 export interface FiredTrancheEvent {
@@ -102,15 +152,10 @@ export function tick(
 
     // Часы системы: одно состояние на вызов. Список «у кого истекло» — забота
     // источника, и здесь его роль играет обход карты мира.
+    const from = runtime.state.status;
     const due = dueTrancheEvent(runtime.state, next.now);
-    if (due !== null) {
-      const from = runtime.state.status;
-      const step = applyTrancheEvent(next, trancheId, due, {
-        ...options,
-        // Переход по дедлайну совершает система, а не человек: журнал аудита
-        // обязан назвать это своим именем, а не именем дежурного оператора.
-        actor: SYSTEM_ACTOR,
-      });
+    const step = tickTranche(next, trancheId, options);
+    if (due !== null && step !== null) {
       next = step.world;
       fired.push({ trancheId, event: due, from, to: step.transition.state.status });
     }

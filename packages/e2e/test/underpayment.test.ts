@@ -4,13 +4,15 @@ import { accountBalance, bankNominal, clientFreeAccount, clientLockedAccount, co
 import { money } from '@sdelka/money';
 import {
   advance,
-  applyTrancheEvent,
-  receiveExternalPayment,
   rejectTrancheEvent,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyTrancheEvent,
+  receiveExternalPayment,
+} from './support/acting';
 import {
   BUYER,
   DAY_MS,

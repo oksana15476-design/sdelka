@@ -1,5 +1,4 @@
 import {
-  type AuditActor,
   type NonEmpty,
   type RawSourceRef,
   appendRecord,
@@ -31,6 +30,28 @@ import {
   refundToSourceAccount,
 } from '@sdelka/ledger';
 import type { CurrencyCode, Money } from '@sdelka/money';
+import type { Result } from '@sdelka/domain';
+import {
+  type ActionContext,
+  type ActorRef,
+  type ApprovalRecord,
+  type Capability,
+  type Denial,
+  UNKNOWN_FACT,
+  evaluateQuorum,
+  recordApproval,
+} from '@sdelka/auth';
+import {
+  type Authority,
+  AuthorityError,
+  actingAccount,
+  actingPerson,
+  actingRole,
+  assertOrigin,
+  authorizeWithContext,
+  journalActor,
+} from './authority';
+import { type WithdrawalOrigin, withdrawalOriginsOf } from './origins';
 import { type World, payerOf, sealed } from './world';
 
 /**
@@ -75,7 +96,24 @@ export interface WithdrawalRuntime {
   /** `null` — счёт-источник неизвестен: вывод уйдёт в `blocked`, а не наружу. */
   readonly sourceAccount: SourceAccountRef | null;
   readonly preparedBy: string | null;
+  /**
+   * Тот же готовивший, но лицом целиком: учётная запись **и** человек.
+   * `preparedBy` рядом — строка для фактов домена (`ClientAccountFacts`, чужой
+   * пакет); Н1 в кворуме сравнивает пару, потому что одна учётная запись и один
+   * человек — не одно и то же (`@sdelka/auth`, `ids.ts`).
+   */
+  readonly preparerRef: ActorRef;
   readonly approvals: readonly Approval[];
+  /** Подписи с уровнем роли — как у транша, и по той же причине (`ACTORS.md` §5.2). */
+  readonly approvalRecords: readonly ApprovalRecord[];
+  /**
+   * Чьё действие увело вывод в `blocked`. `null` — не уводило ничьё.
+   *
+   * Нужно Н5: снимать удержание не может тот, кто его вызвал. Пока поле пусто, а
+   * состояние `blocked`, факт считается **неизвестным**, и снятие отказывает —
+   * см. `withdrawalActionContext`.
+   */
+  readonly blockedBy: ActorRef | null;
 }
 
 /**
@@ -209,6 +247,62 @@ export function withdrawalFacts(
 }
 
 /* ------------------------------------------------------------------------- */
+/* Факты разделения обязанностей по заявке на вывод                          */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Факты о прошлом для заявки на вывод.
+ *
+ * Отдельная функция, а не `actionContextFor(world, …)`, ровно потому, что
+ * выводы живут парой `WithdrawalWorld`, а не полем `World` (названо в
+ * `docs/product/APP-LAYER.md` §5 как незакрытое). Собираются они всё так же
+ * **из состояния**, а не из аргументов вызывающего:
+ *
+ * - готовивший — из самой заявки, куда его положило разрешение;
+ * - наблюдений у вывода не бывает вовсе — это «никто», утверждение, за которое
+ *   отвечает мир, а не «неизвестно»;
+ * - счёт-источник заявлен вместе с заявкой, то есть тем же лицом;
+ * - вызвавший удержание — из заявки; если она `blocked`, а лица нет, факт
+ *   **неизвестен**, и снятие отказывает.
+ */
+export function withdrawalActionContext(
+  scene: WithdrawalWorld,
+  withdrawalId: string,
+): ActionContext {
+  const runtime = runtimeOf(scene, withdrawalId);
+  const preparer = Object.freeze([runtime.preparerRef]);
+  return Object.freeze({
+    preparedBy: preparer,
+    observedBy: Object.freeze([]),
+    beneficiaryChangeRequestedBy: preparer,
+    causedBy:
+      runtime.blockedBy !== null
+        ? Object.freeze([runtime.blockedBy])
+        : runtime.state.status === 'blocked'
+          ? UNKNOWN_FACT
+          : Object.freeze([]),
+  });
+}
+
+/**
+ * Разрешение на шаг по выводу. Факты берутся из заявки — см. выше; подставить
+ * их вызывающему нечем, `authorizeWithContext` наружу пакета не выходит.
+ */
+export function authorizeWithdrawal<C extends Capability>(
+  scene: WithdrawalWorld,
+  sessionId: string,
+  capability: C,
+  withdrawalId: string,
+): Result<Authority<C>, Denial> {
+  return authorizeWithContext(
+    scene.world,
+    sessionId,
+    capability,
+    withdrawalActionContext(scene, withdrawalId),
+  );
+}
+
+/* ------------------------------------------------------------------------- */
 /* Шаги                                                                      */
 /* ------------------------------------------------------------------------- */
 
@@ -217,7 +311,6 @@ export interface WithdrawalSpec {
   readonly owner: ClientKey;
   readonly amount: Money<CurrencyCode>;
   readonly sourceAccount?: SourceAccountRef | null;
-  readonly preparedBy?: string | null;
 }
 
 /**
@@ -244,10 +337,24 @@ export const FOREIGN_SOURCE_ACCOUNT: SourceAccountRef = Object.freeze({
   holderIsPayer: false,
 });
 
+/**
+ * Заявка на вывод.
+ *
+ * `preparedBy` полем спецификации **больше нет**: готовивший — тот, кто завёл
+ * заявку, и от него зависит Н1 у подписи (`g_preparer_not_approver` домена).
+ * Свободное поле здесь означало, что готовившим можно назвать кого угодно, — то
+ * есть подписать собственную заявку, назвавшись чужим именем.
+ *
+ * ⚠ **[открыто]** Полномочия «запросить вывод остатка» в `ACTORS.md` §5.1 нет;
+ * взято самое узкое существующее — `create_deal` (одна роль-носитель, класс
+ * `prepare`). См. оговорку в `flow.ts` у денежных шагов учёта.
+ */
 export function requestWithdrawal(
   scene: WithdrawalWorld,
   spec: WithdrawalSpec,
+  authority: Authority<'create_deal'>,
 ): WithdrawalWorld {
+  assertOrigin(['create_deal'], authority, 'withdrawal.requested');
   if (scene.withdrawals.has(spec.withdrawalId)) {
     throw new Error(`app.withdrawal.duplicate:${spec.withdrawalId}`);
   }
@@ -256,8 +363,11 @@ export function requestWithdrawal(
     owner: spec.owner,
     amount: spec.amount,
     sourceAccount: spec.sourceAccount === undefined ? KNOWN_SOURCE_ACCOUNT : spec.sourceAccount,
-    preparedBy: spec.preparedBy ?? null,
+    preparedBy: actingAccount(authority),
+    preparerRef: actingPerson(authority),
     approvals: Object.freeze([]),
+    approvalRecords: Object.freeze([]),
+    blockedBy: null,
   };
   const next = new Map(scene.withdrawals);
   next.set(spec.withdrawalId, runtime);
@@ -266,24 +376,36 @@ export function requestWithdrawal(
   return { world: sealed({ ...scene.world, checks: scene.world.checks }), withdrawals: next };
 }
 
-/** Подпись под выводом. Своя же подпись готовившего не считается — guard'ом. */
+/**
+ * Подпись под выводом. Своя же подпись готовившего не считается — guard'ом.
+ *
+ * Имя подписавшего — из разрешения, а не из аргумента: свободный `userId`
+ * набирал «четыре глаза» перечислением строк. Рядом с именем кладётся запись с
+ * уровнем роли: порог у вывода тот же, что у выплаты по траншу.
+ */
 export function approveWithdrawal(
   scene: WithdrawalWorld,
   withdrawalId: string,
-  userId: string,
+  authority: Authority<'approve_payout'>,
 ): WithdrawalWorld {
+  assertOrigin(['approve_payout'], authority, 'withdrawal.approve');
   const runtime = runtimeOf(scene, withdrawalId);
+  const person = actingPerson(authority);
+  const approval = recordApproval(person, actingRole(authority), scene.world.now);
+  if (!approval.ok) {
+    throw new AuthorityError(`app.approval.level_missing:${approval.error}`);
+  }
   return {
     world: scene.world,
     withdrawals: replace(scene, withdrawalId, {
       ...runtime,
-      approvals: [...runtime.approvals, { userId }],
+      approvals: [...runtime.approvals, { userId: person.accountId }],
+      approvalRecords: [...runtime.approvalRecords, approval.value],
     }),
   };
 }
 
 export interface WithdrawalStepOptions {
-  readonly actor: AuditActor;
   readonly policy: string;
   /** Ответ банка. У `settled` и `rejected` обязателен типом записи. */
   readonly response?: RawSourceRef | null;
@@ -308,19 +430,29 @@ function meta(world: World, label: string): { readonly meta: EntryMeta; readonly
  * отказа, пользуется `rejectWithdrawalEvent` и разбирает `failedGuards`
  * поимённо, как требует `STATE-MACHINES.md` §7.
  */
-export function applyWithdrawalEvent(
+export function applyWithdrawalEvent<E extends WithdrawalEvent>(
   scene: WithdrawalWorld,
   withdrawalId: string,
-  event: WithdrawalEvent,
+  event: E,
+  authority: Authority<WithdrawalOrigin<E>>,
   options: WithdrawalStepOptions,
 ): WithdrawalWorld {
+  assertOrigin(withdrawalOriginsOf(event), authority, `withdrawal.${event.type}`);
   const runtime = runtimeOf(scene, withdrawalId);
+  if (event.type === 'withdrawal_approved') {
+    requireWithdrawalQuorum(runtime);
+  }
   const facts = withdrawalFacts(scene, withdrawalId);
   const result = reduceWithdrawal(runtime.state, event, facts);
   if (!result.ok) {
     throw new Error(`app.withdrawal.rejected:${result.error.code}:${result.error.failedGuards.join(',')}`);
   }
-  const moved: WithdrawalRuntime = { ...runtime, state: result.value.state };
+  const moved: WithdrawalRuntime = {
+    ...runtime,
+    state: result.value.state,
+    // Кто увёл вывод в удержание — след для Н5. Кладётся здесь и нигде больше.
+    ...(event.type === 'withdrawal_blocked' ? { blockedBy: actingPerson(authority) } : {}),
+  };
   const world = scene.world;
 
   /*
@@ -347,7 +479,7 @@ export function applyWithdrawalEvent(
   const chain = appendRecord(world.chain, {
     recordId: `${world.chain.chainId}:r${seq}`,
     recordedAt: auditInstant(world.now),
-    actor: options.actor,
+    actor: journalActor(authority),
     subject,
     related: [],
     body: bodyFor(event, moved, options),
@@ -421,6 +553,32 @@ function bodyFor(
     reasonKeys: Object.freeze([`withdrawal.${runtime.state.status}`]),
     evidence: options.evidence,
   };
+}
+
+/**
+ * Кворум под выводом — набором уровней, а не числом строк.
+ *
+ * Ступень у вывода одна: **одна подпись уровня 1**. Лестницы тарифа у выводов
+ * нет (`ClientAccountFacts` её не несёт), поэтому порог здесь не считается по
+ * сумме, а берётся минимальным из выразимых, — и это самый строгий выбор из
+ * доступных: «ноль подписей» невыразим типом `ApprovalRequirement`.
+ *
+ * ⚠ **[открыто]** Ступень вывода по сумме документом не описана. Если она
+ * появится, её место — в `ClientAccountFacts` рядом с `approvals`, и тогда
+ * `required` придёт оттуда, как у транша.
+ */
+function requireWithdrawalQuorum(runtime: WithdrawalRuntime): void {
+  const quorum = evaluateQuorum({
+    required: 1,
+    // Готовивший известен из самой заявки: его имя положило туда разрешение, а
+    // не аргумент. `UNKNOWN_FACT` остаётся выразимым и отказывает — на случай,
+    // когда заявка приедет из хранилища без лица.
+    preparedBy: runtime.preparerRef ?? UNKNOWN_FACT,
+    approvals: runtime.approvalRecords,
+  });
+  if (!quorum.ok) {
+    throw new AuthorityError(`app.quorum.not_met:${quorum.error}`);
+  }
 }
 
 /** Отказ автомата как значение: тест, который его ждёт, обязан его разобрать. */

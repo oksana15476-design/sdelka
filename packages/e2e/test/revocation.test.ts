@@ -2,20 +2,23 @@ import { describe, expect, it } from 'vitest';
 import { money } from '@sdelka/money';
 import { payerKeyForDomain } from '@sdelka/compliance';
 import { accountBalance, bankOperating, clientFreeAccount } from '@sdelka/ledger';
+import { STAFF } from './support/actors';
 import {
   type World,
-  applyDealEvent,
-  applyTrancheEvent,
-  approve,
-  attachObservation,
   dealStatusOf,
   feeForTranche,
-  receiveTrancheFee,
-  receiveExternalPayment,
   rejectTrancheEvent,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
+import {
+  applyDealEvent,
+  applyTrancheEvent,
+  approve,
+  receiveTrancheFee,
+  receiveExternalPayment,
+} from './support/acting';
+import { establishCondition } from './support/paths';
 import {
   BANK_RESPONSE_SOURCE,
   BUYER,
@@ -24,7 +27,6 @@ import {
   POLICY_VERSION,
   SELLER,
   CADASTRAL_CODE,
-  POLICY,
   registryWithTransfer,
 } from './support/fixtures';
 import { openDeal } from './support/open';
@@ -129,13 +131,10 @@ describe('отзыв средств покупателем', () => {
 
     const answer = registryWithTransfer().paidExtract(CADASTRAL_CODE);
     if (answer.kind !== 'found') throw new Error('unreachable');
-    world = attachObservation(world, 'tranche-revoke-c', answer.value, 'evidence-bundle-3', POLICY);
-    world = applyTrancheEvent(
-      world,
-      'tranche-revoke-c',
-      { type: 'condition_established', evidenceBundleId: 'evidence-bundle-3', conditionType: 'registration_transfer' },
-      OPTIONS,
-    ).world;
+    // Условие устанавливает **машина наблюдения**, а не тест событием: у
+    // события `condition_established` человеческого происхождения нет вовсе
+    // (`origins.ts`), и подать его руками больше нечем.
+    world = establishCondition(world, 'tranche-revoke-c', answer.value, 'evidence-bundle-3');
     expect(trancheStatusOf(world, 'tranche-revoke-c')).toBe('release_pending');
 
     // Отзыв после установления условия не принимается: у него нет предмета.
@@ -147,8 +146,8 @@ describe('отзыв средств покупателем', () => {
     expect(refused.code).toBe('domain.transition.not_allowed');
 
     world = applyDealEvent(world, 'deal-revoke-c', { type: 'condition_established', conditionType: 'registration_transfer' }, OPTIONS);
-    world = approve(world, 'tranche-revoke-c', 'approver-1');
-    world = approve(world, 'tranche-revoke-c', 'approver-2');
+    world = approve(world, 'tranche-revoke-c', STAFF.controller);
+    world = approve(world, 'tranche-revoke-c', STAFF.head);
     world = applyTrancheEvent(world, 'tranche-revoke-c', { type: 'release_authorized' }, OPTIONS).world;
     world = applyTrancheEvent(
       world,
