@@ -6,15 +6,36 @@ import {
   applyDealEvent,
   applyTrancheEvent,
   approve,
-  attachRegistryExtract,
+  applyObservationEvent,
+  attachObservation,
   receiveExternalPayment,
+  receivePaidExtract,
   trancheOptions,
-} from '../../src/index';
-import type { CurrencyCode, Money } from '@sdelka/money';
-import { BUYER, DEAL_AMOUNT, POLICY_VERSION, SELLER, extractOf, registryWithTransfer } from './fixtures';
+} from '@sdelka/app';
+import { type CurrencyCode, type Money, money } from '@sdelka/money';
+import {
+  APPLICATION_ID,
+  BUYER,
+  CADASTRAL_CODE,
+  DEAL_AMOUNT,
+  POLICY,
+  POLICY_VERSION,
+  SELLER,
+  cardOf,
+  extractOf,
+  registryWithApplicationCard,
+  registryWithTransfer,
+} from './fixtures';
 import { openDeal } from './open';
 
 const OPTIONS = trancheOptions(POLICY_VERSION);
+/**
+ * Стоимость платной выписки. Намерение `recognise_oracle_cost` приложением
+ * сегодня **не исполняется** — шаблона учёта под расход оракула в словаре нет
+ * (`ORACLE.md` §11), — но величина обязана быть целой минорной единицей уже
+ * сейчас: красная линия №4 не знает о том, что проводки ещё нет.
+ */
+const EXTRACT_COST = money('GEL', 1_000n);
 /** Деньги уже на свободной части счёта: зачисление сделано отдельным событием. */
 const ATTACHED = trancheOptions(POLICY_VERSION, { creditRoute: 'already_on_client_account' });
 
@@ -88,25 +109,89 @@ export async function toReserved(options: PathOptions): Promise<Advanced> {
  * дальше не проходит. Слить эту функцию с `toReleasePending` значило бы лишить
  * такой сценарий начала.
  */
-export async function toConditionReady(options: PathOptions): Promise<Advanced> {
+/**
+ * Наблюдение доведено до момента «выписка заказана»: сторона назвала номер,
+ * карточка заявления его подтвердила, регламентный срок истёк, выписка заказана.
+ *
+ * Все четыре шага идут через машину наблюдения (`@sdelka/oracle`), а не
+ * подставляются фактами. До этого батча заявление и наблюдение приходили в мир
+ * присваиванием, и `g_no_open_filing` со `g_observation_sufficient` не звались
+ * ни из одного сквозного сценария — то есть проверялись ровно нигде.
+ */
+export async function toExtractOrdered(options: PathOptions): Promise<Advanced> {
   const reserved = await toReserved(options);
   let world = applyDealEvent(reserved.world, options.dealId, { type: 'tranches_reserved' }, OPTIONS);
-  world = applyDealEvent(world, options.dealId, { type: 'filing_registered', applicationId: `app-${options.trancheId}` }, OPTIONS);
-  const extract = extractOf(registryWithTransfer(), 'cadastral');
-  world = attachRegistryExtract(world, options.trancheId, extract, `evidence-${options.trancheId}`);
+  world = applyObservationEvent(world, options.trancheId, { type: 'observation_started' }, OPTIONS).world;
+  world = applyObservationEvent(
+    world,
+    options.trancheId,
+    { type: 'filing_claimed', applicationId: APPLICATION_ID, byParty: BUYER.partyId },
+    OPTIONS,
+  ).world;
+  const card = cardOf(registryWithApplicationCard(), APPLICATION_ID);
+  world = applyObservationEvent(
+    world,
+    options.trancheId,
+    {
+      type: 'filing_card_observed',
+      applicationId: card.applicationId,
+      cadastralCode: card.cadastralCode,
+      applicationStatus: card.applicationStatus,
+    },
+    OPTIONS,
+  ).world;
+  world = applyObservationEvent(world, options.trancheId, { type: 'statutory_term_elapsed' }, OPTIONS).world;
+  world = applyObservationEvent(
+    world,
+    options.trancheId,
+    { type: 'extract_ordered', cost: EXTRACT_COST },
+    OPTIONS,
+  ).world;
   return { ...reserved, world };
 }
 
-export async function toReleasePending(options: PathOptions): Promise<Advanced> {
-  const ready = await toConditionReady(options);
-  let world = applyTrancheEvent(
-    ready.world,
+/**
+ * Транш зарезервирован, заявка подана и подтверждена, платная выписка
+ * приложена — всё, кроме самого события `condition_established`.
+ *
+ * Точка остановки выбрана не для красоты: ровно здесь стоит первое из двух
+ * рёбер пути выплаты, и сценарий с реквизитами, прошедшими одну сверку имени,
+ * дальше не проходит.
+ *
+ * ⚠ Выписка здесь **прикладывается, но не подаётся машине**: подача — это уже
+ * `condition_established`, а нам нужна остановка до него. Поэтому используется
+ * `attachObservation`, а не `receivePaidExtract`.
+ */
+export async function toConditionReady(options: PathOptions): Promise<Advanced> {
+  const ordered = await toExtractOrdered(options);
+  const extract = extractOf(registryWithTransfer(), CADASTRAL_CODE);
+  const world = attachObservation(
+    ordered.world,
     options.trancheId,
-    { type: 'condition_established', evidenceBundleId: `evidence-${options.trancheId}`, conditionType: 'registration_transfer' },
+    extract,
+    `evidence-${options.trancheId}`,
+    POLICY,
+  );
+  return { ...ordered, world };
+}
+
+export async function toReleasePending(options: PathOptions): Promise<Advanced> {
+  const ordered = await toExtractOrdered(options);
+  const extract = extractOf(registryWithTransfer(), CADASTRAL_CODE);
+  // Условие устанавливает **оракул** полученной выпиской, а не тест событием:
+  // `condition_established` порождается намерением машины наблюдения
+  // (`STATE-MACHINES.md` §8), и подать его мимо неё значит проверять контур,
+  // которого в продукте нет.
+  let world = receivePaidExtract(
+    ordered.world,
+    options.trancheId,
+    extract,
+    `evidence-${options.trancheId}`,
+    POLICY,
     OPTIONS,
   ).world;
   world = applyDealEvent(world, options.dealId, { type: 'condition_established', conditionType: 'registration_transfer' }, OPTIONS);
-  return { ...ready, world };
+  return { ...ordered, world };
 }
 
 export async function toPayingOut(options: PathOptions): Promise<Advanced> {

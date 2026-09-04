@@ -21,7 +21,7 @@ import {
 import { RELEASE_CONDITION_TYPES, instant } from '@sdelka/domain';
 import { clientKey } from '@sdelka/ledger';
 import { CURRENCY_CODES, isCurrencyCode } from '@sdelka/money';
-import { toClientKey } from '../src/index';
+import { toClientKey } from '@sdelka/app';
 import { BUYER_DOCUMENT, POLICY_VERSION } from './support/fixtures';
 
 /**

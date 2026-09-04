@@ -1,4 +1,5 @@
 import {
+  type ConditionAct,
   type DurationMs,
   type FreezeReason,
   type Instant,
@@ -24,13 +25,16 @@ import { CONDITION_ACT, NOW } from './facts';
 export function stateAt(
   status: ThawedTrancheStatus,
   enteredAt: Instant = NOW,
+  // Акт есть у всего, что вышло из `pending`: до него деньги не принимаются.
+  // Параметр нужен тестам, где акт транша отличается от базового: тип условия
+  // события сверяется с типом в акте (E3-1, ORACLE.md §6.5).
+  conditionAct: ConditionAct | null = status === 'pending' ? null : CONDITION_ACT,
 ): TrancheState {
   return nonTerminalTrancheState(
     status,
     deadline(plus(NOW, DEFAULT_DEADLINE_POLICY[status])),
     enteredAt,
-    // Акт есть у всего, что вышло из `pending`: до него деньги не принимаются.
-    status === 'pending' ? null : CONDITION_ACT,
+    conditionAct,
   );
 }
 

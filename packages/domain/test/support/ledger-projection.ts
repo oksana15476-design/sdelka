@@ -19,6 +19,8 @@ import {
   unlockToClientAccount,
   refundToSourceAccount,
   writeOffUnclaimed,
+  accrueFee,
+  receiveFee,
 } from '@sdelka/ledger';
 import { type Rational, split } from '@sdelka/money';
 import type { Intent } from '../../src/index';
@@ -82,7 +84,21 @@ export function projectIntents(
       // Комиссию считает `@sdelka/money` (§4.3): остаток от округления всегда
       // у получателя, поэтому она берётся вычитанием, а не умножением.
       const parts = split(intent.amount, [{ key: 'fee:income', rate: options.feeRate }]);
-      const fee = parts.deductions[0]?.amount ?? null;
+      const feeAmount = parts.deductions[0]?.amount ?? null;
+      // Удержание принимает НАЧИСЛЕНИЕ, а не сумму: Ф16 требует двух встречных
+      // фактов, и запись расчёта ссылается на то начисление, из которого
+      // удерживает. Сумма без начисления — «уменьшенный платёж», то есть ровно
+      // то оформление, при котором налоговой базой становится весь оборот.
+      const accrual =
+        feeAmount === null
+          ? null
+          : accrueFee(
+              nextMeta('2026-09-03T11:59:00Z'),
+              deal,
+              feeAmount,
+              'tariff-v1',
+            );
+      if (accrual !== null) result = appendEntry(result, accrual);
       // Расчёт и вывод комиссии на операционный счёт — одна запись (красная
       // линия №2): словарь иначе и не умеет. Подтверждение сторон приходит из
       // намерения — проекция его не изготавливает и изготовить не может.
@@ -92,9 +108,15 @@ export function projectIntents(
           nextMeta('2026-09-03T12:00:00Z'),
           trancheSettlement(deal, payer, recipient, intent.attestation),
           intent.amount,
-          fee,
+          accrual,
         ),
       );
+      // Третий момент: комиссия доходит с транзита на операционный счёт.
+      // Без него она остаётся в транзите, а покрытие видит профицит в файле
+      // транша — красная линия №2 держится только вместе с этим шагом.
+      if (accrual !== null) {
+        result = appendEntry(result, receiveFee(nextMeta('2026-09-03T12:00:02Z'), deal, accrual.accruedFee));
+      }
       continue;
     }
     if (intent.type !== 'post_journal_entry') continue;

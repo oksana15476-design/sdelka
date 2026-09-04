@@ -15,14 +15,14 @@ import {
   applyDealEvent,
   applyTrancheEvent,
   approve,
-  attachRegistryExtract,
+  attachObservation,
   dealStatusOf,
   feeForTranche,
   receiveExternalPayment,
   toClientKey,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import {
   BANK_RESPONSE_SOURCE,
   BUYER,
@@ -34,6 +34,8 @@ import {
   SMALL_AMOUNT,
   TWO_ROLE,
   beneficiaryFor,
+  CADASTRAL_CODE,
+  POLICY,
   registryWithTransfer,
 } from './support/fixtures';
 import { openDeal } from './support/open';
@@ -188,13 +190,18 @@ describe('один клиент в двух ролях', () => {
 
     // --- Сделка Б доходит до терминального состояния ---
     world = applyDealEvent(world, DEAL_B, { type: 'tranches_reserved' }, OPTIONS);
-    world = applyDealEvent(world, DEAL_B, { type: 'filing_registered', applicationId: 'app-b' }, OPTIONS);
-    const extract = registryWithTransfer().paidExtract('cadastral-b');
-    if (extract === null) throw new Error('unreachable');
+    world = applyDealEvent(
+      world,
+      DEAL_B,
+      { type: 'filing_registered', applicationId: 'app-b', source: 'application_card' },
+      OPTIONS,
+    );
+    const answer = registryWithTransfer().paidExtract(CADASTRAL_CODE);
+    if (answer.kind !== 'found') throw new Error('unreachable');
     expect(
       compareNames(TWO_ROLE.names, TWO_ROLE.names, { strongThresholdBp: 9_500 }).sufficientAlone,
     ).toBe(false);
-    world = attachRegistryExtract(world, TRANCHE_B, extract, 'evidence-b');
+    world = attachObservation(world, TRANCHE_B, answer.value, 'evidence-b', POLICY);
     world = applyTrancheEvent(
       world,
       TRANCHE_B,

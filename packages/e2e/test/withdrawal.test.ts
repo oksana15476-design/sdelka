@@ -11,13 +11,13 @@ import {
 import { money } from '@sdelka/money';
 import {
   type World,
-  E2eInvariantError,
+  AppInvariantError,
   OPERATOR_ACTOR,
   advance,
   applyTrancheEvent,
   receiveExternalPayment,
   trancheOptions,
-} from '../src/index';
+} from '@sdelka/app';
 import {
   BANK_RESPONSE_SOURCE,
   DAY_MS,
@@ -37,7 +37,7 @@ import {
   requestWithdrawal,
   withWithdrawals,
   withdrawalStatusOf,
-} from './support/withdrawal';
+} from '@sdelka/app';
 
 const ROLLBACK = trancheOptions(POLICY_VERSION, { creditRoute: 'already_on_client_account' });
 
@@ -389,10 +389,10 @@ describe('вывод свободных денег со счёта клиент�
       try {
         applyWithdrawalEvent(scene, 'wd-7', { type: 'payout_result', outcome: 'settled' }, SETTLED);
       } catch (error) {
-        if (error instanceof E2eInvariantError) violations = error.violations;
+        if (error instanceof AppInvariantError) violations = error.violations;
         throw error;
       }
-    }).toThrow(E2eInvariantError);
+    }).toThrow(AppInvariantError);
     expect(violations.map((item) => item.invariant)).toContain('collected_not_backed');
   });
 });

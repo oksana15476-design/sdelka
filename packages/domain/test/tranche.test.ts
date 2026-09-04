@@ -4,12 +4,13 @@ import {
   type TrancheEvent,
   DEFAULT_DEADLINE_POLICY,
   RejectionCode,
+  RELEASE_CONDITIONS,
   initialTrancheState,
   isTerminalTrancheStatus,
   payoutIdempotencyKey,
   reduceTranche,
 } from '../src/index';
-import { AMOUNT, NOW, TRANCHE_ID, context } from './support/facts';
+import { AMOUNT, CONDITION_ACT, NOW, TRANCHE_ID, context, observation } from './support/facts';
 import { accept, reject, stateAt, walk } from './support/drive';
 
 const fundsReceived: TrancheEvent = {
@@ -286,14 +287,64 @@ describe('транш: тип условия релиза', () => {
     expect(error.code).toBe(RejectionCode.releaseConditionRequiresConfirmation);
   });
 
-  it('accepts calendar_date and registration_transfer', () => {
-    const ctx = context();
+  /**
+   * Раньше этот тест утверждал, что из `reserved` принимаются **оба**
+   * подтверждённых типа условия при одном и том же акте, — и это была не
+   * проверка, а закрепление дыры: акт транша говорит
+   * `registration_transfer`, а событие `calendar_date` проходило, потому что у
+   * него `requiresConfirmation: false`. Прикрыто это было случайностью — пять
+   * полей выписки в базовых фактах сквозного потока лежали в `false`, — а не
+   * правилом (E3-1, `ORACLE.md` §6.5).
+   *
+   * Теперь тип условия события сверяется с актом получателя: условие определяет
+   * получатель (ст. 27(2), Ф13), и подменить его тип событием нельзя.
+   */
+  it('accepts each usable condition type against its own act, and refuses a substituted one', () => {
     for (const conditionType of ['registration_transfer', 'calendar_date'] as const) {
+      const act = { ...CONDITION_ACT, conditionType };
+      const ctx = context({
+        conditionAct: act,
+        observation: observation({
+          conditionType,
+          sourceKey: RELEASE_CONDITIONS[conditionType].sourceKey,
+        }),
+      });
       expect(
-        accept(stateAt('reserved'), { type: 'condition_established', evidenceBundleId: 'e1', conditionType }, ctx)
-          .state.status,
+        accept(
+          stateAt('reserved', NOW, act),
+          { type: 'condition_established', evidenceBundleId: 'evidence-1', conditionType },
+          ctx,
+        ).state.status,
       ).toBe('release_pending');
     }
+  });
+
+  it('refuses a condition type that is not the one in the act', () => {
+    // Транш ждёт регистрацию перехода права, а событие объявляет наступившей
+    // календарную дату. Отказ, а не переход: иначе условие расчёта
+    // переопределяется мимо получателя (красная линия №6).
+    const error = reject(
+      stateAt('reserved'),
+      { type: 'condition_established', evidenceBundleId: 'evidence-1', conditionType: 'calendar_date' },
+      context(),
+    );
+    expect(error.code).toBe(RejectionCode.conditionTypeSubstituted);
+  });
+
+  it('refuses an evidence bundle other than the one in the facts', () => {
+    // Намерения выпуска поручения берут ссылку **из фактов**: расхождение
+    // означало бы, что журнал аудита и guard говорят о разных пакетах
+    // (красная линия №5).
+    const error = reject(
+      stateAt('reserved'),
+      {
+        type: 'condition_established',
+        evidenceBundleId: 'evidence-other',
+        conditionType: 'registration_transfer',
+      },
+      context(),
+    );
+    expect(error.code).toBe(RejectionCode.evidenceBundleSubstituted);
   });
 });
 

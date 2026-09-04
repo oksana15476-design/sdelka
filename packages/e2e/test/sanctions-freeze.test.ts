@@ -17,7 +17,7 @@ import {
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import {
   BANK_RESPONSE_SOURCE,
   BUYER,

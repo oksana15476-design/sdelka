@@ -108,7 +108,7 @@ function reserved(hoursAgo: number): readonly Step[] {
 
 /** Документы поданы на регистрацию. */
 function filed(hoursAgo: number): readonly Step[] {
-  return [deal(hoursAgo, { type: 'filing_registered', applicationId: 'REG-2026-44810' })];
+  return [deal(hoursAgo, { type: 'filing_registered', applicationId: 'REG-2026-44810', source: 'application_card' })];
 }
 
 /** Условие расчёта подтверждено реестром. */

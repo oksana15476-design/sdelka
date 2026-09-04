@@ -10,7 +10,7 @@ import {
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import {
   BUYER,
   DAY_MS,

@@ -4,16 +4,18 @@ import { accountBalance, bankNominal, clientFreeAccount, clientLockedAccount } f
 import {
   applyTrancheEvent,
   approve,
-  attachRegistryExtract,
+  attachObservation,
   patchFacts,
   rejectTrancheEvent,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import {
   BANK_RESPONSE_SOURCE,
+  CADASTRAL_CODE,
   GEL,
+  POLICY,
   POLICY_VERSION,
   extractOf,
   registryWithEncumbrance,
@@ -48,11 +50,13 @@ describe('пакет доказательств', () => {
     const reserved = await toReserved({ dealId: DEAL, trancheId: TRANCHE });
     // Выписка платная, приложена, переход права на покупателя состоялся —
     // и в ней обременение, которого стороны не объявляли.
-    const encumbered = extractOf(registryWithEncumbrance(), 'cadastral-encumbered');
-    expect(encumbered.ownerIsBuyer).toBe(true);
-    expect(encumbered.statementFields.noUnexpectedEncumbrances).toBe(false);
+    const encumbered = extractOf(registryWithEncumbrance(), CADASTRAL_CODE);
+    // Собственник установлен по номеру документа, а не по флагу порта: вердикт
+    // считает `reconcileOwner` внутри приложения (`CORE.md` Ф7).
+    expect(encumbered.ownerDocumentNumber).toBe('matched');
+    expect(encumbered.fields.noUnexpectedEncumbrances).toBe(false);
 
-    let world = attachRegistryExtract(reserved.world, TRANCHE, encumbered, 'evidence-encumbered');
+    let world = attachObservation(reserved.world, TRANCHE, encumbered, 'evidence-encumbered', POLICY);
     expect(trancheOf(world, TRANCHE).facts.evidenceBundleId).toBe('evidence-encumbered');
 
     // --- Первая дверь: условие не устанавливается ---
@@ -92,11 +96,12 @@ describe('пакет доказательств', () => {
     expect(accountBalance(world.journal, clientFreeAccount(reserved.sellerKey), GEL).minor).toBe(0n);
 
     // --- Обременение снято, выписка перевыпущена: та же дверь открывается ---
-    world = attachRegistryExtract(
+    world = attachObservation(
       world,
       TRANCHE,
-      extractOf(registryWithTransfer(), 'cadastral-encumbered'),
+      extractOf(registryWithTransfer(), CADASTRAL_CODE),
       'evidence-clean',
+      POLICY,
     );
     world = applyTrancheEvent(world, TRANCHE, { type: 'release_authorized' }, OPTIONS).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('paying_out');

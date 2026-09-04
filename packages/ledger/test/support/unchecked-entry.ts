@@ -22,5 +22,7 @@ export function uncheckedEntry(input: JournalEntryInput): JournalEntry {
     memoKey: input.memoKey,
     correctsEntryId: input.correctsEntryId ?? null,
     settles: input.settles ?? null,
+    converts: input.converts ?? null,
+    accrues: input.accrues ?? null,
   });
 }

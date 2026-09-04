@@ -10,20 +10,22 @@ import {
 import {
   applyTrancheEvent,
   approve,
-  attachRegistryExtract,
+  attachObservation,
   holdThirdPartyPayment,
   patchFacts,
   rejectTrancheEvent,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import {
   DEAL_AMOUNT,
   GEL,
   POLICY_VERSION,
   SELLER,
   THIRD_PARTY,
+  CADASTRAL_CODE,
+  POLICY,
   extractOf,
   registryWithTransfer,
 } from './support/fixtures';
@@ -101,11 +103,12 @@ describe('выход из блокировки', () => {
     // полей сошлись, собственник — покупатель, реквизиты заперты и проверены,
     // две подписи набраны. Это сделано нарочно: отказ ниже обязан быть ровно
     // один и именно про деньги, а не про недостающие документы.
-    world = attachRegistryExtract(
+    world = attachObservation(
       world,
       TRANCHE,
-      extractOf(registryWithTransfer(), 'cadastral-unfunded'),
+      extractOf(registryWithTransfer(), CADASTRAL_CODE),
       'evidence-unfunded',
+      POLICY,
     );
     const beneficiary = trancheOf(world, TRANCHE).beneficiary;
     world = patchFacts(world, TRANCHE, {

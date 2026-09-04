@@ -8,7 +8,7 @@ import {
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import { CREATED_ON, DEAL_AMOUNT, GEL, POLICY_VERSION, SMALL_AMOUNT } from './support/fixtures';
 import { toReleasePending } from './support/paths';
 

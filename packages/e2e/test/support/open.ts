@@ -26,8 +26,9 @@ import {
   recordDecision,
   toClientKey,
   trancheOptions,
-} from '../../src/index';
+} from '@sdelka/app';
 import {
+  CADASTRAL_CODE,
   CONDITION_ACT_SOURCE,
   CREATED_ON,
   DEAL_AMOUNT,
@@ -36,6 +37,7 @@ import {
   POLICY,
   POLICY_VERSION,
   SCREENING_SOURCE,
+  TARIFF_VERSION,
   beneficiaryFor,
   cleanScreening,
   conditionAct,
@@ -61,6 +63,8 @@ export interface OpenOptions {
   readonly beneficiary?: BeneficiaryState;
   readonly deductions?: readonly Deduction[];
   readonly sourceAccountKnown?: boolean;
+  /** Объект сделки. По умолчанию общий для фикстур: см. `CADASTRAL_CODE`. */
+  readonly objectCadastralCode?: string;
   readonly world?: World;
 }
 
@@ -128,6 +132,7 @@ export async function openDeal(options: OpenOptions): Promise<OpenedDeal> {
     dealId: options.dealId,
     conditionAct: conditionAct(partyRef(options.seller)),
     preparedBy: 'operator-1',
+    objectCadastralCode: options.objectCadastralCode ?? CADASTRAL_CODE,
   });
 
   world = recordDecision(world, {
@@ -163,10 +168,12 @@ export async function openDeal(options: OpenOptions): Promise<OpenedDeal> {
     trancheId: options.trancheId,
     buyer: partyRef(options.buyer),
     buyerPayerKey: payerKeyForDomain(options.buyer.document),
+    buyerNames: options.buyer.names,
     requiredAmount: amount,
     conditionAct: conditionAct(partyRef(options.seller)),
     createdOn: CREATED_ON,
     deductions: options.deductions ?? PLATFORM_FEE,
+    tariffVersionId: TARIFF_VERSION,
     beneficiary: options.beneficiary ?? beneficiaryFor(options.seller, 500),
     preparedBy: 'operator-1',
     sourceAccountKnown: options.sourceAccountKnown ?? true,

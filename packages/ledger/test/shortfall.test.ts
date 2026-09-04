@@ -7,6 +7,7 @@ import {
   LedgerErrorCode,
   absorbShortfall,
   accountBalance,
+  accrueFee,
   appendEntries,
   appendEntry,
   bankNominal,
@@ -16,11 +17,15 @@ import {
   clientTopUp,
   coverage,
   coverageByFundsSource,
+  createJournalEntry,
+  credit,
+  debit,
   emptyJournal,
   freeBalance,
   fundShortfall,
   isFullyCovered,
   lockForTranche,
+  receiveFee,
   settleTrancheToClientAccount,
   shouldStopAcceptingDeals,
   trancheSettlement,
@@ -56,12 +61,18 @@ function operatingFundedBy(feeMinor: bigint) {
   return appendEntries(emptyJournal, [
     clientTopUp(at('f1'), buyer, money('GEL', 10_000_000n)),
     lockForTranche(at('f2', 1), buyer, dealA, money('GEL', 10_000_000n)),
+    accrueFee(at('f3', 2), dealA, money('GEL', feeMinor), 'plan-1'),
     settleTrancheToClientAccount(
-      at('f3', 2),
+      at('f4', 3),
       trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller)),
       money('GEL', 10_000_000n),
-      money('GEL', feeMinor),
+      accrueFee(at('f3', 2), dealA, money('GEL', feeMinor), 'plan-1'),
     ),
+    // Комиссия дошла до операционного счёта: довносить недостачу можно только
+    // теми деньгами, которые у платформы **есть**, а удержанная комиссия ещё
+    // день-два лежит в транзите (§3.2). Прежде расчёт клал её на операционный
+    // счёт в тот же миг — и это было неправдой.
+    receiveFee(at('f5', 4), dealA, money('GEL', feeMinor)),
   ]);
 }
 
@@ -106,10 +117,11 @@ describe('недостача, покрытая платформой (§3.1, сл
 
   it('restores coverage with the second entry — the transfer from the operating account', () => {
     let journal = operatingFundedBy(50_000n);
-    journal = appendEntry(journal, absorbShortfall(at('s1', 5), payer, received, shortfall));
+    const recognised = absorbShortfall(at('s1', 5), payer, received, shortfall);
+    journal = appendEntry(journal, recognised);
     expect(shouldStopAcceptingDeals(journal)).toBe(true);
 
-    journal = appendEntry(journal, fundShortfall(at('s2', 10), payer, shortfall));
+    journal = appendEntry(journal, fundShortfall(at('s2', 10), recognised));
 
     expect(isFullyCovered(journal)).toBe(true);
     expect(accountBalance(journal, bankNominal('GEL'), 'GEL').minor).toBe(
@@ -133,9 +145,10 @@ describe('недостача, покрытая платформой (§3.1, сл
    * отчёта целиком.
    */
   it('reports a bank account driven below zero by the top-up', () => {
+    const recognised = absorbShortfall(at('s1'), payer, received, shortfall);
     const journal = appendEntries(emptyJournal, [
-      absorbShortfall(at('s1'), payer, received, shortfall),
-      fundShortfall(at('s2', 5), payer, shortfall),
+      recognised,
+      fundShortfall(at('s2', 5), recognised),
     ]);
 
     expect(isFullyCovered(journal)).toBe(true);
@@ -168,6 +181,49 @@ describe('недостача, покрытая платформой (§3.1, сл
    * счёта не собирается вовсе.
    */
   it('is the only funded way to raise a client file', () => {
-    expect(() => fundShortfall(at('s2'), payer, shortfall)).not.toThrow();
+    const recognised = absorbShortfall(at('s1'), payer, received, shortfall);
+    expect(() => fundShortfall(at('s2'), recognised)).not.toThrow();
+  });
+
+  /**
+   * **Исправленный дефект: `fundShortfall` был единственным конструктором без
+   * проверки входа.** Прежняя подпись `(meta, owner, amount)` — универсальный
+   * примитив «положить деньги платформы в файл произвольного клиента на
+   * произвольную сумму», и `assertNoUnfundedClientFileGain` пропускал его по
+   * построению: такое финансирование законно. Ни словарь, ни конструктор
+   * записи не задавали ни одного вопроса.
+   *
+   * Контуров теперь два, и здесь проверяется второй — журнальный. Первый,
+   * типовой, проверить тестом нельзя: `fundShortfall(meta, owner, amount)` не
+   * компилируется, а несобираемая форма тестом не выражается.
+   */
+  it('catches money put into a client file beyond what was recognised', () => {
+    let journal = operatingFundedBy(50_000n);
+    const recognised = absorbShortfall(at('s1', 5), payer, received, shortfall);
+    journal = appendEntries(journal, [recognised, fundShortfall(at('s2', 10), recognised)]);
+    expect(checkLedgerInvariants(journal)).toEqual([]);
+
+    // Довнесение сверх признанного: форма законная — деньги платформы ушли с
+    // её счёта, — и до появления инварианта её не видел никто. Профицит файла
+    // ловит только последствие; сам факт «положили больше, чем признали»
+    // называет `shortfallOverfunded`.
+    journal = appendEntry(
+      journal,
+      createJournalEntry({
+        ...at('s3', 15),
+        kind: 'settlement',
+        memoKey: 'ledger.entry.shortfall_funded',
+        postings: [
+          debit(bankNominal('GEL'), money('GEL', 7_000n), { clientKey: payer }),
+          credit(bankOperating('GEL'), money('GEL', 7_000n)),
+        ],
+      }),
+    );
+    const violations = checkLedgerInvariants(journal);
+    expect(
+      violations
+        .filter((item) => item.code === InvariantCode.shortfallOverfunded)
+        .map((item) => [item.subject, item.currency, item.amountMinor]),
+    ).toEqual([[payer, 'GEL', 7_000n]]);
   });
 });

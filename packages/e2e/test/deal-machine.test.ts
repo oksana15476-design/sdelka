@@ -7,8 +7,8 @@ import {
   rejectDealEvent,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
-import { NOW, POLICY_VERSION } from './support/fixtures';
+} from '@sdelka/app';
+import { CADASTRAL_CODE, NOW, POLICY_VERSION } from './support/fixtures';
 import { toCollected, toConditionReady, toReleasePending } from './support/paths';
 
 const OPTIONS = trancheOptions(POLICY_VERSION);
@@ -43,6 +43,7 @@ describe('автомат сделки: правила, которые обяза
       dealId: deal,
       conditionAct: null,
       preparedBy: 'operator-1',
+      objectCadastralCode: CADASTRAL_CODE,
     });
     world = applyDealEvent(world, deal, { type: 'parties_check_started' }, OPTIONS);
     world = applyDealEvent(world, deal, { type: 'parties_verified' }, OPTIONS);

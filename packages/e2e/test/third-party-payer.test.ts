@@ -13,7 +13,7 @@ import { dealState, reduceDeal } from '@sdelka/domain';
 import { accountBalance, bankNominal } from '@sdelka/ledger';
 import { money } from '@sdelka/money';
 import {
-  E2eInvariantError,
+  AppInvariantError,
   applyDealEvent,
   applyTrancheEvent,
   dealFactsOf,
@@ -24,7 +24,7 @@ import {
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import {
   BUYER,
   GEL,
@@ -134,8 +134,8 @@ describe('платёж от третьего лица', () => {
     } catch (error) {
       trap = error;
     }
-    expect(trap).toBeInstanceOf(E2eInvariantError);
-    expect((trap as E2eInvariantError).violations.map((item) => item.invariant)).toEqual([
+    expect(trap).toBeInstanceOf(AppInvariantError);
+    expect((trap as AppInvariantError).violations.map((item) => item.invariant)).toEqual([
       'collected_not_backed',
     ]);
 

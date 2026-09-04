@@ -30,7 +30,7 @@ import {
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import {
   BANK_RESPONSE_SOURCE,
   DEAL_AMOUNT,
@@ -280,13 +280,27 @@ describe('реквизиты выплаты: доказательство вла
 
     world = patchFacts(world, TRANCHE, { beneficiary: toBeneficiaryLock(applied.value) });
     const refused = rejectTrancheEvent(world, TRANCHE, { type: 'release_authorized' });
-    expect([...refused.failedGuards].sort()).toEqual(['g_beneficiary_locked', 'g_beneficiary_verified']);
+    // Третий отказ — про **свежесть выписки**, и он появился здесь сам, без
+    // единой правки сценария: часы этого теста ушли на 25 часов вперёд, а
+    // предельный возраст наблюдения — сутки (`ORACLE.md` §6.3,
+    // `DEFAULT_OBSERVATION_POLICY`). Выписка суточной давности не утверждает
+    // ничего о сегодняшних обременениях, и `g_observation_sufficient` это
+    // видит. Утверждение оставлено полным нарочно: сокращать список до
+    // «интересных» guard'ов значит перестать замечать такие изменения.
+    expect([...refused.failedGuards].sort()).toEqual([
+      'g_beneficiary_locked',
+      'g_beneficiary_verified',
+      'g_observation_sufficient',
+    ]);
 
     // Через 72 часа окно закрывается, но доказательство владения так и не
-    // появилось: один guard снялся, второй держит.
+    // появилось: guard блокировки снялся, два других держат.
     world = advance(world, 72 * HOUR_MS);
     const stillRefused = rejectTrancheEvent(world, TRANCHE, { type: 'release_authorized' });
-    expect([...stillRefused.failedGuards]).toEqual(['g_beneficiary_verified']);
+    expect([...stillRefused.failedGuards]).toEqual([
+      'g_observation_sufficient',
+      'g_beneficiary_verified',
+    ]);
 
     expect(trancheStatusOf(world, TRANCHE)).toBe('release_pending');
     expect(accountBalance(world.journal, clientFreeAccount(pending.sellerKey), GEL).minor).toBe(0n);

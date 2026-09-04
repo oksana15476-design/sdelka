@@ -6,6 +6,7 @@ import {
   LedgerError,
   LedgerErrorCode,
   accountBalance,
+  accrueFee,
   appendEntries,
   appendEntry,
   bankNominal,
@@ -251,19 +252,23 @@ describe('переплата (FUNCTIONAL.md §4.3.2)', () => {
 });
 
 describe('расчёт по сделке в пользу получателя (И12.1)', () => {
-  it('lands the seller money in the free part of the same account, fee recognised at once', () => {
+  it('lands the seller money in the free part of the same account, fee withheld against the accrual', () => {
     let journal = appendEntry(emptyJournal, clientTopUp(at('p1'), buyer, money('GEL', 100_000n)));
     journal = appendEntry(
       journal,
       lockForTranche(at('p2', 5), buyer, dealA, money('GEL', 100_000n)),
     );
+    // Комиссия начисляется до расчёта и удерживается им (FUNCTIONAL.md §4.1,
+    // «два встречных факта»; CORE.md Ф16).
+    const accrual = accrueFee(at('p3', 8), dealA, money('GEL', 500n), 'plan-1');
+    journal = appendEntry(journal, accrual);
     journal = appendEntry(
       journal,
       settleTrancheToClientAccount(
-        at('p3', 10),
+        at('p4', 10),
         trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller)),
         money('GEL', 100_000n),
-        money('GEL', 500n),
+        accrual,
       ),
     );
 
@@ -275,9 +280,11 @@ describe('расчёт по сделке в пользу получателя (�
         .minor,
     ).toBe(0n);
     expect(accountBalance(journal, { kind: 'fee_income' }, 'GEL').minor).toBe(500n);
-    // Остаток комиссии на номинальном счёте виден как превышение средств над
-    // обязательствами и обязан быть выведен на операционный в тот же банковский
-    // день (FUNCTIONAL.md §3.3, шаг 5).
+    // Комиссия ушла с номинального счёта в транзит той же записью: на счёте
+    // клиентских средств её нет ни минуты (красная линия №2), а «удержано» и
+    // «получено» стали разными величинами (Ф16).
+    expect(accountBalance(journal, { kind: 'transit_fee' }, 'GEL').minor).toBe(500n);
+    expect(accountBalance(journal, bankNominal('GEL'), 'GEL').minor).toBe(99_500n);
     expect(isEveryTrancheCovered(journal)).toBe(true);
     expect(isEveryFundsSourceCovered(journal)).toBe(true);
     expect(checkLedgerInvariants(journal)).toEqual([]);

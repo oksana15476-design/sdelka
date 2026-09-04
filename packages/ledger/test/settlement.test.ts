@@ -6,6 +6,7 @@ import {
   type LedgerErrorCode as LedgerErrorCodeType,
   LedgerErrorCode,
   accountBalance,
+  accrueFee,
   appendEntries,
   appendEntry,
   bankNominal,
@@ -21,11 +22,13 @@ import {
   credit,
   debit,
   emptyJournal,
+  feePositions,
   freeBalance,
   isEveryTrancheCovered,
   isFullyCovered,
   lockForTranche,
   negativeClientBalances,
+  receiveFee,
   settleTrancheToClientAccount,
   shouldStopAcceptingDeals,
   trancheSettlement,
@@ -40,6 +43,8 @@ const stranger = clientKey('c9');
 const dealA = { dealId: 'A', trancheId: 't1' };
 const dealB = { dealId: 'B', trancheId: 't1' };
 const feeIncome = { kind: 'fee_income' } as const;
+const feeReceivableAccount = { kind: 'fee_receivable' } as const;
+const transitFeeAccount = { kind: 'transit_fee' } as const;
 const suspense = { kind: 'suspense_unidentified' } as const;
 
 function at(id: string, minute = 0): { id: string; occurredAt: string } {
@@ -65,23 +70,41 @@ function lockedUnderA(amount: bigint) {
 }
 
 describe('красная линия №2: комиссия не остаётся на номинальном счёте ни на минуту', () => {
-  it('sweeps the fee to the operating account inside the settlement entry itself', () => {
+  /**
+   * **[изменённое ожидание, с основанием]** Прежде этот тест ждал комиссию на
+   * операционном счёте сразу после расчёта, и в этом была ошибка: номинальный
+   * счёт в одном банке, операционный в другом, межбанковский перевод занимает
+   * день-два (§3.2). Запись расчёта утверждала, что перевод уже дошёл, — то
+   * есть врала о факте, которого ещё нет, и делала «удержано» и «получено»
+   * одной величиной вопреки CORE.md Ф10 и Ф16.
+   *
+   * Красная линия №2 при этом держится и проверяется здесь же: комиссия уходит
+   * **с номинального счёта** в той же записи. Она не «лежит на операционном в
+   * тот же миг» — она перестаёт быть клиентскими деньгами в тот же миг.
+   */
+  it('moves the fee off the nominal account inside the settlement entry itself', () => {
     let journal = lockedUnderA(100_000n);
+    const accrual = accrueFee(at('s0', 8), dealA, money('GEL', 500n), 'plan-1');
+    journal = appendEntry(journal, accrual);
     journal = appendEntry(
       journal,
       settleTrancheToClientAccount(
         at('s1', 10),
         trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller)),
         money('GEL', 100_000n),
-        money('GEL', 500n),
+        accrual,
       ),
     );
 
     expect(freeBalance(journal, seller, 'GEL').minor).toBe(99_500n);
     expect(accountBalance(journal, feeIncome, 'GEL').minor).toBe(500n);
-    // Комиссия на операционном счёте, а на номинальном — ровно обязательство
-    // перед получателем и ни копейкой больше.
-    expect(accountBalance(journal, bankOperating('GEL'), 'GEL').minor).toBe(500n);
+    // Требование погашено удержанием, деньги в транзите, на операционный счёт
+    // ещё не дошли — три величины Ф16 раздельно.
+    expect(accountBalance(journal, feeReceivableAccount, 'GEL').minor).toBe(0n);
+    expect(accountBalance(journal, transitFeeAccount, 'GEL').minor).toBe(500n);
+    expect(accountBalance(journal, bankOperating('GEL'), 'GEL').minor).toBe(0n);
+    // На номинальном — ровно обязательство перед получателем и ни копейкой
+    // больше.
     expect(accountBalance(journal, bankNominal('GEL'), 'GEL').minor).toBe(99_500n);
 
     // Файл транша закрыт с обеих сторон: ни обязательства, ни остатка средств.
@@ -92,6 +115,72 @@ describe('красная линия №2: комиссия не остаётся
     expect(trancheFile?.custody.minor).toBe(0n);
     expect(checkLedgerInvariants(journal)).toEqual([]);
     expect(shouldStopAcceptingDeals(journal)).toBe(false);
+
+    // Третья запись — перевод дошёл. Только теперь «получено».
+    journal = appendEntry(journal, receiveFee(at('s1b', 15), dealA, money('GEL', 500n)));
+    expect(accountBalance(journal, bankOperating('GEL'), 'GEL').minor).toBe(500n);
+    expect(accountBalance(journal, transitFeeAccount, 'GEL').minor).toBe(0n);
+    const position = feePositions(journal)[0];
+    expect([
+      position?.accrued.minor,
+      position?.notWithheld.minor,
+      position?.withheld.minor,
+      position?.received.minor,
+      position?.inTransit.minor,
+    ]).toEqual([500n, 0n, 500n, 500n, 0n]);
+  });
+
+  it('shows the withheld fee that never reached the operating account as not received', () => {
+    // Крайний случай И14.1: «комиссия удержана, но перевод на операционный счёт
+    // не прошёл: это отдельное видимое состояние, а не „получено“».
+    let journal = lockedUnderA(100_000n);
+    const accrual = accrueFee(at('s0', 8), dealA, money('GEL', 500n), 'plan-1');
+    journal = appendEntries(journal, [
+      accrual,
+      settleTrancheToClientAccount(
+        at('s1', 10),
+        trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller)),
+        money('GEL', 100_000n),
+        accrual,
+      ),
+    ]);
+    const position = feePositions(journal)[0];
+    expect(position?.withheld.minor).toBe(500n);
+    expect(position?.received.minor).toBe(0n);
+    expect(position?.inTransit.minor).toBe(500n);
+    // Свежий транзит расхождением не является — он обязан быть ненулевым между
+    // двумя моментами. Расхождением его делает возраст.
+    expect(checkLedgerInvariants(journal)).toEqual([]);
+    const stale = checkLedgerInvariants(journal, { asOf: '2026-09-06T10:00:00Z' });
+    expect(stale.map((item) => [item.code, item.subject, item.amountMinor])).toEqual([
+      [InvariantCode.transitStale, 'transit:fee', 500n],
+    ]);
+  });
+
+  it('refuses to withhold a fee that was never accrued', () => {
+    // Первый контур — типы: `settleTrancheToClientAccount` принимает токен
+    // начисления, а не сумму. Второй — баланс: собранная в обход словаря
+    // запись уводит требование в минус.
+    const journal = appendEntry(
+      lockedUnderA(100_000n),
+      uncheckedEntry({
+        ...at('s4', 10),
+        kind: 'settlement',
+        memoKey: 'ledger.entry.tranche_settled',
+        postings: [
+          debit(clientLockedAccount(buyer, dealA.dealId, dealA.trancheId), money('GEL', 100_000n), dealA),
+          credit(clientFreeAccount(seller), money('GEL', 99_500n), { clientKey: seller }),
+          credit(feeReceivableAccount, money('GEL', 500n), dealA),
+          credit(bankNominal('GEL'), money('GEL', 100_000n), dealA),
+          debit(bankNominal('GEL'), money('GEL', 99_500n), { clientKey: seller }),
+          debit(transitFeeAccount, money('GEL', 500n), dealA),
+        ],
+      }),
+    );
+    const violations = checkLedgerInvariants(journal);
+    expect(violations.map((item) => [item.code, item.subject, item.amountMinor])).toEqual([
+      [InvariantCode.platformAssetNegative, 'fee:receivable', -500n],
+    ]);
   });
 
   it('settles without a fee the same way when the plan charges nothing', () => {
@@ -102,10 +191,12 @@ describe('красная линия №2: комиссия не остаётся
         at('s2', 10),
         trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller)),
         money('GEL', 100_000n),
-        money('GEL', 0n),
+        null,
       ),
     );
-    // Нулевая комиссия — это её отсутствие, а не проводка на ноль.
+    // Плана без комиссии начисление не порождает вовсе: нулевая комиссия — это
+    // её отсутствие, а не проводка на ноль.
+    expect(() => accrueFee(at('s2b', 11), dealA, money('GEL', 0n), 'plan-1')).toThrow();
     expect(freeBalance(journal, seller, 'GEL').minor).toBe(100_000n);
     expect(accountBalance(journal, bankOperating('GEL'), 'GEL').minor).toBe(0n);
     expect(checkLedgerInvariants(journal)).toEqual([]);
@@ -177,7 +268,7 @@ describe('красная линия №1: получатель расчёта с
       at('r2', 10),
       trancheSettlement(dealA, buyer, seller, attestDealParties(dealA, buyer, seller)),
       money('GEL', 100_000n),
-      money('GEL', 500n),
+      accrueFee(at('r2a', 9), dealA, money('GEL', 500n), 'plan-1'),
     );
     expect(entry.settles?.deal).toEqual(dealA);
     expect(entry.settles?.payer).toBe(buyer);

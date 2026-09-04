@@ -62,7 +62,25 @@ export type Account =
   // внешним контрагентом, а не превращение одной валюты в другую внутри нашего
   // журнала; без этого счёта обе стороны обмена создавала одна запись, и
   // покрытие после неё тождественно равнялось единице.
-  | { readonly kind: 'fx_settlement' }
+  //
+  // **Ключ конверсии входит в код счёта.** Прежде счёт был один на все обмены
+  // всех клиентов, и зависшая позиция одного обмена нетилась встречной ногой
+  // другого: «сколько нам не поставили по этой конверсии» не было величиной
+  // вовсе. Отнесение по клиенту у счёта есть и было, но клиент делает несколько
+  // конверсий, и складывать их в один остаток — то же самое, что складывать
+  // разные транши в один файл (FUNCTIONAL.md §3.1).
+  | { readonly kind: 'fx_settlement'; readonly conversionId: string }
+  // Комиссия **начислена**: доход признан, из платежа ещё не удержан
+  // (FUNCTIONAL.md §4.6, «начислено против удержано»; CORE.md Ф16). Требование
+  // платформы, а не деньги: на нём стоит первый из двух встречных фактов, без
+  // которых удержание выглядит недопереводом клиентских средств (§4.1).
+  | { readonly kind: 'fee_receivable' }
+  // Комиссия **удержана**, но перевод на операционный счёт ещё не дошёл. Та же
+  // конструкция, что и `transit:writeoff`: номинальный счёт в одном банке,
+  // операционный в другом, межбанковский перевод занимает день-два (§3.2).
+  // Без этого счёта «удержано» и «получено» были одной строкой — ровно то, что
+  // CORE.md Ф10 и Ф16 запрещают.
+  | { readonly kind: 'transit_fee' }
   | { readonly kind: 'fx_accounting_diff' };
 
 export type AccountKind = Account['kind'];
@@ -74,6 +92,21 @@ export type AccountType = 'asset' | 'liability' | 'income' | 'expense';
  * различении, поэтому оно свойство счёта, а не соглашение об именовании.
  */
 export type FundsOwnership = 'client' | 'platform';
+
+/**
+ * Чем счёт платформы является **физически**. Объявлять обязан каждый счёт
+ * платформы, и это не украшение: три разных правила спрашивают «настоящие ли
+ * это деньги», и до появления роли каждое отвечало «актив платформы», то есть
+ * одинаково для банковского счёта и для требования.
+ *
+ * - `bank` — счёт в банке. Настоящие деньги, которые можно перевести.
+ * - `receivable` — требование платформы к кому-то. Деньгами не является:
+ *   довнести ими недостачу клиента нельзя, обеспечить ими чужое обязательство
+ *   нельзя, а признать против них доход — можно (это и есть начисление).
+ * - `transit` — собственные деньги платформы в пути между её счетами.
+ * - `result` — доход или расход, счёт результата, а не средств.
+ */
+export type PlatformFundsRole = 'bank' | 'receivable' | 'transit' | 'result';
 
 /**
  * Откуда у клиентских денег берётся **файл** — та единица, внутри которой
@@ -124,7 +157,7 @@ export type PoolDirection = 'intake' | 'terminal';
 export type AccountNature = {
   readonly type: AccountType;
 } & (
-  | { readonly funds: 'platform' }
+  | { readonly funds: 'platform'; readonly role: PlatformFundsRole }
   | { readonly funds: 'client'; readonly file: 'owner_in_code' | 'in_attribution' }
   | { readonly funds: 'client'; readonly file: 'pooled'; readonly pool: PoolDirection }
 );
@@ -134,19 +167,19 @@ const ACCOUNT_NATURE = {
   // Именно он сопоставляется с обязательствами при проверке покрытия, а файл
   // конкретной проводки приносит её отнесение.
   bank_nominal: { type: 'asset', funds: 'client', file: 'in_attribution' },
-  bank_operating: { type: 'asset', funds: 'platform' },
+  bank_operating: { type: 'asset', funds: 'platform', role: 'bank' },
   client_free: { type: 'liability', funds: 'client', file: 'owner_in_code' },
   client_locked: { type: 'liability', funds: 'client', file: 'owner_in_code' },
   // Непознанное поступление: владельца ещё нет (§3.3, шаг 1). Вход, и только.
   suspense_unidentified: { type: 'liability', funds: 'client', file: 'pooled', pool: 'intake' },
-  fee_income: { type: 'income', funds: 'platform' },
-  fx_income: { type: 'income', funds: 'platform' },
-  service_income: { type: 'income', funds: 'platform' },
-  psp_fee_expense: { type: 'expense', funds: 'platform' },
-  oracle_cost_expense: { type: 'expense', funds: 'platform' },
+  fee_income: { type: 'income', funds: 'platform', role: 'result' },
+  fx_income: { type: 'income', funds: 'platform', role: 'result' },
+  service_income: { type: 'income', funds: 'platform', role: 'result' },
+  psp_fee_expense: { type: 'expense', funds: 'platform', role: 'result' },
+  oracle_cost_expense: { type: 'expense', funds: 'platform', role: 'result' },
   // Случай А из §3.1: недостача, покрытая платформой. Признаётся в момент
   // поступления, состоянием транша не является. Деньги платформы.
-  shortfall_expense: { type: 'expense', funds: 'platform' },
+  shortfall_expense: { type: 'expense', funds: 'platform', role: 'result' },
   // Случай Б: невостребованные средства. Обязательство, а не доход. Признать
   // их доходом было бы удобно и, возможно, незаконно — порядок обращения
   // с ними помечен в §3.1 как [открыто], до ответа юриста это долг. Пул
@@ -160,13 +193,20 @@ const ACCOUNT_NATURE = {
   // клиента и в него же возвращаются встречной валютой, поэтому покрытие
   // между двумя моментами обмена не проваливается и не завышается.
   fx_settlement: { type: 'asset', funds: 'client', file: 'in_attribution' },
+  // Требование платформы по начисленной комиссии. Роль `receivable`, а не
+  // `bank`: этот актив не является деньгами, и правила, которым нужны именно
+  // деньги (довнесение недостачи, обеспечение невостребованных), его не видят.
+  fee_receivable: { type: 'asset', funds: 'platform', role: 'receivable' },
+  // Удержанная комиссия в пути на операционный счёт. Деньги платформы — на
+  // номинальном счёте её уже нет (красная линия №2), на операционном ещё нет.
+  transit_fee: { type: 'asset', funds: 'platform', role: 'transit' },
   // FUNCTIONAL.md §3.1 помечает учётную курсовую разницу как «расход/доход»:
   // она бывает обеих знаков. Тип счёта в плане один, поэтому знак несёт
   // направление проводки, а не отдельный счёт: кредитовый остаток на этом
   // счёте читается как доход. Разводить на два счёта — решение владельца,
   // здесь его нет. Это не наш спред: спред и разница разведены типами в money
   // (FUNCTIONAL.md §4.5, CORE.md Ф5), поэтому средства платформы.
-  fx_accounting_diff: { type: 'expense', funds: 'platform' },
+  fx_accounting_diff: { type: 'expense', funds: 'platform', role: 'result' },
 } as const satisfies Readonly<Record<AccountKind, AccountNature>>;
 
 type Assert<T extends true> = T;
@@ -200,6 +240,24 @@ export type AssertObligationFileIsNotAttributed = Assert<
     : false
 >;
 
+/**
+ * Счёт результата — это доход или расход, и наоборот. Роль `result` на активе
+ * платформы означала бы, что признание дохода можно подпереть чем угодно, а
+ * роль средств на счёте дохода — что доход можно раздать как деньги.
+ */
+export type AssertPlatformResultRoleMatchesType = Assert<
+  KindsWithNature<{ funds: 'platform'; role: 'result' }> extends KindsWithNature<{
+    type: 'income' | 'expense';
+  }>
+    ? KindsWithNature<{ type: 'income' | 'expense' }> extends KindsWithNature<{
+        funds: 'platform';
+        role: 'result';
+      }>
+      ? true
+      : false
+    : false
+>;
+
 export function accountNature(account: Account): AccountNature {
   return ACCOUNT_NATURE[account.kind];
 }
@@ -214,6 +272,37 @@ export function fundsOwnership(account: Account): FundsOwnership {
 
 export function isClientFundsAccount(account: Account): boolean {
   return fundsOwnership(account) === 'client';
+}
+
+/** Роль счёта платформы. `null` — счёт не средств платформы. */
+export function platformFundsRole(account: Account): PlatformFundsRole | null {
+  const nature = ACCOUNT_NATURE[account.kind];
+  return nature.funds === 'platform' ? nature.role : null;
+}
+
+/**
+ * Настоящие деньги платформы: остаток на её банковском счёте.
+ *
+ * Отдельно от «актив платформы» намеренно. Требование по начисленной комиссии
+ * — тоже актив платформы, но перевести его нельзя: довнесение недостачи
+ * (§3.1, случай А, момент 2) требует денег, ушедших со счёта, а не списанного
+ * требования. До появления роли оба счёта отвечали на этот вопрос одинаково.
+ */
+export function isPlatformBankAccount(account: Account): boolean {
+  return platformFundsRole(account) === 'bank';
+}
+
+/** Требование платформы: начисленная, но ещё не удержанная комиссия. */
+export function isPlatformReceivableAccount(account: Account): boolean {
+  return platformFundsRole(account) === 'receivable';
+}
+
+/**
+ * Ключ конверсии, если счёт принадлежит конкретному обмену. `null` — счёт к
+ * обмену отношения не имеет.
+ */
+export function conversionOfAccount(account: Account): string | null {
+  return account.kind === 'fx_settlement' ? account.conversionId : null;
 }
 
 /**
@@ -326,7 +415,11 @@ export function accountCode(account: Account): string {
     case 'transit_writeoff':
       return 'transit:writeoff';
     case 'fx_settlement':
-      return 'fx:settlement';
+      return `fx:settlement:${assertAccountIdentifier(account.conversionId, 'conversionId')}`;
+    case 'fee_receivable':
+      return 'fee:receivable';
+    case 'transit_fee':
+      return 'transit:fee';
     case 'fx_accounting_diff':
       return 'fx:accounting:diff';
   }
@@ -358,5 +451,17 @@ export const clientLockedAccount = (
 export const shortfallExpense: Account = Object.freeze({ kind: 'shortfall_expense' });
 export const unclaimedLiability: Account = Object.freeze({ kind: 'unclaimed_liability' });
 export const transitWriteoff: Account = Object.freeze({ kind: 'transit_writeoff' });
-export const fxSettlement: Account = Object.freeze({ kind: 'fx_settlement' });
+/**
+ * Счёт расчётов с валютным контрагентом **по одной конверсии**.
+ *
+ * Функция, а не значение: пула на все обмены больше нет, см. объявление вида
+ * счёта выше.
+ */
+export const fxSettlement = (conversionId: string): Account =>
+  Object.freeze({
+    kind: 'fx_settlement',
+    conversionId: assertAccountIdentifier(conversionId, 'conversionId'),
+  });
+export const feeReceivable: Account = Object.freeze({ kind: 'fee_receivable' });
+export const transitFee: Account = Object.freeze({ kind: 'transit_fee' });
 export const fxAccountingDiff: Account = Object.freeze({ kind: 'fx_accounting_diff' });

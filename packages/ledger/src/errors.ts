@@ -16,10 +16,21 @@ export const LedgerErrorCode = {
   settlementAttestationMismatch: 'ledger.settlement.attestation_mismatch',
   entryNonPositiveExcess: 'ledger.entry.non_positive_excess',
   entryNonPositiveShortfall: 'ledger.entry.non_positive_shortfall',
+  entryNonPositiveFee: 'ledger.entry.non_positive_fee',
   // Клиентский курс лучше эталонного: на конвертации не доход, а убыток, и
   // проводка у него другая. Молча вывернуть направление значило бы признать
   // убыток доходом (см. `receiveConversion`).
   entryNegativeSpread: 'ledger.entry.negative_spread',
+  // Объявление обмена не сходится с собственным содержимым: целевая сумма не
+  // равна исходной по клиентскому курсу. Курс с недавних пор несёт свою пару
+  // валют (`money/fx.ts`), но сумма до сих пор приезжала аргументом.
+  entryConversionDeclarationMismatch: 'ledger.entry.conversion_declaration_mismatch',
+  // Проводка по счёту расчётов с валютным контрагентом в записи, которая обмен
+  // не объявляет, объявляет чужой обмен или двигает не ту сумму.
+  entryConversionUndeclared: 'ledger.entry.conversion_undeclared',
+  // Комиссия удерживается из платежа, не будучи начисленной, либо начисление
+  // относится к другому траншу или другой сумме.
+  entryFeeAccrualMismatch: 'ledger.entry.fee_accrual_mismatch',
   entryCorrectionWithoutReference: 'ledger.entry.correction_without_reference',
   entrySettlementWithReference: 'ledger.entry.settlement_with_reference',
   postingNonPositiveAmount: 'ledger.posting.non_positive_amount',

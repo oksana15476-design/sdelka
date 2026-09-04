@@ -19,7 +19,7 @@ import {
   reduceDeal,
   reducePayout,
 } from '../src/index';
-import { AMOUNT, CONDITION_ACT, NOW, context } from './support/facts';
+import { AMOUNT, CONDITION_ACT, NOW, context, dealFacts } from './support/facts';
 import { accept, frozenStateAt, reject, stateAt } from './support/drive';
 
 const fundsReceived: TrancheEvent = {
@@ -198,11 +198,11 @@ describe('невозможные состояния', () => {
       {
         dealId: 'deal-1',
         now: NOW,
-        facts: {
+        facts: dealFacts({
           trancheStatuses: ['paid_out', 'paying_out'],
           preparedBy: null,
           conditionAct: CONDITION_ACT,
-        },
+        }),
       },
     );
     expect(result.ok).toBe(false);
@@ -220,7 +220,7 @@ describe('невозможные состояния', () => {
     const result = reduceDeal(dealState('funding'), { type: 'cancellation_requested' }, {
       dealId: 'deal-1',
       now: NOW,
-      facts: { trancheStatuses: ['collected'], preparedBy: null, conditionAct: CONDITION_ACT },
+      facts: dealFacts({ trancheStatuses: ['collected'], preparedBy: null, conditionAct: CONDITION_ACT }),
     });
     expect(result.ok).toBe(false);
   });

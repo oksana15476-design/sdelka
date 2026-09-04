@@ -21,16 +21,13 @@ describe('дыра release_blocked → release_pending → paying_out', () => {
   };
 
   it('rejects the payout reached through release_blocked without an evidence bundle', () => {
+    // Наблюдения нет вовсе — это и есть состояние транша, до которого выписку
+    // ещё не заказывали. Раньше здесь приходилось перечислять пять `false` и
+    // отдельное «собственник не покупатель»: полей без документа больше не
+    // существует (E3-1, ORACLE.md §4).
     const ctx = context({
       evidenceBundleId: null,
-      statementFields: {
-        cadastralCode: false,
-        ownerDocumentNumber: false,
-        share: false,
-        basis: false,
-        noUnexpectedEncumbrances: false,
-      },
-      registryOwnerIsBuyer: false,
+      observation: null,
       mismatchResolved: true,
     });
 
@@ -43,6 +40,7 @@ describe('дыра release_blocked → release_pending → paying_out', () => {
     const error = reject(releasePending.state, { type: 'release_authorized' }, ctx);
     expect(error.code).toBe(RejectionCode.guardFailed);
     expect(error.failedGuards).toContain('g_evidence_present');
+    expect(error.failedGuards).toContain('g_observation_sufficient');
     expect(error.failedGuards).toContain('g_fields_match');
     expect(error.failedGuards).toContain('g_owner_is_buyer');
   });
@@ -55,6 +53,11 @@ describe('дыра release_blocked → release_pending → paying_out', () => {
     );
     expect(edge?.guards).toEqual([
       'g_evidence_present',
+      // E3-1: годен ли сам документ, на который опирается расчёт. Продублирован
+      // на этом ребре по той же причине, что и соседи: путь через
+      // `release_blocked` в `reserved` не заходит вовсе, и выплата уходила бы
+      // мимо проверки уровня доверия, источника, объекта и свежести выписки.
+      'g_observation_sufficient',
       'g_fields_match',
       'g_owner_is_buyer',
       'g_beneficiary_locked',

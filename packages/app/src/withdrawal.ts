@@ -31,7 +31,7 @@ import {
   refundToSourceAccount,
 } from '@sdelka/ledger';
 import type { CurrencyCode, Money } from '@sdelka/money';
-import { type World, payerOf, sealed } from '../../src/index';
+import { type World, payerOf, sealed } from './world';
 
 /**
  * Вывод со счёта клиента в сквозном контуре.
@@ -54,13 +54,14 @@ import { type World, payerOf, sealed } from '../../src/index';
  * `sealed()` — то есть проверка инвариантов после каждого шага. Guard теперь
  * стоит между клиентом и деньгами, а не рядом с ними.
  *
- * ## Почему не в `packages/e2e/src`
+ * ## Где он лежит
  *
- * Место этого модуля — рядом с `flow.ts`: это слой приложения, а не фикстура.
- * Он лежит в `test/support` только потому, что `src/` в этом батче правят
- * другие руки, и переезд туда — первое, что стоит сделать следующим. Ни одна
- * строка ниже на это не рассчитывает: зависимость односторонняя, из `test` в
- * `src`, как у всех остальных сценариев.
+ * Рядом с `flow.ts`, в `@sdelka/app`. Прежняя редакция лежала в
+ * `packages/e2e/test/support` и сама называла это временным: «место этого
+ * модуля — рядом с `flow.ts`, переезд туда — первое, что стоит сделать
+ * следующим». Переезд сделан: продукт в пакете сквозных **тестов** — это
+ * продукт, которым не может пользоваться ни `apps/web`, ни сервер, а guard'ы
+ * вывода тогда снова стоят рядом с деньгами, а не между клиентом и деньгами.
  */
 
 /* ------------------------------------------------------------------------- */
@@ -80,10 +81,13 @@ export interface WithdrawalRuntime {
 /**
  * Мир вместе с выводами.
  *
- * Отдельная пара, а не поле `World`: поля в `World` заводит `src/world.ts`, и
- * его в этом батче правят другие руки. На проверку инвариантов это не влияет —
- * каждый шаг ниже проходит через `sealed()`, и деньги вывода видны учёту так же,
- * как любые другие.
+ * Отдельная пара, а не поле `World`. На проверку инвариантов это не влияет:
+ * каждый шаг ниже проходит через `sealed()`, и деньги вывода видны учёту так
+ * же, как любые другие — вывод не заводит собственного журнала.
+ *
+ * ⚠ Половина работы, которая осталась и названа в отчёте: свести `withdrawals`
+ * в сам `World`. Пока их две структуры, «мир» можно передать дальше без
+ * выводов — и тогда шаг, который их не видит, запечатается без них.
  */
 export interface WithdrawalWorld {
   readonly world: World;
@@ -97,7 +101,7 @@ export function withWithdrawals(world: World): WithdrawalWorld {
 function runtimeOf(scene: WithdrawalWorld, withdrawalId: string): WithdrawalRuntime {
   const runtime = scene.withdrawals.get(withdrawalId);
   if (runtime === undefined) {
-    throw new Error(`e2e.unknown_withdrawal:${withdrawalId}`);
+    throw new Error(`app.unknown_withdrawal:${withdrawalId}`);
   }
   return runtime;
 }
@@ -245,7 +249,7 @@ export function requestWithdrawal(
   spec: WithdrawalSpec,
 ): WithdrawalWorld {
   if (scene.withdrawals.has(spec.withdrawalId)) {
-    throw new Error(`e2e.withdrawal.duplicate:${spec.withdrawalId}`);
+    throw new Error(`app.withdrawal.duplicate:${spec.withdrawalId}`);
   }
   const runtime: WithdrawalRuntime = {
     state: createWithdrawal(spec.withdrawalId),
@@ -314,7 +318,7 @@ export function applyWithdrawalEvent(
   const facts = withdrawalFacts(scene, withdrawalId);
   const result = reduceWithdrawal(runtime.state, event, facts);
   if (!result.ok) {
-    throw new Error(`e2e.withdrawal.rejected:${result.error.code}:${result.error.failedGuards.join(',')}`);
+    throw new Error(`app.withdrawal.rejected:${result.error.code}:${result.error.failedGuards.join(',')}`);
   }
   const moved: WithdrawalRuntime = { ...runtime, state: result.value.state };
   const world = scene.world;
@@ -377,7 +381,7 @@ function bodyFor(
     if (source === null) {
       // Поручение без известного счёта-источника не существует как операция:
       // `g_source_account_known` уводит вывод в `blocked` до этой строки.
-      throw new Error('e2e.withdrawal.source_account_required');
+      throw new Error('app.withdrawal.source_account_required');
     }
     return {
       kind: 'payout_ordered' as const,
@@ -401,7 +405,7 @@ function bodyFor(
     if (response === null) {
       // `settled` и `rejected` без сырого ответа — разобранные поля без
       // исходника (`CORE.md` Ф11). Тип записи их и не принимает.
-      throw new Error('e2e.withdrawal.response_required');
+      throw new Error('app.withdrawal.response_required');
     }
     return {
       kind: 'payout_result' as const,
@@ -428,7 +432,7 @@ export function rejectWithdrawalEvent(
   const runtime = runtimeOf(scene, withdrawalId);
   const result = reduceWithdrawal(runtime.state, event, withdrawalFacts(scene, withdrawalId));
   if (result.ok) {
-    throw new Error(`e2e.withdrawal.unexpected_transition:${result.value.state.status}`);
+    throw new Error(`app.withdrawal.unexpected_transition:${result.value.state.status}`);
   }
   return result.error;
 }

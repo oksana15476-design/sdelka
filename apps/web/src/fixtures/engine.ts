@@ -22,13 +22,17 @@ import {
   reduceDeal,
   reducePayout,
   reduceTranche,
+  type DealFiling,
+  DEFAULT_OBSERVATION_POLICY,
 } from '@sdelka/domain';
 import {
   type ClientKey,
   type Journal,
   type TrancheRef,
   accountBalance,
+  accrueFee,
   appendEntry,
+  receiveFee,
   clientFreeAccount,
   clientKey,
   clientLockedAccount,
@@ -151,10 +155,28 @@ interface Mutable {
    * моментам, началось ровно со счётчика рядом с журналом.
    */
   collectedMinor: bigint;
+  /**
+   * Заявления по сделке. Разрешает заявление только платная выписка, и любым
+   * своим вердиктом: статус карточки сюда не попадает никогда (CORE.md Ф7 —
+   * «завершено» не значит ничего, заявление может быть закрыто отказом).
+   */
+  filings: DealFiling[];
   entrySeq: number;
   marks: StatusMark[];
   notifications: string[];
 }
+
+/** Кадастровый код объекта фикстуры: сверяется с кодом наблюдения. */
+const FIXTURE_CADASTRAL_CODE = '01.10.14.005.041';
+
+/**
+ * Отпечаток сырого ответа реестра. В фикстуре постоянный: сам ответ здесь не
+ * хранится, а `verifyRawSource` вызывается там, где хранилище есть.
+ */
+const FIXTURE_RAW_DIGEST = '7d3a1f'.padEnd(64, '0');
+
+/** Редакция тарифа, действовавшая при заведении сделки-фикстуры. */
+const FIXTURE_TARIFF_VERSION = 'tariff-2026-09';
 
 /** Владелец обязательства по траншу: плательщик, и никто другой. */
 function payerKey(input: RunInput): ClientKey {
@@ -206,14 +228,34 @@ function factsOf(input: RunInput, state: Mutable, now: Instant): TrancheFacts {
     buyer: input.payer,
     conditionAct: conditionActOf(input.recipient, instant(FIXTURE_NOW - 30 * 24 * HOUR_MS)),
     evidenceBundleId: 'evidence-2026-09',
-    statementFields: {
-      cadastralCode: true,
-      ownerDocumentNumber: true,
-      share: true,
-      basis: true,
-      noUnexpectedEncumbrances: true,
+    expectedCadastralCode: FIXTURE_CADASTRAL_CODE,
+    observationPolicy: DEFAULT_OBSERVATION_POLICY,
+    // Поля выписки больше не лежат в фактах отдельно: они часть наблюдения.
+    // Так и должно быть — совпадение полей без источника, которым они получены,
+    // ничего не доказывает (CORE.md Ф7, Ф11).
+    observation: {
+      level: 'L3',
+      conditionType: 'registration_transfer',
+      sourceKey: 'registry.paid_extract',
+      cadastralCode: FIXTURE_CADASTRAL_CODE,
+      fields: {
+        cadastralCode: true,
+        ownerDocumentNumber: true,
+        share: true,
+        basis: true,
+        noUnexpectedEncumbrances: true,
+      },
+      // Сверка собственника — часть наблюдения, а не отдельный булев факт:
+      // «совпало» без источника, которым совпадение установлено, ничего не
+      // доказывает. `insufficient` — законный исход, а не ошибка: выписка без
+      // номера документа собственника выплату не разрешает.
+      ownerCheck: input.overrides.registryOwnerIsBuyer ? 'established' : 'refuted',
+      // Наблюдение свежее относительно ШАГА, а не относительно конца сценария:
+      // политика ограничивает возраст сутками, и наблюдение, датированное
+      // будущим шага, guard не проходит — что правильно.
+      observedAt: instant(now - HOUR_MS),
+      rawSourceDigest: FIXTURE_RAW_DIGEST,
     },
-    registryOwnerIsBuyer: input.overrides.registryOwnerIsBuyer,
     beneficiary: {
       status: 'verified',
       locked: input.overrides.beneficiaryLocked,
@@ -319,7 +361,11 @@ function applyIntent(
     return;
   }
   if (intent.type === 'post_settlement_entry') {
+    // Ф16: удержание оформляется двумя встречными фактами, а не уменьшенным
+    // платежом. Расчёт ссылается на начисление, из которого удерживает.
     const fee = platformFee(intent.amount);
+    const feeAccrual = accrueFee(meta(state, input.dealId, at), deal, fee, FIXTURE_TARIFF_VERSION);
+    state.journal = appendEntry(state.journal, feeAccrual);
     state.journal = appendEntry(
       state.journal,
       settleTrancheToClientAccount(
@@ -331,8 +377,13 @@ function applyIntent(
           intent.attestation,
         ),
         intent.amount,
-        fee,
+        feeAccrual,
       ),
+    );
+    // Третий момент: комиссия доходит с транзита на операционный счёт.
+    state.journal = appendEntry(
+      state.journal,
+      receiveFee(meta(state, input.dealId, at), deal, feeAccrual.accruedFee),
     );
   }
 }
@@ -348,6 +399,7 @@ export function runScenario(input: RunInput): RunResult {
     payout: null,
     journal: emptyJournal,
     collectedMinor: 0n,
+    filings: [],
     entrySeq: 0,
     marks: [{ status: 'pending', at: FIXTURE_NOW - 72 * HOUR_MS }],
     notifications: [],
@@ -402,6 +454,8 @@ export function runScenario(input: RunInput): RunResult {
             trancheStatuses: [state.tranche.status],
             preparedBy: 'op-1',
             conditionAct: conditionActOf(input.recipient, instant(FIXTURE_NOW - 30 * 24 * HOUR_MS)),
+            filings: state.filings,
+            objectCadastralCode: FIXTURE_CADASTRAL_CODE,
           },
         });
         if (!result.ok) {

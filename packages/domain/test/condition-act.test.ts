@@ -22,6 +22,7 @@ import {
   NOW,
   RECIPIENT_PARTY_ID,
   context,
+  dealFacts,
 } from './support/facts';
 import { accept, reject, stateAt } from './support/drive';
 
@@ -44,7 +45,7 @@ function dealContext(conditionAct: ConditionAct | null): DealContext {
   return {
     dealId: 'deal-1',
     now: NOW,
-    facts: { trancheStatuses: [], preparedBy: null, conditionAct },
+    facts: dealFacts({ trancheStatuses: [], preparedBy: null, conditionAct }),
   };
 }
 

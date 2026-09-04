@@ -15,10 +15,10 @@ import {
   routeByMatch,
   routeByPayer,
 } from '@sdelka/intake';
-import { accountBalance, bankNominal, clientFreeAccount, clientLockedAccount, coverage } from '@sdelka/ledger';
+import { absorbShortfall, accountBalance, bankNominal, clientFreeAccount, clientLockedAccount, coverage } from '@sdelka/ledger';
 import { money } from '@sdelka/money';
 import {
-  E2eInvariantError,
+  AppInvariantError,
   absorbIncomingShortfall,
   applyDealEvent,
   applyTrancheEvent,
@@ -28,7 +28,7 @@ import {
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import { BUYER, DEAL_AMOUNT, GEL, NOW, POLICY_VERSION, SELLER, THIRD_PARTY } from './support/fixtures';
 import { openDeal } from './support/open';
 
@@ -194,8 +194,8 @@ describe('приём средств', () => {
     } catch (error) {
       violation = error;
     }
-    expect(violation).toBeInstanceOf(E2eInvariantError);
-    expect((violation as E2eInvariantError).violations.map((item) => item.invariant)).toContain(
+    expect(violation).toBeInstanceOf(AppInvariantError);
+    expect((violation as AppInvariantError).violations.map((item) => item.invariant)).toContain(
       'collected_not_backed',
     );
     expect(trancheStatusOf(naive, TRANCHE)).toBe('collecting');
@@ -216,8 +216,8 @@ describe('приём средств', () => {
     // видно в системе как расхождение, а не как норма». В сквозном мире
     // «видно» выражается единственным способом, который у него есть: шаг не
     // запечатывается, приём остановлен, и расхождение названо поимённо.
-    expect(uncovered).toBeInstanceOf(E2eInvariantError);
-    const uncoveredNames = (uncovered as E2eInvariantError).violations.map((item) => item.invariant);
+    expect(uncovered).toBeInstanceOf(AppInvariantError);
+    const uncoveredNames = (uncovered as AppInvariantError).violations.map((item) => item.invariant);
     expect(uncoveredNames).toContain('funds_source_uncovered');
     expect(uncoveredNames).toContain('coverage_below_one');
     // И это **не** отрицательный остаток клиента: обязательство доведено до
@@ -229,15 +229,30 @@ describe('приём средств', () => {
     // зарабатывала, и закрыть дыру ей нечем. Довнесение с пустого счёта
     // восстанавливает пофайловое обеспечение — и ловится отрицательным
     // остатком банковского счёта, то есть обещанием, за которым ничего нет.
+    // Клиента и суммы у довнесения в аргументах больше нет: и то и другое
+    // приходит **из записи признания**, и довнести кому угодно сколько угодно
+    // теперь нечем — `fundShortfall` принимает запись, а не сумму.
+    //
+    // ⚠ Запись признания здесь строится конструктором словаря напрямую, а не
+    // шагом мира, и это не обход правила, а его следствие: шаг мира с
+    // признанием не запечатывается (см. `uncovered` выше), поэтому получить из
+    // него значение невозможно **по построению**. То есть красная линия №3
+    // держится даже против теста, которому запись нужна.
+    const recognised = absorbShortfall(
+      { id: 'entry-recognition', occurredAt: new Date(NOW).toISOString() },
+      opened.buyerKey,
+      short,
+      plan.shortfall,
+    );
     let promised: unknown = null;
     try {
-      fundIncomingShortfall(world, opened.buyerKey, plan.shortfall);
+      fundIncomingShortfall(world, recognised);
     } catch (error) {
       promised = error;
     }
-    expect(promised).toBeInstanceOf(E2eInvariantError);
+    expect(promised).toBeInstanceOf(AppInvariantError);
     expect(
-      (promised as E2eInvariantError).violations.map((item) => item.detail),
+      (promised as AppInvariantError).violations.map((item) => item.detail),
     ).toContain('ledger.invariant.negative_bank_balance');
 
     // Что из этого следует и кому. Недостачу закрывают **наши** деньги, а

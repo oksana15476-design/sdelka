@@ -5,7 +5,10 @@ import {
   type TrancheEvent,
   BENEFICIARY_PRE_RELEASE_BLACKOUT_MS,
   DEFAULT_APPROVAL_POLICY,
+  DEFAULT_OBSERVATION_POLICY,
   GUARD_IDS,
+  OWNER_CHECKS,
+  RELEASE_CONDITIONS,
   evaluateGuard,
   instant,
 } from '../src/index';
@@ -18,6 +21,7 @@ import {
   NOW,
   RECIPIENT_PARTY_ID,
   facts,
+  observation,
 } from './support/facts';
 
 const fundsReceived: TrancheEvent = {
@@ -66,7 +70,19 @@ describe('каждый guard проходит и не проходит', () => {
     // что у списания два законных пустых файла и различать их обязано правило,
     // а не вызывающий: «денег под траншем не было вовсе» — закрывать нечего, а
     // «деньги есть, но в свободной части счёта» — закрывать нельзя.
-    expect(GUARD_IDS).toHaveLength(19);
+    //
+    // Двадцатый — `g_observation_sufficient` (E3-1, `ORACLE.md` §6.4): годен ли
+    // сам документ, на который опирается расчёт. Это не счётчик подрос, а
+    // появилось правило, которого не было: `STATE-MACHINES.md` §8 требовал
+    // «платная выписка, L3+», а уровня доверия в коде не существовало вовсе.
+    // Пять полей выписки и вердикт по собственнику лежали в фактах транша
+    // порознь и **без документа** — собрать факты с пятью `true`, не имея ни
+    // одной выписки, было законной конструкцией типа, и фикстура интерфейса
+    // ровно это и делала. Отдельный guard, а не расширение `g_fields_match`:
+    // «документ годен» и «содержимое сошлось» — два утверждения, и §7 требует,
+    // чтобы каждое проверялось поимённо.
+    expect(GUARD_IDS).toHaveLength(20);
+    expect(GUARD_IDS).toContain('g_observation_sufficient');
     expect(GUARD_IDS).not.toContain('g_seller_is_owner');
     expect(GUARD_IDS).not.toContain('g_no_stale_break');
     expect(GUARD_IDS).toContain('g_condition_agreed');
@@ -238,15 +254,85 @@ describe('каждый guard проходит и не проходит', () => {
     for (const field of Object.keys(MATCHING_STATEMENT) as (keyof typeof MATCHING_STATEMENT)[]) {
       expect(
         check('g_fields_match', {
-          statementFields: { ...MATCHING_STATEMENT, [field]: false },
+          observation: observation({ fields: { ...MATCHING_STATEMENT, [field]: false } }),
         }),
       ).toBe(false);
     }
+    // Наблюдения нет — полей нет, и их отсутствие не читается как совпадение
+    // (CORE.md Ф7: отсутствие сигнала никогда не значит «всё хорошо»).
+    expect(check('g_fields_match', { observation: null })).toBe(false);
   });
 
-  it('g_owner_is_buyer', () => {
+  it('g_owner_is_buyer: только established, и «недостаточно» роняет так же, как «опровергнуто»', () => {
     expect(check('g_owner_is_buyer', {})).toBe(true);
-    expect(check('g_owner_is_buyer', { registryOwnerIsBuyer: false })).toBe(false);
+    expect(check('g_owner_is_buyer', { observation: observation({ ownerCheck: 'refuted' }) })).toBe(
+      false,
+    );
+    // ⚠ Открытый вопрос CORE.md Ф7: отдаёт ли выписка номер документа
+    // иностранного собственника. До ответа `insufficient` роняет guard ровно
+    // так же, как `refuted`, — различаются они ключом причины и видом задачи
+    // оператора, но не разрешением (ORACLE.md §5.3). Тест держит эти два
+    // исхода неразличимыми **по разрешению** и различимыми по значению.
+    expect(
+      check('g_owner_is_buyer', { observation: observation({ ownerCheck: 'insufficient' }) }),
+    ).toBe(false);
+    expect(check('g_owner_is_buyer', { observation: null })).toBe(false);
+    for (const outcome of OWNER_CHECKS) {
+      expect(outcome === 'established').toBe(
+        check('g_owner_is_buyer', { observation: observation({ ownerCheck: outcome }) }),
+      );
+    }
+  });
+
+  it('g_observation_sufficient: документ есть, он о нашем условии, нашем объекте и не протух', () => {
+    expect(check('g_observation_sufficient', {})).toBe(true);
+    // Наблюдения нет вовсе — единственное состояние, в котором транш проводит
+    // почти всю жизнь, и денег оно не двигает.
+    expect(check('g_observation_sufficient', { observation: null })).toBe(false);
+    // Уровень ниже L3: карточка заявления запускает тайминг, но не деньги.
+    for (const level of ['L0', 'L1', 'L2'] as const) {
+      expect(check('g_observation_sufficient', { observation: observation({ level }) })).toBe(false);
+    }
+    // L4 и L5 — усиление, а не другое правило.
+    for (const level of ['L4', 'L5'] as const) {
+      expect(check('g_observation_sufficient', { observation: observation({ level }) })).toBe(true);
+    }
+    // Наблюдение о другом типе условия: акт транша — `registration_transfer`.
+    expect(
+      check('g_observation_sufficient', {
+        observation: observation({
+          conditionType: 'calendar_date',
+          sourceKey: RELEASE_CONDITIONS.calendar_date.sourceKey,
+        }),
+      }),
+    ).toBe(false);
+    // Нужный тип, но не тот источник: «выписка» из системного времени.
+    expect(
+      check('g_observation_sufficient', {
+        observation: observation({ sourceKey: 'time.independent_timestamp' }),
+      }),
+    ).toBe(false);
+    // Наблюдение о чужом объекте — полноценное, свежее, L3.
+    expect(
+      check('g_observation_sufficient', { observation: observation({ cadastralCode: '99.99.99.999.999' }) }),
+    ).toBe(false);
+    expect(check('g_observation_sufficient', { expectedCadastralCode: '' })).toBe(false);
+    // Свежесть: на границе политики ещё годится, за границей — нет.
+    const stale = instant(NOW - DEFAULT_OBSERVATION_POLICY.maxAge);
+    expect(
+      check('g_observation_sufficient', { observation: observation({ observedAt: stale }) }),
+    ).toBe(true);
+    expect(
+      check('g_observation_sufficient', {
+        observation: observation({ observedAt: instant(stale - 1) }),
+      }),
+    ).toBe(false);
+    // Наблюдение из будущего — рассогласование часов, а не «совсем свежее».
+    expect(
+      check('g_observation_sufficient', { observation: observation({ observedAt: instant(NOW + 1) }) }),
+    ).toBe(false);
+    // Акта нет — спрашивать не о чем: тип условия берётся из акта получателя.
+    expect(check('g_observation_sufficient', { conditionAct: null })).toBe(false);
   });
 
   it('g_approvals_sufficient: пороги по сумме и запрет утверждения готовившим', () => {

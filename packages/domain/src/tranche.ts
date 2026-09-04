@@ -381,6 +381,20 @@ function transition(
  */
 const EVIDENCE_GUARDS: readonly GuardId[] = [
   'g_evidence_present',
+  /**
+   * Наблюдение оракула годно как основание — E3-1, `ORACLE.md` §6.4.
+   *
+   * Стоит рядом с `g_fields_match` и `g_owner_is_buyer`, а не вместо них: те
+   * проверяют **содержимое** документа, этот — сам документ (существует, о том
+   * же условии, от требуемого источника, уровня L3+, про наш объект, не
+   * протух). Без него пять сошедшихся полей без единой выписки открывали дверь
+   * к выплате — и открывали законно, потому что полей без документа не бывает
+   * только с этого батча.
+   *
+   * На **обоих** рёбрах пути выплаты по той же причине, что и остальные:
+   * guard, стоящий на одной двери, состояние не защищает (§1.4, §4).
+   */
+  'g_observation_sufficient',
   'g_fields_match',
   'g_owner_is_buyer',
   'g_beneficiary_locked',
@@ -930,6 +944,52 @@ export function reduceTranche(
         rejection(RejectionCode.conditionActSubstituted, [], {
           status: state.status,
           event: event.type,
+        }),
+      );
+    }
+  }
+
+  /**
+   * Условие устанавливается **тем самым пакетом доказательств и тем самым типом
+   * условия**, которые записаны у транша (E3-1, `ORACLE.md` §6.5).
+   *
+   * Обе сверки — рядом с `conditionActSubstituted` выше, тем же приёмом и по
+   * той же причине: факты приходят снаружи на каждый вызов, и без сверки поле
+   * события декоративно.
+   *
+   * 1. **Пакет доказательств.** Событие несёт `evidenceBundleId`, а намерения
+   *    входа (`build_payout_instruction`, `enqueue_outbound_payout`) берут
+   *    ссылку **из фактов**. Расхождение означает, что журнал аудита и guard
+   *    говорят о разных пакетах — красная линия №5 держится на том, что пакет
+   *    один. Случай «в фактах пакета нет вовсе» сюда не относится: его ловит
+   *    `g_evidence_present` на том же ребре и называет своим именем.
+   *
+   * 2. **Тип условия.** Проверялась только принадлежность перечню, но не
+   *    совпадение с типом в акте получателя. Транш с актом
+   *    `registration_transfer` устанавливался событием `calendar_date` — и
+   *    проходил, потому что у того `requiresConfirmation: false`. Прикрыто это
+   *    было случайностью (базовые факты сквозного потока клали пять полей
+   *    выписки в `false`), а не правилом. Условие определяет получатель
+   *    (ст. 27(2), Ф13), и подменить его тип событием нельзя: иначе транш,
+   *    ждущий регистрации, расчитывается по наступлению календарной даты.
+   */
+  if (event.type === 'condition_established') {
+    const evidenceBundleId = context.facts.evidenceBundleId;
+    if (evidenceBundleId !== null && event.evidenceBundleId !== evidenceBundleId) {
+      return failure(
+        rejection(RejectionCode.evidenceBundleSubstituted, [], {
+          status: state.status,
+          event: event.type,
+        }),
+      );
+    }
+    const act = boundAct ?? context.facts.conditionAct;
+    if (act !== null && event.conditionType !== act.conditionType) {
+      return failure(
+        rejection(RejectionCode.conditionTypeSubstituted, [], {
+          status: state.status,
+          conditionType: event.conditionType,
+          actConditionType: act.conditionType,
         }),
       );
     }

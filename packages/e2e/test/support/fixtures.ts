@@ -41,7 +41,15 @@ import {
   money,
   rational,
 } from '@sdelka/money';
-import { type BankOutcome, type BankPort, type RegistryExtract, type RegistryPort, toClientKey } from '../../src/index';
+import {
+  type BankOutcome,
+  type BankPort,
+  type RegistryAnswer,
+  type RegistryApplicationCard,
+  type RegistryExtract,
+  type RegistryPort,
+  toClientKey,
+} from '@sdelka/app';
 
 /**
  * Фикстуры сквозного контура.
@@ -241,28 +249,79 @@ export const ALL_FIELDS_MATCH: StatementFields = Object.freeze({
   noUnexpectedEncumbrances: true,
 });
 
+/**
+ * Кадастровый код объекта сделки. Один на все фикстуры: `g_observation_sufficient`
+ * сверяет код наблюдения с кодом объекта, и «выписка по чужому объекту»
+ * выражается подстановкой другого кода, а не флагом.
+ */
+export const CADASTRAL_CODE = '01.10.14.001.123';
+/** Объект соседней сделки: тот же реестр, другая вещь. */
+export const OTHER_CADASTRAL_CODE = '01.10.14.001.777';
+
+/** Версия тарифного плана: уходит фактом в журнал вместе с начислением (И14.3). */
+export const TARIFF_VERSION = 'tariff-2026-09-01';
+
+export const APPLICATION_ID = 'app-registration-1';
+
+function found<T>(value: T): RegistryAnswer<T> {
+  return { kind: 'found', value };
+}
+
+function extract(overrides: Partial<RegistryExtract> = {}): RegistryExtract {
+  return {
+    fields: ALL_FIELDS_MATCH,
+    ownerDocumentNumber: 'matched',
+    // Имя собственника из выписки — вторичный сигнал: вердикт даёт номер
+    // документа. Совпадающее имя при отсутствующем номере обязано давать
+    // `insufficient`, и фикстура «без номера» это и проверяет.
+    ownerNames: BUYER_NAMES,
+    cadastralCode: CADASTRAL_CODE,
+    rawSource: REGISTRY_EXTRACT_SOURCE,
+    observedAt: NOW,
+    ...overrides,
+  };
+}
+
+function card(overrides: Partial<RegistryApplicationCard> = {}): RegistryApplicationCard {
+  return {
+    applicationId: APPLICATION_ID,
+    cadastralCode: CADASTRAL_CODE,
+    // Статус — непрозрачная строка: ни одно решение его не читает (`CORE.md` Ф7).
+    applicationStatus: 'in_progress',
+    digest: fp(3001),
+    observedAt: NOW,
+    ...overrides,
+  };
+}
+
+/**
+ * Реестр, у которого нет ничего. Ответ, а не молчание: `absent` — это «реестр
+ * посмотрел и не нашёл», и от `unavailable` он отличается тем, что на нём можно
+ * принимать решения.
+ */
+function emptyRegistry(): RegistryPort {
+  return {
+    paidExtract: () => ({ kind: 'absent' }),
+    applicationCard: () => ({ kind: 'absent' }),
+    openApplication: () => ({ kind: 'absent' }),
+  };
+}
+
 /** Реестр отдал платную выписку: переход права зарегистрирован на покупателя. */
 export function registryWithTransfer(): RegistryPort {
-  return {
-    paidExtract: () => ({
-      statementFields: ALL_FIELDS_MATCH,
-      ownerIsBuyer: true,
-      ownerDocumentNumber: 'matched',
-      rawSource: REGISTRY_EXTRACT_SOURCE,
-      observedAt: NOW,
-    }),
-  };
+  return { ...emptyRegistry(), paidExtract: () => found(extract()) };
 }
 
 /** Реестр отдал выписку, из которой видно, что перехода права не было. */
 export function registryWithoutTransfer(): RegistryPort {
-  return { paidExtract: (): RegistryExtract | null => null };
+  return emptyRegistry();
 }
 
 /**
- * Выписка есть, все пять полей сошлись — но новым собственником в ней значится
- * **продавец**, а не покупатель. Это не «данных нет»: это доказательство, что
- * переход права не состоялся, и на нём стоит `g_owner_is_buyer` (§1.3).
+ * Выписка есть, все пять полей сошлись — но номер документа собственника в ней
+ * **другой**. Это не «данных нет»: это доказательство, что переход права не
+ * состоялся, и `reconcileOwner` даёт `refuted`, на котором стоит
+ * `g_owner_is_buyer` (§1.3).
  *
  * Отдельная фикстура, а не флаг у `registryWithTransfer`: случай, в котором
  * пакет доказательств собран и поля совпали, а собственник не тот, — ровно тот,
@@ -270,13 +329,22 @@ export function registryWithoutTransfer(): RegistryPort {
  */
 export function registryWithoutOwnerChange(): RegistryPort {
   return {
-    paidExtract: () => ({
-      statementFields: ALL_FIELDS_MATCH,
-      ownerIsBuyer: false,
-      ownerDocumentNumber: 'matched',
-      rawSource: REGISTRY_EXTRACT_SOURCE,
-      observedAt: NOW,
-    }),
+    ...emptyRegistry(),
+    paidExtract: () =>
+      found(extract({ ownerDocumentNumber: 'mismatched', ownerNames: SELLER_NAMES })),
+  };
+}
+
+/**
+ * Выписка пришла, все поля сошлись, имя собственника совпало **точно** — но
+ * номера документа в выписке нет (`CORE.md` Ф7, открытый вопрос по
+ * иностранцам). Вердикт `insufficient`, и он роняет `g_owner_is_buyer` ровно
+ * так же, как `refuted`: «наверное совпало» основанием для денег не является.
+ */
+export function registryWithoutOwnerDocumentNumber(): RegistryPort {
+  return {
+    ...emptyRegistry(),
+    paidExtract: () => found(extract({ ownerDocumentNumber: 'absent' })),
   };
 }
 
@@ -290,23 +358,61 @@ export function registryWithoutOwnerChange(): RegistryPort {
  */
 export function registryWithEncumbrance(): RegistryPort {
   return {
-    paidExtract: () => ({
-      statementFields: { ...ALL_FIELDS_MATCH, noUnexpectedEncumbrances: false },
-      ownerIsBuyer: true,
-      ownerDocumentNumber: 'matched',
-      rawSource: REGISTRY_EXTRACT_SOURCE,
-      observedAt: NOW,
-    }),
+    ...emptyRegistry(),
+    paidExtract: () =>
+      found(extract({ fields: { ...ALL_FIELDS_MATCH, noUnexpectedEncumbrances: false } })),
   };
 }
 
-/** Выписка из порта или отказ сборки: `null` здесь — дефект фикстуры, не сценарий. */
+/** Выписка по **чужому объекту**: всё в ней сошлось, но она не про нашу вещь. */
+export function registryWithForeignObject(): RegistryPort {
+  return {
+    ...emptyRegistry(),
+    paidExtract: () => found(extract({ cadastralCode: OTHER_CADASTRAL_CODE })),
+  };
+}
+
+/**
+ * Карточка заявления есть, выписки ещё нет: бесплатный сигнал уровня L1.
+ * Тайминг он запускает, деньги — нет.
+ */
+export function registryWithApplicationCard(): RegistryPort {
+  return {
+    ...emptyRegistry(),
+    applicationCard: () => found(card()),
+    openApplication: () => found(card()),
+  };
+}
+
+/**
+ * Реестр не отвечает. Отдельный исход, а не `absent`: отсутствие сигнала — не
+ * «всё хорошо», и приравнивать одно к другому значит запускать возврат по
+ * техническому инциденту (`ORACLE.md` §10).
+ */
+export function registryUnavailable(): RegistryPort {
+  const down = <T>(): RegistryAnswer<T> => ({
+    kind: 'unavailable',
+    reasonKey: 'oracle.registry.unavailable',
+  });
+  return { paidExtract: down, applicationCard: down, openApplication: down };
+}
+
+/** Выписка из порта или отказ сборки: не-`found` здесь — дефект фикстуры, не сценарий. */
 export function extractOf(port: RegistryPort, cadastralRef: string): RegistryExtract {
-  const extract = port.paidExtract(cadastralRef);
-  if (extract === null) {
-    throw new Error('e2e.fixture.extract_missing');
+  const answer = port.paidExtract(cadastralRef);
+  if (answer.kind !== 'found') {
+    throw new Error(`e2e.fixture.extract_missing:${answer.kind}`);
   }
-  return extract;
+  return answer.value;
+}
+
+/** Карточка заявления из порта. Та же дисциплина, что у выписки. */
+export function cardOf(port: RegistryPort, applicationId: string): RegistryApplicationCard {
+  const answer = port.applicationCard(applicationId);
+  if (answer.kind !== 'found') {
+    throw new Error(`e2e.fixture.card_missing:${answer.kind}`);
+  }
+  return answer.value;
 }
 
 export interface BankScript {

@@ -26,9 +26,10 @@
  *
  * Статически, до браузера: запрещённые слова, литералы в компонентах,
  * совпадение наборов ключей у трёх словарей.
- * В браузере: непереведённый ключ на экране, горизонтальное переполнение на
- * 360 px, обрезанный текст в кнопках и чипах, размер сенсорных целей, контраст,
- * единственный `h1`, достижимость с клавиатуры.
+ * В браузере: непереведённый ключ на экране, **неподставленный и пусто
+ * подставленный слот**, горизонтальное переполнение на 360 px, обрезанный текст
+ * в кнопках и чипах, размер сенсорных целей, контраст, единственный `h1`,
+ * достижимость с клавиатуры и **бюджеты длины на грузинском**.
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -93,10 +94,48 @@ const FORBIDDEN_PHRASES = [
 
 /**
  * Слова `buyer` и `seller` в слое интерфейса запрещены целиком: роль — свойство
- * сделки. Исключение ровно одно и названо поимённо — имена полей `TrancheFacts`
- * из `@sdelka/domain`, которые мы не переименовываем, потому что не владеем ими.
+ * сделки. Исключение ровно одно — имена, объявленные в `@sdelka/domain`: их мы
+ * не переименовываем, потому что не владеем ими.
+ *
+ * ## Почему список **читается**, а не перечислен здесь
+ *
+ * Прежняя редакция несла перечень из четырёх строк, и одна из них —
+ * `registryOwnerIsBuyer` — пережила само поле: E3 заменил пять булевых полей
+ * выписки одним наблюдением, поля не стало, а разрешение на него осталось.
+ * Такое разрешение не ломает ничего сегодня и молча разрешает завтра: любая
+ * строка интерфейса с этим словом прошла бы проверку.
+ *
+ * Теперь имена вычитываются из исходников домена: составное имя (`buyerPayerKey`,
+ * `buyerNames`) разрешено само по себе, а голое `buyer`/`seller` — только в
+ * позиции ключа или свойства. Поле, исчезнувшее из домена, исчезает из
+ * разрешений в тот же день.
  */
-const DOMAIN_FIELD_TOKENS = ['buyerPayerKey', 'registryOwnerIsBuyer', 'buyer:', 'buyer,'];
+const DOMAIN_SRC = resolve(APP_ROOT, '..', '..', 'packages', 'domain', 'src');
+
+function domainRoleIdentifiers() {
+  const names = new Set();
+  if (!existsSync(DOMAIN_SRC)) return names;
+  for (const file of walk(DOMAIN_SRC)) {
+    if (!file.endsWith('.ts')) continue;
+    for (const match of readFileSync(file, 'utf8').matchAll(/\b([A-Za-z_$][\w$]*)\b/gu)) {
+      if (/buyer|seller/iu.test(match[1])) names.add(match[1]);
+    }
+  }
+  return names;
+}
+
+const DOMAIN_ROLE_NAMES = domainRoleIdentifiers();
+
+/** Составные имена домена: они однозначны и разрешены как есть. */
+const DOMAIN_FIELD_TOKENS = [...DOMAIN_ROLE_NAMES].filter(
+  (name) => !/^(buyer|seller)$/iu.test(name),
+);
+
+/**
+ * Голые `buyer`/`seller` — только как ключ объекта или свойство. Слово в тексте,
+ * в имени ключа локализации или в заголовке так не выглядит.
+ */
+const BARE_ROLE_POSITIONS = [/\bbuyer\s*[:,)]/u, /\.buyer\b/u, /\bbuyer\s*\}/u];
 
 function checkVocabulary() {
   process.stdout.write('Запрещённые слова про кабинеты\n');
@@ -114,6 +153,7 @@ function checkVocabulary() {
     lines.forEach((line, index) => {
       if (!/\b(buyer|seller)\b/iu.test(line)) return;
       if (DOMAIN_FIELD_TOKENS.some((token) => line.includes(token))) return;
+      if (BARE_ROLE_POSITIONS.some((pattern) => pattern.test(line))) return;
       fail('роль как состояние', `${rel}:${index + 1} — ${line.trim().slice(0, 80)}`);
     });
   }
@@ -273,9 +313,30 @@ function routes() {
     add(`requisites-${state}`, `/requisites?state=${state}`, { desktop: DESKTOP }, ['ru']);
     add(`requisites-${state}`, `/requisites?state=${state}`, { mobile: MOBILE }, ['ka']);
   }
+  /**
+   * Маршруты, которых в обходе не было **вовсе**, хотя страницы существуют:
+   * пополнение, вывод, документы, уведомления, профиль, архив, заявка на сделку
+   * и три экрана консоли — решение о выплате, сверка, снятие приостановки.
+   *
+   * Экран, которого нет в обходе, не проверяется ничем: ни на непереведённый
+   * ключ, ни на переполнение, ни на контраст, ни на бюджеты длины. Восемь из
+   * шестнадцати страниц приложения были ровно в этом положении, и «обход на 90
+   * экранах» это скрывал, потому что 90 — число снимков, а не покрытых
+   * маршрутов.
+   */
+  add('topup', `/topup/${MONEY_STATES[0][0]}`, { desktop: DESKTOP, mobile: MOBILE });
+  add('withdraw', '/withdraw', { desktop: DESKTOP, mobile: MOBILE });
+  add('documents', '/documents', { desktop: DESKTOP, mobile: MOBILE });
+  add('notifications', '/notifications', { desktop: DESKTOP, mobile: MOBILE });
+  add('profile', '/profile', { desktop: DESKTOP, mobile: MOBILE });
+  add('archive', '/archive', { desktop: DESKTOP, mobile: MOBILE });
+  add('deal-new', '/deals/new', { desktop: DESKTOP, mobile: MOBILE });
   add('ops-queue', '/ops', { desktop: { width: 1440, height: 1000 } });
   add('ops-queue', '/ops', { mobile: MOBILE }, ['ru']);
   add('ops-queue-empty', '/ops?type=verifyClient', { desktop: { width: 1440, height: 1000 } }, ['ka']);
+  add('ops-decision', '/ops/decision', { desktop: { width: 1440, height: 1000 }, mobile: MOBILE });
+  add('ops-reconciliation', '/ops/reconciliation', { desktop: { width: 1440, height: 1000 }, mobile: MOBILE });
+  add('ops-unfreeze', '/ops/unfreeze', { desktop: { width: 1440, height: 1000 }, mobile: MOBILE });
   add('security', '/security', { desktop: DESKTOP }, ['ka']);
   return list;
 }
@@ -288,6 +349,28 @@ const PAGE_CHECKS = `(() => {
 
   const untranslated = text.match(/\\[[a-z][\\w.$-]*\\.[\\w.$-]+\\]/g);
   if (untranslated) problems.push('непереведённый ключ на экране: ' + untranslated.slice(0, 3).join(', '));
+
+  // Слот, оставшийся в отрендеренном тексте: подстановку забыли передать.
+  const slots = text.match(/\\{[a-zA-Z][\\w]*\\}/g);
+  if (slots) problems.push('неподставленный слот на экране: ' + slots.slice(0, 3).join(', '));
+
+  // Слот, подставленный **пустотой**. Ключ на экране не остаётся, ошибка не
+  // бросается, строка просто читается как «Резерв снят , деньги идут». Ловится
+  // это только следом от подстановки: пробел перед знаком препинания, двойной
+  // пробел, висящее тире, скобки ни о чём.
+  for (const [rule, pattern] of [
+    ['пробел перед знаком препинания', /[\\wа-яёა-ჰ]\\s+[,.;:!?]/u],
+    ['двойной пробел', /[\\wа-яёა-ჰ]\\s{2,}[\\wа-яёა-ჰ]/u],
+    ['пустые скобки', /\\(\\s*\\)/u],
+    ['висящее тире', /\\s[—–-]\\s*$/mu],
+  ]) {
+    const found = text.match(pattern);
+    if (!found) continue;
+    const at = text.indexOf(found[0]);
+    problems.push(
+      'след пустой подстановки (' + rule + '): «' + text.slice(Math.max(0, at - 20), at + 30).replace(/\\n/g, ' ') + '»',
+    );
+  }
 
   const headings = document.querySelectorAll('h1');
   if (headings.length !== 1) problems.push('заголовков h1 на экране: ' + headings.length);
@@ -357,6 +440,55 @@ const PAGE_CHECKS = `(() => {
     }
   }
 
+  return problems;
+})()`;
+
+/**
+ * Бюджеты длины на грузинском — самом длинном из трёх языков.
+ *
+ * ## Почему это правило, а не вычитка
+ *
+ * Бюджеты прогонялись руками, и ручной прогон нашёл восемь превышений. Ручной
+ * прогон находит их **один раз**: следующая правка микрокопи вернёт их без
+ * единого сигнала, потому что перелив на грузинском не ломает ни сборку, ни
+ * тест, ни скриншот — он ломает вёрстку у клиента.
+ *
+ * Считаются **знаки**, а не пиксели: пиксельная ширина зависит от шрифта и
+ * округлений и мигает от прогона к прогону, а бюджет в знаках — это договор с
+ * копирайтером, который можно назвать в брифе.
+ *
+ * Проверяется только `ka`: русский и английский короче, и бюджет, выдержанный
+ * на грузинском, выдержан и на них. Обратное неверно.
+ */
+const LENGTH_BUDGETS = `(() => {
+  const budgets = [
+    ['заголовок', 'h1, h2, .card__title, .state-card__title, .banner__title, .outcome__title, .security__title', 44],
+    ['тело', '.state-card__body, .banner__body, .outcome__body, .deadline__consequence, .empty p', 240],
+    ['метка суммы', '.amount-label', 24],
+    ['чип', '.chip, .chipbtn, .badge, .langs__item', 32],
+    ['шаг ленты', '.timeline__label', 34],
+    ['⚖-слот', '.legal__body', 200],
+  ];
+  const problems = [];
+  for (const [name, selector, limit] of budgets) {
+    for (const node of document.querySelectorAll(selector)) {
+      const value = (node.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (value.length === 0 || value.length <= limit) continue;
+      problems.push(
+        'бюджет длины (' + name + '): ' + value.length + ' знаков при ' + limit + ' — «' + value.slice(0, 40) + '…»',
+      );
+    }
+  }
+  // Тело блока — не более трёх предложений. Четвёртое предложение читатель
+  // состояния денег не дочитывает, и его там быть не должно.
+  for (const node of document.querySelectorAll('.state-card__body, .banner__body, .outcome__body')) {
+    const value = (node.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (value.length === 0) continue;
+    const sentences = value.split(/[.!?](?:\\s|$)/u).filter((part) => part.trim().length > 0).length;
+    if (sentences > 3) {
+      problems.push('бюджет длины (тело): ' + sentences + ' предложения при 3 — «' + value.slice(0, 40) + '…»');
+    }
+  }
   return problems;
 })()`;
 
@@ -581,6 +713,9 @@ async function main() {
       continue;
     }
     const problems = await page.evaluate(PAGE_CHECKS);
+    if (route.locale === 'ka') {
+      problems.push(...(await page.evaluate(LENGTH_BUDGETS)));
+    }
     for (const problem of problems) {
       fail(`${route.name}.${route.locale}.${route.kind}`, problem);
     }

@@ -1,4 +1,10 @@
-import type { CurrencyCode, Money } from '@sdelka/money';
+import {
+  type ConvertedAmount,
+  type CurrencyCode,
+  type Money,
+  convertAtRate,
+  isPositive,
+} from '@sdelka/money';
 import {
   type Account,
   type ClientKey,
@@ -10,11 +16,13 @@ import {
   clientFreeAccount,
   clientFundsFile,
   clientLockedAccount,
-  fundsOwnership,
+  conversionOfAccount,
   isClientCustodyAccount,
   isClientFundsAccount,
   isClientObligationAccount,
+  isPlatformBankAccount,
   isPlatformIncomeAccount,
+  isPlatformReceivableAccount,
   poolDirection,
 } from './accounts';
 import { LedgerError, LedgerErrorCode } from './errors';
@@ -214,6 +222,184 @@ export function trancheSettlement(
   }) as unknown as TrancheSettlement;
 }
 
+/**
+ * Объявление обмена на записи — по образцу `TrancheSettlement`.
+ *
+ * **Зачем оно есть.** Курса в журнале не было вовсе: `receiveConversion`
+ * принимала посчитанные суммы, записывала их проводками и забывала, по какому
+ * курсу они получены. И14.2 требует выписку по сделке «суммы, курсы, комиссии,
+ * даты», а восстановить курс из двух сумм задним числом нельзя — усечение
+ * необратимо. Поэтому курс становится фактом записи, а не аргументом вызова,
+ * которого потом нет.
+ *
+ * Второе назначение — сверка. Обмен состоит из трёх записей (FUNCTIONAL.md
+ * §3.3), и связывает их только ключ конверсии в коде счёта. Объявление
+ * добавляет к ключу суммы обеих ног: подменить сумму в одной из трёх записей,
+ * оставив остальные, больше нельзя — проводка по счёту расчётов обязана быть
+ * равна объявленной ноге.
+ */
+export interface FxExecution {
+  /** Ключ обмена: тот же, что в коде счёта `fx:settlement:{k}`. */
+  readonly conversionId: string;
+  /** Исходная и встречная суммы вместе с тремя курсами и датой (§4.5). */
+  readonly converted: ConvertedAmount<CurrencyCode, CurrencyCode>;
+}
+
+/**
+ * Объявление собирается только здесь, и здесь же проверяется, что оно не
+ * противоречит само себе: встречная сумма обязана быть исходной, пересчитанной
+ * по **клиентскому** курсу с усечением (FUNCTIONAL.md §4.3, «направление
+ * округления при конвертации — усечение»).
+ *
+ * Проверка не лишняя, хотя `convert` из `@sdelka/money` строит `ConvertedAmount`
+ * ровно так же: значение приходит из базы и от провайдера, где типов нет, и
+ * пара «суммы отдельно, курсы отдельно» рассогласуется молча.
+ */
+export function fxExecution(
+  conversionId: string,
+  converted: ConvertedAmount<CurrencyCode, CurrencyCode>,
+): FxExecution {
+  assertAccountIdentifier(conversionId, 'conversionId');
+  if (!isPositive(converted.source) || !isPositive(converted.target)) {
+    throw new LedgerError(LedgerErrorCode.entryConversionDeclarationMismatch, {
+      conversionId,
+      source: converted.source.minor.toString(),
+      target: converted.target.minor.toString(),
+    });
+  }
+  const expected = convertAtRate(converted.source, converted.rates.client, 'trunc');
+  if (expected.currency !== converted.target.currency || expected.minor !== converted.target.minor) {
+    throw new LedgerError(LedgerErrorCode.entryConversionDeclarationMismatch, {
+      conversionId,
+      declared: `${converted.target.currency} ${converted.target.minor}`,
+      atClientRate: `${expected.currency} ${expected.minor}`,
+    });
+  }
+  return Object.freeze({ conversionId, converted });
+}
+
+/**
+ * Счёт расчётов с валютным контрагентом трогается только объявленным обменом, и
+ * только на объявленные суммы.
+ *
+ * Три правила, каждое закрывает свой способ разойтись:
+ *
+ * 1. **Нет проводки — нет объявления, и наоборот.** Объявление на записи, где
+ *    обмена нет, — это курс, приписанный чужой операции; проводка без
+ *    объявления — движение валюты неизвестно по какому курсу.
+ * 2. **Ключ конверсии один.** Запись, трогающая две конверсии сразу, снова
+ *    сложила бы их позиции в одну — ровно то, ради чего ключ появился в коде
+ *    счёта.
+ * 3. **Сумма — одна из двух объявленных ног.** Иначе можно объявить обмен на
+ *    сто лари, а двинуть сто тысяч.
+ */
+function assertConversionDeclared(
+  postings: readonly Posting[],
+  converts: FxExecution | undefined,
+): void {
+  const legs = postings.filter((posting) => conversionOfAccount(posting.account) !== null);
+  if (converts === undefined) {
+    const undeclared = legs[0];
+    if (undeclared !== undefined) {
+      throw new LedgerError(LedgerErrorCode.entryConversionUndeclared, {
+        account: accountCode(undeclared.account),
+      });
+    }
+    return;
+  }
+  if (legs.length === 0) {
+    throw new LedgerError(LedgerErrorCode.entryConversionUndeclared, {
+      conversionId: converts.conversionId,
+      reason: 'not_applied',
+    });
+  }
+  const { source, target } = converts.converted;
+  for (const posting of legs) {
+    if (conversionOfAccount(posting.account) !== converts.conversionId) {
+      throw new LedgerError(LedgerErrorCode.entryConversionUndeclared, {
+        account: accountCode(posting.account),
+        conversionId: converts.conversionId,
+      });
+    }
+    const amount = posting.amount;
+    const matchesSource =
+      amount.currency === source.currency && amount.minor === source.minor;
+    const matchesTarget =
+      amount.currency === target.currency && amount.minor === target.minor;
+    if (!matchesSource && !matchesTarget) {
+      throw new LedgerError(LedgerErrorCode.entryConversionUndeclared, {
+        account: accountCode(posting.account),
+        amount: `${amount.currency} ${amount.minor}`,
+        source: `${source.currency} ${source.minor}`,
+        target: `${target.currency} ${target.minor}`,
+      });
+    }
+  }
+}
+
+/**
+ * Объявление начисления комиссии на записи: по какой сделке, сколько и **по
+ * какой версии тарифного плана**.
+ *
+ * §4.2 требует буквально этого: «на каждой сделке хранится идентификатор версии
+ * плана, применённой в момент создания — иначе через год нельзя воспроизвести,
+ * почему списали именно столько». Хранить его обязана сделка (это домен), но
+ * запись журнала, которая комиссию признаёт, обязана назвать его тоже: журнал
+ * переживает сделку и читается отдельно от неё (Ф11, «каждое решение хранит
+ * версию политики, действовавшую в момент принятия»).
+ */
+export interface FeeAccrualDeclaration {
+  readonly deal: TrancheRef;
+  readonly fee: Money<CurrencyCode>;
+  readonly tariffVersionId: string;
+}
+
+/**
+ * Объявление начисления **необязательно**, но ложным быть не может.
+ *
+ * Обязательным его сделать нельзя, не сломав смысл: `fee:income` — обычный счёт
+ * дохода, и запись, признающая доход помимо тарифного начисления, законна (её
+ * держит `assertPlatformIncomeSweptToOperating`). Поэтому контракт такой же, как
+ * у объявления расчёта, минус обязательность: **объявил — обязан соответствовать**.
+ * Признание должно двигать `fee:income` ровно на объявленную сумму, в файле
+ * объявленного транша. Исправление двигает его в обратную сторону — на ту же
+ * сумму и по тому же траншу.
+ */
+function assertFeeAccrualDeclared(
+  kind: JournalEntryKind,
+  postings: readonly Posting[],
+  accrues: FeeAccrualDeclaration | undefined,
+): void {
+  if (accrues === undefined) return;
+  let moved = 0n;
+  for (const posting of postings) {
+    if (posting.account.kind !== 'fee_income') continue;
+    const attribution = posting.attribution;
+    const matchesFile =
+      attribution !== null &&
+      !isClientRef(attribution) &&
+      attribution.dealId === accrues.deal.dealId &&
+      attribution.trancheId === accrues.deal.trancheId;
+    if (!matchesFile || posting.amount.currency !== accrues.fee.currency) {
+      throw new LedgerError(LedgerErrorCode.entryFeeAccrualMismatch, {
+        dealId: accrues.deal.dealId,
+        trancheId: accrues.deal.trancheId,
+        currency: posting.amount.currency,
+      });
+    }
+    moved += posting.direction === 'credit' ? posting.amount.minor : -posting.amount.minor;
+  }
+  const expected = kind === 'correction' ? -accrues.fee.minor : accrues.fee.minor;
+  if (moved !== expected) {
+    throw new LedgerError(LedgerErrorCode.entryFeeAccrualMismatch, {
+      dealId: accrues.deal.dealId,
+      trancheId: accrues.deal.trancheId,
+      declared: expected.toString(),
+      recognised: moved.toString(),
+    });
+  }
+}
+
 export interface JournalEntryInput {
   readonly id: string;
   readonly occurredAt: string;
@@ -227,6 +413,16 @@ export interface JournalEntryInput {
    * одного клиента к другому, и запрещено там, где такого перехода нет.
    */
   readonly settles?: TrancheSettlement;
+  /**
+   * Объявление обмена. Обязательно ровно там, где запись трогает счёт расчётов
+   * с валютным контрагентом, и запрещено там, где не трогает.
+   */
+  readonly converts?: FxExecution;
+  /**
+   * Объявление начисления комиссии вместе с версией тарифного плана (§4.2).
+   * Необязательно; объявленное обязано соответствовать проводкам.
+   */
+  readonly accrues?: FeeAccrualDeclaration;
 }
 
 export interface JournalEntry {
@@ -237,6 +433,8 @@ export interface JournalEntry {
   readonly memoKey: string;
   readonly correctsEntryId: string | null;
   readonly settles: TrancheSettlement | null;
+  readonly converts: FxExecution | null;
+  readonly accrues: FeeAccrualDeclaration | null;
 }
 
 function signedMinor(posting: Posting): bigint {
@@ -618,19 +816,45 @@ function assertSettlementShape(
  * дебета операционного счёта в той же валюте и на ту же сумму — не запись.
  * Забыть его теперь нельзя: запись просто не собирается.
  *
- * ⚠ Ограничение осознанное: начисленный, но не удержанный доход
- * (FUNCTIONAL.md §4.6, «начислено против удержано») этой записью выразить
- * нельзя. Счёта требований в плане нет; когда он появится, у правила появится
- * ровно одно исключение — доход против требования, а не против клиентских
- * средств.
+ * **Исключение ровно одно, и оно именное: доход против требования платформы.**
+ * Прежняя редакция этого комментария обещала его на будущее («когда появится
+ * счёт требований»), и счёт появился: `fee:receivable` — начисленная, но ещё
+ * не удержанная комиссия (FUNCTIONAL.md §4.6, CORE.md Ф16). Начисление
+ * `Дт fee:receivable / Кт fee:income` денег не двигает вовсе, поэтому вывода
+ * на операционный счёт у него нет и быть не может.
+ *
+ * Исключение сформулировано **условием, а не перечнем счетов**: доход
+ * засчитывается против дебета счёта платформы с ролью `receivable` в той же
+ * валюте, и только если запись **не кредитует клиентские средства**. Второе
+ * условие держит красную линию №2: как только в записи появляется кредит
+ * клиентского счёта, послабление исчезает и доход обязан уйти на операционный
+ * счёт живыми деньгами. Перечень счетов вместо условия пропустил бы следующий
+ * счёт требований мимо правила — ровно так уже прошла отмывка через
+ * `unclaimed:liability` (см. `assertNoOwnedObligationIntoIntakePool`).
  */
 function assertPlatformIncomeSweptToOperating(postings: readonly Posting[]): void {
   const income = new Map<CurrencyCode, bigint>();
   const swept = new Map<CurrencyCode, bigint>();
+  const claimed = new Map<CurrencyCode, bigint>();
+  // Кредит клиентских средств в записи снимает послабление целиком: признать
+  // доход «против требования» и одновременно зачислить что-то на клиентский
+  // счёт — это и есть комиссия, оставленная в клиентских деньгах.
+  const touchesClientFunds = postings.some(
+    (posting) => posting.direction === 'credit' && isClientFundsAccount(posting.account),
+  );
   for (const posting of postings) {
     const currency = posting.amount.currency;
     if (posting.direction === 'credit' && isPlatformIncomeAccount(posting.account)) {
       income.set(currency, (income.get(currency) ?? 0n) + posting.amount.minor);
+    }
+    if (!touchesClientFunds && isPlatformReceivableAccount(posting.account)) {
+      // Чистое движение, как и у операционного счёта: требование, начисленное
+      // и тут же списанное в той же записи, требованием не является.
+      claimed.set(
+        currency,
+        (claimed.get(currency) ?? 0n) +
+          (posting.direction === 'debit' ? posting.amount.minor : -posting.amount.minor),
+      );
     }
     if (posting.account.kind === 'bank_operating') {
       // **Чистое движение, а не валовый дебет.** Прежняя редакция складывала
@@ -646,13 +870,14 @@ function assertPlatformIncomeSweptToOperating(postings: readonly Posting[]): voi
     }
   }
   for (const [currency, recognised] of income) {
-    const moved = swept.get(currency) ?? 0n;
+    const moved = (swept.get(currency) ?? 0n) + (claimed.get(currency) ?? 0n);
     if (moved < recognised) {
       throw new LedgerError(LedgerErrorCode.entryPlatformIncomeNotSwept, {
         account: accountCode(bankOperating(currency)),
         currency,
         recognised: recognised.toString(),
-        swept: moved.toString(),
+        swept: (swept.get(currency) ?? 0n).toString(),
+        claimed: (claimed.get(currency) ?? 0n).toString(),
       });
     }
   }
@@ -746,6 +971,101 @@ function assertNoPayoutFromTerminalPool(
 }
 
 /**
+ * Прирост обеспечения одного файла в одной записи: сколько в него пришло
+ * клиентских активов минус сколько в нём прибавилось обязательств.
+ *
+ * `source === null` — «вне файлов»: пулы, у которых владельца нет по
+ * объявлению.
+ */
+export interface ClientFileGain {
+  readonly source: FundsRef | null;
+  readonly currency: CurrencyCode;
+  readonly minor: bigint;
+}
+
+/**
+ * Пофайловый прирост обеспечения в одной записи.
+ *
+ * Экспортируется, потому что то же вычисление нужно журнальному инварианту
+ * `shortfallOverfunded`: «сколько денег платформы легло в файл этого клиента»
+ * — это ровно сумма приростов его файла по всем записям. Повторить вычисление
+ * во втором месте значило бы завести вторую модель проводок, а расхождение
+ * двух моделей в этом проекте уже случалось.
+ */
+export function clientFileGains(postings: readonly Posting[]): readonly ClientFileGain[] {
+  const custody = new Map<string, bigint>();
+  const obligations = new Map<string, bigint>();
+  const sources = new Map<string, FundsRef | null>();
+
+  const bump = (target: Map<string, bigint>, key: string, value: bigint): void => {
+    target.set(key, (target.get(key) ?? 0n) + value);
+  };
+
+  for (const posting of postings) {
+    const account = posting.account;
+    const currency = posting.amount.currency;
+    const scope = clientFundsFile(account);
+    if (scope === null) continue;
+    // Файл: из кода счёта, из отнесения, либо «вне файлов» у пулов.
+    const ref: FundsRef | null =
+      scope === 'owner_in_code'
+        ? clientAccountFile(account)
+        : scope === 'in_attribution'
+          ? posting.attribution
+          : null;
+    const key = fundsSourceKey(currency, ref);
+    sources.set(key, ref);
+    const signed = posting.direction === 'debit' ? posting.amount.minor : -posting.amount.minor;
+    if (accountType(account) === 'asset') {
+      bump(custody, key, signed);
+    } else {
+      bump(obligations, key, -signed);
+    }
+  }
+
+  return [...sources.entries()].map(([key, source]) => ({
+    source,
+    currency: key.slice(0, key.indexOf('|')) as CurrencyCode,
+    minor: (custody.get(key) ?? 0n) - (obligations.get(key) ?? 0n),
+  }));
+}
+
+/**
+ * Деньги платформы, ушедшие с её банковского счёта в этой записи. В записи типа
+ * `correction` сюда же входит снятое признание расхода — см.
+ * `assertNoUnfundedClientFileGain`.
+ */
+export function platformFunding(
+  kind: JournalEntryKind,
+  postings: readonly Posting[],
+): ReadonlyMap<CurrencyCode, bigint> {
+  const funding = new Map<CurrencyCode, bigint>();
+  for (const posting of postings) {
+    const account = posting.account;
+    if (clientFundsFile(account) !== null) continue;
+    // Реальные деньги платформы, ушедшие с её собственного **банковского**
+    // счёта. Признание расхода сюда не входит: обещание доплатить — не
+    // перевод (§3.1).
+    //
+    // Роль счёта, а не «актив платформы»: с появлением требования по
+    // начисленной комиссии (`fee:receivable`) и транзита комиссии
+    // (`transit:fee`) прежнее условие пустило бы в финансирование клиентского
+    // файла списанное требование и деньги, до нас ещё не дошедшие. Ни то ни
+    // другое со счёта платформы не уходило.
+    const isReversedExpense = kind === 'correction' && accountType(account) === 'expense';
+    if (isPlatformBankAccount(account) || isReversedExpense) {
+      const currency = posting.amount.currency;
+      funding.set(
+        currency,
+        (funding.get(currency) ?? 0n) +
+          (posting.direction === 'credit' ? posting.amount.minor : -posting.amount.minor),
+      );
+    }
+  }
+  return funding;
+}
+
+/**
  * Файл клиентских средств не наращивает обеспечение за чужой счёт.
  *
  * Это красная линия №1, высказанная **без единого имени счёта**. Файл — либо
@@ -792,61 +1112,14 @@ function assertNoUnfundedClientFileGain(
   kind: JournalEntryKind,
   postings: readonly Posting[],
 ): void {
-  const custody = new Map<string, bigint>();
-  const obligations = new Map<string, bigint>();
-  const files = new Set<string>();
-  const platformFunding = new Map<CurrencyCode, bigint>();
-
-  const bump = (target: Map<string, bigint>, key: string, value: bigint): void => {
-    files.add(key);
-    target.set(key, (target.get(key) ?? 0n) + value);
-  };
-
-  for (const posting of postings) {
-    const account = posting.account;
-    const currency = posting.amount.currency;
-    const scope = clientFundsFile(account);
-    if (scope === null) {
-      // Реальные деньги платформы, ушедшие с её собственного счёта. Признание
-      // расхода сюда не входит: обещание доплатить — не перевод (§3.1). В
-      // исправлении к ним добавляется снятое признание расхода — см. выше.
-      const isPlatformAsset =
-        accountType(account) === 'asset' && fundsOwnership(account) === 'platform';
-      const isReversedExpense = kind === 'correction' && accountType(account) === 'expense';
-      if (isPlatformAsset || isReversedExpense) {
-        platformFunding.set(
-          currency,
-          (platformFunding.get(currency) ?? 0n) +
-            (posting.direction === 'credit' ? posting.amount.minor : -posting.amount.minor),
-        );
-      }
-      continue;
-    }
-    // Файл: из кода счёта, из отнесения, либо «вне файлов» у пулов.
-    const ref: FundsRef | null =
-      scope === 'owner_in_code'
-        ? clientAccountFile(account)
-        : scope === 'in_attribution'
-          ? posting.attribution
-          : null;
-    const key = fundsSourceKey(currency, ref);
-    const signed = posting.direction === 'debit' ? posting.amount.minor : -posting.amount.minor;
-    if (accountType(account) === 'asset') {
-      bump(custody, key, signed);
-    } else {
-      bump(obligations, key, -signed);
-    }
-  }
-
+  const funding = platformFunding(kind, postings);
   const gained = new Map<CurrencyCode, bigint>();
-  for (const key of files) {
-    const gain = (custody.get(key) ?? 0n) - (obligations.get(key) ?? 0n);
-    if (gain <= 0n) continue;
-    const currency = key.slice(0, key.indexOf('|')) as CurrencyCode;
-    gained.set(currency, (gained.get(currency) ?? 0n) + gain);
+  for (const gain of clientFileGains(postings)) {
+    if (gain.minor <= 0n) continue;
+    gained.set(gain.currency, (gained.get(gain.currency) ?? 0n) + gain.minor);
   }
   for (const [currency, gain] of gained) {
-    const funded = platformFunding.get(currency) ?? 0n;
+    const funded = funding.get(currency) ?? 0n;
     if (gain > funded) {
       throw new LedgerError(LedgerErrorCode.entryClientFileGainUnfunded, {
         currency,
@@ -883,6 +1156,8 @@ export function createJournalEntry(input: JournalEntryInput): JournalEntry {
   assertNoOwnedObligationIntoIntakePool(input.kind, input.postings);
   assertNoPayoutFromTerminalPool(input.kind, input.postings);
   assertNoUnfundedClientFileGain(input.kind, input.postings);
+  assertConversionDeclared(input.postings, input.converts);
+  assertFeeAccrualDeclared(input.kind, input.postings, input.accrues);
   if (input.kind === 'correction' && input.correctsEntryId === undefined) {
     throw new LedgerError(LedgerErrorCode.entryCorrectionWithoutReference, { id: input.id });
   }
@@ -899,6 +1174,13 @@ export function createJournalEntry(input: JournalEntryInput): JournalEntry {
     // Объявление расчёта остаётся в записи: без него утверждение «получатель Y
     // связан со сделкой A» нечем предъявить ни аудиту, ни сверке.
     settles: input.settles ?? null,
+    // Курс остаётся в записи по той же причине, что и объявление расчёта: без
+    // него утверждение «эти лари получены по такому-то курсу» нечем предъявить
+    // ни выписке по сделке (И14.2), ни сверке.
+    converts: input.converts ?? null,
+    // Версия тарифного плана остаётся в журнале: §4.2, «иначе через год нельзя
+    // воспроизвести, почему списали именно столько».
+    accrues: input.accrues ?? null,
   });
 }
 

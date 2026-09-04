@@ -7,7 +7,7 @@ import {
   applyDealEvent,
   applyTrancheEvent,
   approve,
-  attachRegistryExtract,
+  attachObservation,
   dealStatusOf,
   patchFacts,
   receiveExternalPayment,
@@ -15,16 +15,19 @@ import {
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import {
   BUYER,
+  CADASTRAL_CODE,
   DAY_MS,
   DEAL_AMOUNT,
   GEL,
   NOW,
+  POLICY,
   POLICY_VERSION,
   SELLER,
   fp,
+  registryUnavailable,
   registryWithoutOwnerChange,
   registryWithoutTransfer,
 } from './support/fixtures';
@@ -57,10 +60,18 @@ describe('регистрация не состоялась', () => {
     world = applyDealEvent(world, DEAL, { type: 'funds_received' }, OPTIONS);
     world = applyTrancheEvent(world, TRANCHE, { type: 'reserve_requested' }, OPTIONS).world;
     world = applyDealEvent(world, DEAL, { type: 'tranches_reserved' }, OPTIONS);
-    world = applyDealEvent(world, DEAL, { type: 'filing_registered', applicationId: 'app-2' }, OPTIONS);
+    world = applyDealEvent(
+      world,
+      DEAL,
+      { type: 'filing_registered', applicationId: 'app-2', source: 'party_claim' },
+      OPTIONS,
+    );
 
-    // Реестр показывает, что перехода права нет.
-    expect(registryWithoutTransfer().paidExtract('cadastral-2')).toBeNull();
+    // Реестр **ответил**, что перехода права нет. Это ответ, а не молчание:
+    // `absent` и `unavailable` — разные исходы, и первый годится в основание
+    // отказа, а второй только приостанавливает часы (`ORACLE.md` §10).
+    expect(registryWithoutTransfer().paidExtract(CADASTRAL_CODE).kind).toBe('absent');
+    expect(registryUnavailable().paidExtract(CADASTRAL_CODE).kind).toBe('unavailable');
 
     world = advance(world, DAY_MS);
 
@@ -144,12 +155,16 @@ describe('регистрация не состоялась', () => {
     // Худший из случаев: выписка платная, приложена, все пять полей сошлись, и
     // пакет доказательств собран. Не сошлось одно — собственник.
     const reserved = await toReserved({ dealId: DEAL_B, trancheId: TRANCHE_B });
-    const extract = registryWithoutOwnerChange().paidExtract('cadastral-owner');
-    if (extract === null) throw new Error('unreachable');
-    expect(extract.ownerIsBuyer).toBe(false);
-    expect(extract.statementFields.ownerDocumentNumber).toBe(true);
+    const answer = registryWithoutOwnerChange().paidExtract(CADASTRAL_CODE);
+    if (answer.kind !== 'found') throw new Error('unreachable');
+    const extract = answer.value;
+    // Сверка идёт по номеру документа, а не по флагу порта: номер в выписке
+    // другой, поэтому `reconcileOwner` даёт `refuted` (`CORE.md` Ф7).
+    expect(extract.ownerDocumentNumber).toBe('mismatched');
+    expect(extract.fields.ownerDocumentNumber).toBe(true);
 
-    let world = attachRegistryExtract(reserved.world, TRANCHE_B, extract, 'evidence-owner');
+    let world = attachObservation(reserved.world, TRANCHE_B, extract, 'evidence-owner', POLICY);
+    expect(trancheOf(world, TRANCHE_B).facts.observation?.ownerCheck).toBe('refuted');
     expect(trancheOf(world, TRANCHE_B).facts.evidenceBundleId).toBe('evidence-owner');
 
     // --- Первое ребро пути выплаты ---

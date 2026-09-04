@@ -15,7 +15,7 @@ import {
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import { DAY_MS, DEAL_AMOUNT, GEL, POLICY_VERSION, STATEMENT_SOURCE } from './support/fixtures';
 import { toReserved } from './support/paths';
 import {
@@ -26,7 +26,7 @@ import {
   rejectWithdrawalEvent,
   requestWithdrawal,
   withWithdrawals,
-} from './support/withdrawal';
+} from '@sdelka/app';
 
 const OPTIONS = trancheOptions(POLICY_VERSION);
 /** Деньги уже на счёте клиента: откат резерва их туда возвращает, а не зачисляет. */

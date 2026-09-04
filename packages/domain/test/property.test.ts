@@ -21,19 +21,25 @@ import {
   type TrancheFacts,
   type TrancheState,
   type TrancheStatus,
+  type ObservationLevel,
+  type ReleaseObservation,
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_DEADLINE_POLICY,
+  DEFAULT_OBSERVATION_POLICY,
   initialTrancheState,
   isTerminalTrancheStatus,
   reduceTranche,
 } from '../src/index';
 import {
   BUYER_PARTY_ID,
+  CADASTRAL_CODE,
   CONDITION_ACT,
   CREATED_ON,
+  MATCHING_OBSERVATION,
   MATCHING_STATEMENT,
   NOW,
   RECIPIENT_PARTY_ID,
+  observation as observationOf,
 } from './support/facts';
 import {
   type ExpectedBalances,
@@ -244,8 +250,14 @@ describe('свойства на случайных последовательн�
             recipient: { partyId: RECIPIENT_PARTY_ID, accountKey: `seller-${run}` },
           },
           evidenceBundleId: random() < 0.9 ? 'evidence-1' : null,
-          statementFields: MATCHING_STATEMENT,
-          registryOwnerIsBuyer: true,
+          // Наблюдение счастливого пути на всём прогоне — по той же причине, по
+          // которой реквизиты `verified`: с наблюдением ниже L3 ни один прогон
+          // не дошёл бы до выплаты, и пороги в конце проверяли бы пустое
+          // свойство. Что без него выплаты нет — отдельное свойство ниже, а не
+          // порча случайного блуждания.
+          observation: MATCHING_OBSERVATION,
+          expectedCadastralCode: CADASTRAL_CODE,
+          observationPolicy: DEFAULT_OBSERVATION_POLICY,
           // `verified`, а не `name_consistent`: с последним ни один прогон не
           // дошёл бы до выплаты, и пороги ниже проверяли бы пустое свойство.
           // Проверка «имя сошлось не пускает» живёт отдельным тестом, а не
@@ -300,6 +312,122 @@ describe('свойства на случайных последовательн�
     expect(coverageByTranche(journal).length).toBeGreaterThan(200);
     expect(terminals.get('paid_out') ?? 0).toBeGreaterThan(100);
     expect(terminals.get('refunded') ?? 0).toBeGreaterThan(20);
+  });
+
+  /**
+   * Критерий приёмки И3.1 дословно: «дано: наблюдения уровня L3 нет. Тогда
+   * транш не переходит в `release_pending` ни при каких значениях остальных
+   * guard'ов — тест на свойствах на случайных последовательностях».
+   *
+   * Наблюдение здесь либо отсутствует, либо ниже L3, но **во всём остальном
+   * безупречно**: пять полей сошлись, собственник установлен, объект наш,
+   * выписка свежая. Это не придирка к форме теста, а его суть — иначе транш
+   * останавливали бы `g_fields_match` и `g_owner_is_buyer`, и свойство
+   * проверяло бы не тот guard. При подмене `g_observation_sufficient` на
+   * `() => true` прогон обязан покраснеть; проверено руками до сдачи.
+   *
+   * ⚠ **Критерий И3.1 в части `release_pending` выполняется не буквально, и это
+   * расхождение названо, а не заклеено.** В `release_pending` ведут **три**
+   * двери, а не две: третья — `release_blocked --approval_added-->
+   * release_pending`, и `STATE-MACHINES.md` §1.4 даёт ей единственный guard
+   * «расхождение снято». Это осознанная конструкция документа: guard'ы
+   * доказательств продублированы на выходе `release_pending → paying_out`
+   * именно потому, что вход через блокировку их не проверяет. Поэтому свойство
+   * утверждает две вещи, вместе равные смыслу критерия: **денег без L3 не
+   * двигают вовсе** (`paying_out`, `paid_out` недостижимы) и **`release_pending`
+   * без L3 достижим только рукой оператора из блокировки**, никогда не
+   * `condition_established` из `reserved`. Ставить ли `g_observation_sufficient`
+   * и на третью дверь — решение владельца (`ORACLE.md` §15): это меняет
+   * поведение консоли, а не только автомата.
+   */
+  it('never reaches the payout path without an L3 observation', () => {
+    const forbidden: readonly TrancheStatus[] = ['paying_out', 'paid_out'];
+    const weakLevels: readonly ObservationLevel[] = ['L0', 'L1', 'L2'];
+    let blockedByObservation = 0;
+
+    for (let run = 0; run < 300; run += 1) {
+      const random = makeRandom(run + 10_001);
+      const required = money('GEL', BigInt(Math.floor(random() * 5_000_000) + 10_000));
+      // Наблюдения нет вовсе либо оно дешёвое: карточка заявления, отметка
+      // стороны, взгляд оператора через капчу. Всё, что в нём есть, сошлось.
+      const observation: ReleaseObservation | null =
+        random() < 0.4 ? null : observationOf({ level: pick(random, weakLevels) });
+      let collected: Money<'GEL'> | null = null;
+      let state: TrancheState = initialTrancheState(NOW, DEFAULT_DEADLINE_POLICY);
+
+      for (let step = 0; step < 24 && !isTerminalTrancheStatus(state.status); step += 1) {
+        const facts: TrancheFacts = {
+          requiredAmount: required,
+          collectedAmount: collected,
+          lockedAmount: collected,
+          buyerPayerKey: 'buyer-1',
+          buyer: { partyId: BUYER_PARTY_ID, accountKey: `client-${run}` },
+          conditionAct: {
+            ...CONDITION_ACT,
+            recipient: { partyId: RECIPIENT_PARTY_ID, accountKey: `seller-${run}` },
+          },
+          evidenceBundleId: random() < 0.9 ? 'evidence-1' : null,
+          observation,
+          expectedCadastralCode: CADASTRAL_CODE,
+          observationPolicy: DEFAULT_OBSERVATION_POLICY,
+          // Остальные факты случайны: свойство утверждает «ни при каких
+          // значениях остальных guard'ов», и значит, они обязаны меняться.
+          beneficiary: {
+            status: random() < 0.8 ? 'verified' : 'name_consistent',
+            locked: random() < 0.9,
+            lastChangedAt: null,
+          },
+          preparedBy: 'operator-1',
+          approvals: [{ userId: 'operator-2' }, { userId: 'operator-3' }].slice(
+            0,
+            Math.floor(random() * 3),
+          ),
+          approvalPolicy: DEFAULT_APPROVAL_POLICY,
+          createdOn: CREATED_ON,
+          officialRateAtCreation: null,
+          activePayouts: random() < 0.9 ? 0 : 1,
+          coverageOk: random() < 0.9,
+          sourceAccountKnown: random() < 0.8,
+          mismatchResolved: random() < 0.7,
+        };
+        const context: TrancheContext = {
+          now: NOW,
+          dealId: `deal-${run}`,
+          trancheId: `tranche-${run}`,
+          facts,
+          deadlinePolicy: DEFAULT_DEADLINE_POLICY,
+        };
+        const guided = random() < 0.6 ? guidedEvent(random, state.status, required) : null;
+        const event = guided ?? randomEvent(random, required);
+        const result = reduceTranche(state, event, context);
+        if (!result.ok) {
+          if (result.error.failedGuards.includes('g_observation_sufficient')) {
+            blockedByObservation += 1;
+          }
+          continue;
+        }
+        if (result.value.state.status === 'collected' && event.type === 'funds_received') {
+          collected = event.amount as Money<'GEL'>;
+        }
+        const from = state.status;
+        state = result.value.state;
+        // Красная линия: недокументированный источник не двигает деньги.
+        expect(forbidden).not.toContain(state.status);
+        if (state.status === 'release_pending') {
+          // Единственная дверь, оставшаяся открытой без L3, — рука оператора из
+          // блокировки. `reserved --condition_established--> release_pending`
+          // закрыт guard'ом, и мутация guard'а видна здесь.
+          expect({ from, event: event.type }).toEqual({
+            from: 'release_blocked',
+            event: 'approval_added',
+          });
+        }
+      }
+    }
+
+    // Свойство не должно быть пустым: прогон обязан действительно упираться в
+    // этот guard, а не заканчиваться раньше по другим причинам.
+    expect(blockedByObservation).toBeGreaterThan(50);
   });
 
   it('split always adds up to the original amount', () => {

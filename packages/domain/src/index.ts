@@ -7,6 +7,7 @@ export * from './freeze';
 export * from './guards';
 export * from './ids';
 export * from './instant';
+export * from './observation';
 export * from './intents';
 export * from './party';
 export * from './payout';

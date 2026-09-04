@@ -22,7 +22,7 @@ import {
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import { DEAL_AMOUNT, GEL, POLICY_VERSION } from './support/fixtures';
 import { toCollected, toReserved } from './support/paths';
 

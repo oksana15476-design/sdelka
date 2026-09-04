@@ -6,13 +6,20 @@ import {
   accountType,
   clientAccountOwner,
   clientFundsFile,
-  fundsOwnership,
+  conversionOfAccount,
   isClientCustodyAccount,
   isClientObligationAccount,
+  isPlatformBankAccount,
+  platformFundsRole,
   poolDirection,
 } from './accounts';
 import {
+  type Direction,
+  type FeeAccrualDeclaration,
   type FundsRef,
+  type FxExecution,
+  type JournalEntry,
+  type JournalEntryKind,
   type Posting,
   type TrancheRef,
   clientAccountFile,
@@ -161,9 +168,15 @@ export function unclaimedCoverage(journal: Journal): readonly CoverageByCurrency
       continue;
     }
     // Активы, на которых эти деньги лежат: транзит списания (тот же пул) и
-    // операционный счёт платформы.
+    // счета платформы **в банке**.
+    //
+    // ⚠ Роль счёта здесь обязательна, и это не педантизм. Прежнее условие
+    // «любой актив платформы» с появлением `fee:receivable` и `transit:fee`
+    // молча завысило бы это покрытие: начисленная комиссия стала бы
+    // обеспечением чужих невостребованных денег. Тесты остались бы зелёными —
+    // покрытие только выросло бы.
     if (
-      (accountType(account) === 'asset' && fundsOwnership(account) === 'platform') ||
+      isPlatformBankAccount(account) ||
       (poolDirection(account) === 'terminal' && accountType(account) === 'asset')
     ) {
       custody.set(currency, (custody.get(currency) ?? 0n) + naturalSign(account, posting));
@@ -305,15 +318,39 @@ export function isEveryTrancheCovered(journal: Journal): boolean {
  * Видимым оно быть обязано — решение о стоп-кране принимает владелец.
  */
 export function negativeBankBalances(journal: Journal): readonly AccountBalance[] {
-  const platformAssets = new Set<string>();
+  // Роль `bank`, а не «актив платформы». С появлением требования по
+  // начисленной комиссии и транзита комиссии прежнее условие докладывало бы о
+  // них кодом `negative_bank_balance`, и дежурный читал бы «банковский счёт в
+  // минусе» там, где в минусе требование. Разные расхождения — разные коды,
+  // потому что разбираются они по-разному.
+  const bankAccounts = new Set<string>();
   for (const posting of eachPosting(journal)) {
-    const account = posting.account;
-    if (accountType(account) === 'asset' && fundsOwnership(account) === 'platform') {
-      platformAssets.add(accountCode(account));
+    if (isPlatformBankAccount(posting.account)) {
+      bankAccounts.add(accountCode(posting.account));
     }
   }
   return accountBalances(journal).filter(
-    (item) => platformAssets.has(item.accountCode) && item.balance.minor < 0n,
+    (item) => bankAccounts.has(item.accountCode) && item.balance.minor < 0n,
+  );
+}
+
+/**
+ * Отрицательный остаток **прочего актива платформы**: требования или транзита.
+ *
+ * Прямой случай — удержание комиссии, которая не начислялась: `fee:receivable`
+ * уходит в минус, то есть журнал утверждает, что погашено требование, которого
+ * не было. Это не банковский счёт и разбирается иначе, поэтому и код другой.
+ */
+export function negativePlatformAssetBalances(journal: Journal): readonly AccountBalance[] {
+  const accounts = new Set<string>();
+  for (const posting of eachPosting(journal)) {
+    const role = platformFundsRole(posting.account);
+    if (role === 'receivable' || role === 'transit') {
+      accounts.add(accountCode(posting.account));
+    }
+  }
+  return accountBalances(journal).filter(
+    (item) => accounts.has(item.accountCode) && item.balance.minor < 0n,
   );
 }
 
@@ -555,4 +592,327 @@ export function freeBalance(
 ): Money<CurrencyCode> {
   const entry = clientStatement(journal, owner).free.find((item) => item.currency === currency);
   return entry?.amount ?? money(currency, 0n);
+}
+
+/**
+ * Три величины комиссии по каждому траншу и валюте — CORE.md Ф10 и Ф16,
+ * история И14.3: «начислено, удержано и получено — три разные величины».
+ *
+ * Считаются они по разным счетам, а не по одному признаку, и в этом весь смысл
+ * блока: пока комиссия признавалась доходом прямо в записи расчёта, все три
+ * величины были одним числом и различить их было нечем.
+ *
+ * - `accrued` — признанный доход по этому траншу (`fee:income`). Реверс
+ *   начисления при уходе в возвратную ветвь уменьшает его, потому что считается
+ *   остаток в естественном знаке счёта, а не сумма кредитов.
+ * - `withheld` — сколько ушло из платежа в транзит (`Дт transit:fee`).
+ * - `received` — сколько дошло до операционного счёта (`Кт transit:fee`).
+ * - `notWithheld` — остаток требования (`fee:receivable`): начислено, но из
+ *   платежа ещё не удержано (недоплата, транш не дошёл до расчёта).
+ * - `inTransit` — удержано, но перевод не дошёл. **Это и есть то состояние,
+ *   которое Ф16 требует видеть отдельно и не смешивать с «получено».**
+ */
+export interface FeePosition {
+  readonly deal: TrancheRef;
+  readonly currency: CurrencyCode;
+  readonly accrued: Money<CurrencyCode>;
+  readonly notWithheld: Money<CurrencyCode>;
+  readonly withheld: Money<CurrencyCode>;
+  readonly received: Money<CurrencyCode>;
+  readonly inTransit: Money<CurrencyCode>;
+}
+
+interface FeeTotals {
+  accrued: bigint;
+  receivable: bigint;
+  withheld: bigint;
+  received: bigint;
+}
+
+export function feePositions(journal: Journal): readonly FeePosition[] {
+  const totals = new Map<string, FeeTotals>();
+  const refs = new Map<string, TrancheRef>();
+
+  const bucket = (deal: TrancheRef, currency: CurrencyCode): FeeTotals => {
+    const key = `${deal.dealId} ${deal.trancheId}|${currency}`;
+    refs.set(key, deal);
+    const existing = totals.get(key);
+    if (existing !== undefined) return existing;
+    const fresh: FeeTotals = { accrued: 0n, receivable: 0n, withheld: 0n, received: 0n };
+    totals.set(key, fresh);
+    return fresh;
+  };
+
+  for (const posting of eachPosting(journal)) {
+    const account = posting.account;
+    const attribution = posting.attribution;
+    // Отнесение к траншу — единственный способ связать комиссию со сделкой:
+    // счета комиссии не клиентские, файла в их коде нет и быть не может.
+    if (attribution === null || isClientRef(attribution)) continue;
+    const deal: TrancheRef = {
+      dealId: attribution.dealId,
+      trancheId: attribution.trancheId,
+    };
+    const currency = posting.amount.currency;
+    if (account.kind === 'fee_income') {
+      bucket(deal, currency).accrued += naturalSign(account, posting);
+    } else if (account.kind === 'fee_receivable') {
+      bucket(deal, currency).receivable += naturalSign(account, posting);
+    } else if (account.kind === 'transit_fee') {
+      const target = bucket(deal, currency);
+      if (posting.direction === 'debit') {
+        target.withheld += posting.amount.minor;
+      } else {
+        target.received += posting.amount.minor;
+      }
+    }
+  }
+
+  return [...totals.entries()]
+    .sort((left, right) => (left[0] < right[0] ? -1 : 1))
+    .map(([key, value]) => {
+      const currency = key.slice(key.lastIndexOf('|') + 1) as CurrencyCode;
+      const deal = refs.get(key) as TrancheRef;
+      return Object.freeze({
+        deal,
+        currency,
+        accrued: money(currency, value.accrued),
+        notWithheld: money(currency, value.receivable),
+        withheld: money(currency, value.withheld),
+        received: money(currency, value.received),
+        inTransit: money(currency, value.withheld - value.received),
+      });
+    });
+}
+
+/**
+ * Открытая позиция по обмену: сколько по этой конверсии числится за валютным
+ * контрагентом в каждой валюте и с какого момента.
+ *
+ * Позиция **плоская**, когда все её остатки нули: исходная валюта отдана,
+ * встречная поставлена, требований нет. Ненулевая позиция сама по себе не
+ * нарушение — между тремя моментами обмена она обязана быть ненулевой. Возраст
+ * превращает её в расхождение, и это делает инвариант, а не этот отчёт.
+ *
+ * `openedAt` — момент, с которого позиция перестала быть плоской. Считается
+ * по порядку записей в журнале, а не по сортировке `occurredAt`: журнал только
+ * дополняется, и его порядок — это порядок, в котором факты стали известны.
+ */
+export interface FxPosition {
+  readonly conversionId: string;
+  readonly openedAt: string;
+  readonly lastMovedAt: string;
+  /** Только ненулевые остатки: плоская позиция в выдачу не попадает вовсе. */
+  readonly balances: readonly CurrencyAmount[];
+}
+
+export function openFxPositions(journal: Journal): readonly FxPosition[] {
+  interface Open {
+    openedAt: string;
+    lastMovedAt: string;
+    balances: Map<CurrencyCode, bigint>;
+  }
+  const open = new Map<string, Open>();
+
+  for (const entry of journal.entries) {
+    const touched = new Set<string>();
+    for (const posting of entry.postings) {
+      const conversionId = conversionOfAccount(posting.account);
+      if (conversionId === null) continue;
+      touched.add(conversionId);
+      const state = open.get(conversionId) ?? {
+        openedAt: entry.occurredAt,
+        lastMovedAt: entry.occurredAt,
+        balances: new Map<CurrencyCode, bigint>(),
+      };
+      const currency = posting.amount.currency;
+      state.balances.set(
+        currency,
+        (state.balances.get(currency) ?? 0n) + naturalSign(posting.account, posting),
+      );
+      state.lastMovedAt = entry.occurredAt;
+      open.set(conversionId, state);
+    }
+    // Плоскость проверяется **по записи целиком**, а не после каждой проводки.
+    // Момент 2 сначала гасит ногу исходной валюты и лишь потом открывает ногу
+    // встречной: если смотреть по проводкам, позиция на миг обнуляется, и
+    // возраст обмена начинал бы отсчёт заново с каждой записи. Возраст обмена —
+    // это возраст обмена, а не последнего движения по нему.
+    for (const conversionId of touched) {
+      const state = open.get(conversionId);
+      if (state === undefined) continue;
+      if ([...state.balances.values()].every((value) => value === 0n)) {
+        open.delete(conversionId);
+      }
+    }
+  }
+
+  return [...open.entries()]
+    .sort((left, right) => (left[0] < right[0] ? -1 : 1))
+    .map(([conversionId, state]) =>
+      Object.freeze({
+        conversionId,
+        openedAt: state.openedAt,
+        lastMovedAt: state.lastMovedAt,
+        balances: Object.freeze(
+          [...state.balances.entries()]
+            .filter(([, total]) => total !== 0n)
+            .sort((left, right) => (left[0] < right[0] ? -1 : 1))
+            .map(([currency, total]) =>
+              Object.freeze({ currency, amount: money(currency, total) }),
+            ),
+        ),
+      }),
+    );
+}
+
+/**
+ * Незакрытый остаток на транзитном счёте и момент, с которого он висит.
+ *
+ * Транзитных счетов два, и оба обещают одно и то же: деньги идут между банками
+ * и дойдут за день-два (§3.1 для `transit:writeoff`, §4.6 и Ф16 для
+ * `transit:fee`). Обещание в документе было, проверки в коде не было ни у
+ * одного — `InvariantCode` такого кода не содержал вовсе.
+ */
+export interface TransitPosition {
+  readonly accountCode: string;
+  readonly currency: CurrencyCode;
+  readonly openedAt: string;
+  readonly amount: Money<CurrencyCode>;
+}
+
+export function openTransitPositions(journal: Journal): readonly TransitPosition[] {
+  const open = new Map<string, { openedAt: string; total: bigint }>();
+  for (const entry of journal.entries) {
+    const touched = new Set<string>();
+    for (const posting of entry.postings) {
+      const account = posting.account;
+      const isTransit =
+        platformFundsRole(account) === 'transit' ||
+        (poolDirection(account) === 'terminal' && accountType(account) === 'asset');
+      if (!isTransit) continue;
+      const key = `${accountCode(account)}|${posting.amount.currency}`;
+      touched.add(key);
+      const state = open.get(key) ?? { openedAt: entry.occurredAt, total: 0n };
+      state.total += naturalSign(account, posting);
+      open.set(key, state);
+    }
+    for (const key of touched) {
+      if (open.get(key)?.total === 0n) open.delete(key);
+    }
+  }
+  return [...open.entries()]
+    .sort((left, right) => (left[0] < right[0] ? -1 : 1))
+    .map(([key, state]) => {
+      const separator = key.lastIndexOf('|');
+      const currency = key.slice(separator + 1) as CurrencyCode;
+      return Object.freeze({
+        accountCode: key.slice(0, separator),
+        currency,
+        openedAt: state.openedAt,
+        amount: money(currency, state.total),
+      });
+    });
+}
+
+/** Проводка в выписке: счёт, сторона, сумма и файл, к которому она отнесена. */
+export interface StatementPosting {
+  readonly accountCode: string;
+  readonly direction: Direction;
+  readonly amount: Money<CurrencyCode>;
+  readonly attribution: FundsSource | null;
+}
+
+export interface StatementEvent {
+  readonly entryId: string;
+  readonly occurredAt: string;
+  readonly kind: JournalEntryKind;
+  /** Ключ локализации, а не текст: три языка, §5. */
+  readonly memoKey: string;
+  readonly correctsEntryId: string | null;
+  /** Объявление обмена вместе с тремя курсами, если запись его несёт. */
+  readonly converts: FxExecution | null;
+  /** Объявление начисления вместе с версией тарифного плана (§4.2). */
+  readonly accrues: FeeAccrualDeclaration | null;
+  readonly postings: readonly StatementPosting[];
+}
+
+/**
+ * Выписка по сделке — история И14.2, «базовый артефакт доверия» (CORE.md §3).
+ *
+ * **В выписку попадают записи целиком, а не только проводки файла транша.**
+ * Иначе главная строка для получателя — зачисление нетто на его свободную
+ * часть — выпала бы: она отнесена к файлу получателя, а не к файлу транша.
+ * Запись, тронувшая транш, — это событие сделки, и сторона обязана видеть его
+ * обеими ногами: сколько списано с транша и сколько зачислено ей.
+ *
+ * Правила ровно те же, что у `clientStatement`, и по тем же причинам:
+ *
+ * - **валюты не пересчитываются** — пересчёт требует курса, а курс это
+ *   отдельное решение (§4.5). Курс, по которому обмен состоялся, приходит
+ *   объявлением записи (`converts`), а не пересчётом задним числом;
+ * - **нули не фильтруются** — «было и стало нулём» и «не было вовсе» разные
+ *   факты;
+ * - **текста нет** — только ключи локализации.
+ *
+ * Чего здесь нет и не будет: водяного знака, логирования просмотра и PDF
+ * (И14.2, третий критерий). Это не журнал: знак и лог живут в `audit`,
+ * формирование документа — в интерфейсе. Учёт отдаёт факты.
+ */
+export interface DealStatement {
+  readonly deal: TrancheRef;
+  readonly events: readonly StatementEvent[];
+  /** Начислено, удержано, получено по этой сделке — раздельно (Ф16). */
+  readonly fee: readonly FeePosition[];
+}
+
+function postingBelongsToTranche(posting: Posting, deal: TrancheRef): boolean {
+  const own = clientAccountFile(posting.account);
+  if (own !== null && !isClientRef(own)) {
+    if (own.dealId === deal.dealId && own.trancheId === deal.trancheId) return true;
+  }
+  const attribution = posting.attribution;
+  return (
+    attribution !== null &&
+    !isClientRef(attribution) &&
+    attribution.dealId === deal.dealId &&
+    attribution.trancheId === deal.trancheId
+  );
+}
+
+function statementEvent(entry: JournalEntry): StatementEvent {
+  return Object.freeze({
+    entryId: entry.id,
+    occurredAt: entry.occurredAt,
+    kind: entry.kind,
+    memoKey: entry.memoKey,
+    correctsEntryId: entry.correctsEntryId,
+    converts: entry.converts,
+    accrues: entry.accrues,
+    postings: Object.freeze(
+      entry.postings.map((posting) =>
+        Object.freeze({
+          accountCode: accountCode(posting.account),
+          direction: posting.direction,
+          amount: posting.amount,
+          attribution: asSource(posting.attribution),
+        }),
+      ),
+    ),
+  });
+}
+
+export function dealStatement(journal: Journal, deal: TrancheRef): DealStatement {
+  const events = journal.entries
+    .filter((entry) => entry.postings.some((posting) => postingBelongsToTranche(posting, deal)))
+    .map(statementEvent);
+  return Object.freeze({
+    deal: Object.freeze({ dealId: deal.dealId, trancheId: deal.trancheId }),
+    events: Object.freeze(events),
+    fee: Object.freeze(
+      feePositions(journal).filter(
+        (item) => item.deal.dealId === deal.dealId && item.deal.trancheId === deal.trancheId,
+      ),
+    ),
+  });
 }

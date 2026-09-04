@@ -2,32 +2,41 @@ import { describe, expect, it } from 'vitest';
 import { auditRef, reconstructPayout } from '@sdelka/audit';
 import { compareNames, payerKeyForDomain, reconcileOwner } from '@sdelka/compliance';
 import { payoutIdempotencyKey, reduceTranche } from '@sdelka/domain';
+import { money } from '@sdelka/money';
 import { accountBalance, bankNominal, bankOperating, clientFreeAccount, clientLockedAccount, coverage } from '@sdelka/ledger';
 import {
   applyDealEvent,
+  applyObservationEvent,
   applyTrancheEvent,
   approve,
-  attachRegistryExtract,
   contextFor,
   convertBalance,
+  dealFactsOf,
   dealStatusOf,
   feeForTranche,
   receiveExternalPayment,
+  receivePaidExtract,
+  receiveTrancheFee,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import {
+  APPLICATION_ID,
   BANK_RESPONSE_SOURCE,
   BUYER,
+  CADASTRAL_CODE,
   CREATED_ON,
   DEAL_AMOUNT,
   DEAL_AMOUNT_USD,
   FX_RATES,
   GEL,
+  POLICY,
   POLICY_VERSION,
   SELLER,
   bankPort,
+  cardOf,
+  registryWithApplicationCard,
   registryWithTransfer,
   settledOutcome,
 } from './support/fixtures';
@@ -56,7 +65,14 @@ describe('счастливый путь', () => {
     world = receiveExternalPayment(world, opened.buyerKey, DEAL_AMOUNT_USD);
     // --- Конвертация: клиенту по клиентскому курсу, спред — на операционный ---
     // Целевой валюты в аргументах нет: её несёт курс (`FxRates.quote`).
-    const conversion = convertBalance(world, opened.buyerKey, DEAL_AMOUNT_USD, FX_RATES, CREATED_ON);
+    const conversion = convertBalance(
+      world,
+      opened.buyerKey,
+      'fx-happy-1',
+      DEAL_AMOUNT_USD,
+      FX_RATES,
+      CREATED_ON,
+    );
     world = conversion.world;
     expect(conversion.converted.target.minor).toBe(20_000_000n);
     // 8 000 долларов·255/100 − 20 000 000 тетри = 400 000 тетри спреда.
@@ -77,7 +93,7 @@ describe('счастливый путь', () => {
     world = collected.world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('collected');
     expect(world.suppressed).toEqual([
-      { trancheId: TRANCHE, template: 'funds_received', reasonKey: 'e2e.ledger.funds_already_credited' },
+      { trancheId: TRANCHE, template: 'funds_received', reasonKey: 'app.ledger.funds_already_credited' },
     ]);
     world = applyDealEvent(world, DEAL, { type: 'funds_received' }, OPTIONS);
     expect(dealStatusOf(world, DEAL)).toBe('funding');
@@ -94,25 +110,73 @@ describe('счастливый путь', () => {
     ).toBe(20_000_000n);
     world = applyDealEvent(world, DEAL, { type: 'tranches_reserved' }, OPTIONS);
     expect(dealStatusOf(world, DEAL)).toBe('funded');
-    world = applyDealEvent(world, DEAL, { type: 'filing_registered', applicationId: 'app-1' }, OPTIONS);
-    expect(dealStatusOf(world, DEAL)).toBe('filed');
-    // --- Подтверждение регистрации по платной выписке ---
-    const extract = registryWithTransfer().paidExtract('cadastral-1');
-    expect(extract).not.toBeNull();
-    if (extract === null) throw new Error('unreachable');
-    // Сверка собственника ведётся по номеру документа: имя — вторичный сигнал.
-    const owner = reconcileOwner(
-      extract.ownerDocumentNumber,
-      compareNames(BUYER.names, BUYER.names, { strongThresholdBp: 9_500 }),
-    );
-    expect(owner.outcome).toBe('established');
-    world = attachRegistryExtract(world, TRANCHE, extract, 'evidence-bundle-1');
-    world = applyTrancheEvent(
+    // --- Подача заявления: сторона называет номер, карточка его подтверждает ---
+    world = applyObservationEvent(world, TRANCHE, { type: 'observation_started' }, OPTIONS).world;
+    world = applyObservationEvent(
       world,
       TRANCHE,
-      { type: 'condition_established', evidenceBundleId: 'evidence-bundle-1', conditionType: 'registration_transfer' },
+      { type: 'filing_claimed', applicationId: APPLICATION_ID, byParty: BUYER.partyId },
       OPTIONS,
     ).world;
+    expect(dealStatusOf(world, DEAL)).toBe('filed');
+    // Номер, названный стороной, автооткрата не запрещает: иначе сторона
+    // управляет нашим дедлайном одним сообщением (И3.2, критерий 1).
+    expect(dealFactsOf(world, DEAL).filings.map((filing) => filing.source)).toEqual(['party_claim']);
+    const card = cardOf(registryWithApplicationCard(), APPLICATION_ID);
+    world = applyObservationEvent(
+      world,
+      TRANCHE,
+      {
+        type: 'filing_card_observed',
+        applicationId: card.applicationId,
+        cadastralCode: card.cadastralCode,
+        applicationStatus: card.applicationStatus,
+      },
+      OPTIONS,
+    ).world;
+    // Источник факта усилился, а состояние сделки не сдвинулось: `filed` — это
+    // «заявление подано», а не «подано ещё раз».
+    expect(dealFactsOf(world, DEAL).filings.map((filing) => filing.source)).toEqual([
+      'application_card',
+    ]);
+    expect(dealStatusOf(world, DEAL)).toBe('filed');
+    world = applyObservationEvent(world, TRANCHE, { type: 'statutory_term_elapsed' }, OPTIONS).world;
+    world = applyObservationEvent(
+      world,
+      TRANCHE,
+      { type: 'extract_ordered', cost: money(GEL, 1_000n) },
+      OPTIONS,
+    ).world;
+
+    // --- Подтверждение регистрации по платной выписке ---
+    const answer = registryWithTransfer().paidExtract(CADASTRAL_CODE);
+    expect(answer.kind).toBe('found');
+    if (answer.kind !== 'found') throw new Error('unreachable');
+    const extract = answer.value;
+    // Сверка собственника ведётся по номеру документа: имя — вторичный сигнал.
+    // Здесь она проверяется на том же входе, который использует приложение, —
+    // раньше `ownerDocumentNumber` приложение выбрасывало, и эта сверка жила
+    // только в теле теста.
+    const owner = reconcileOwner(
+      extract.ownerDocumentNumber,
+      compareNames(extract.ownerNames, BUYER.names, {
+        strongThresholdBp: POLICY.nameThresholds.ownerReconciliation.valueBp,
+      }),
+    );
+    expect(owner.outcome).toBe('established');
+    const observed = receivePaidExtract(
+      world,
+      TRANCHE,
+      extract,
+      'evidence-bundle-1',
+      POLICY,
+      OPTIONS,
+    );
+    world = observed.world;
+    // Машина наблюдения и автомат транша вывели одно и то же из одного
+    // документа: вердикт `matched`, транш в `release_pending`.
+    expect(observed.state.status).toBe('matched');
+    expect(trancheOf(world, TRANCHE).facts.observation?.ownerCheck).toBe('established');
     expect(trancheStatusOf(world, TRANCHE)).toBe('release_pending');
     world = applyDealEvent(world, DEAL, { type: 'condition_established', conditionType: 'registration_transfer' }, OPTIONS);
     expect(dealStatusOf(world, DEAL)).toBe('settling');
@@ -151,11 +215,18 @@ describe('счастливый путь', () => {
     const fee = feeForTranche(world, TRANCHE, DEAL_AMOUNT);
     expect(fee.minor).toBe(300_000n);
     expect(accountBalance(world.journal, clientFreeAccount(opened.sellerKey), GEL).minor).toBe(19_700_000n);
+    // Доход признан **начислением**, отдельной записью: до E14 это была та же
+    // запись, что и расчёт, и «начислено», «удержано», «получено» были одним
+    // числом.
     expect(accountBalance(world.journal, { kind: 'fee_income' }, GEL).minor).toBe(300_000n);
     // Красная линия №2: комиссия не осталась на номинальном счёте — и никакого
     // отдельного шага вывода для этого не понадобилось. Расчёт вывел её сам, в
     // той же записи; ручной `sweepFee` из приложения удалён.
     expect(accountBalance(world.journal, bankNominal(GEL), GEL).minor).toBe(19_700_000n);
+    // На операционном счёте пока только спред: он признаётся доходом в момент
+    // конвертации и приходит сразу, а комиссия идёт через транзит.
+    expect(accountBalance(world.journal, bankOperating(GEL), GEL).minor).toBe(400_000n);
+    world = receiveTrancheFee(world, DEAL, TRANCHE, fee);
     // Спред 400 000 плюс комиссия 300 000.
     expect(accountBalance(world.journal, bankOperating(GEL), GEL).minor).toBe(700_000n);
     world = applyDealEvent(world, DEAL, { type: 'tranches_settled' }, OPTIONS);

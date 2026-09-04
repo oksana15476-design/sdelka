@@ -1,5 +1,4 @@
 import {
-  type ConvertedAmount,
   type CurrencyCode,
   type Money,
   type PlatformSpread,
@@ -12,17 +11,22 @@ import {
 import {
   type Account,
   type ClientKey,
+  assertAccountIdentifier,
   bankNominal,
   bankOperating,
   clientFreeAccount,
   clientLockedAccount,
+  feeReceivable,
   fxSettlement,
   shortfallExpense,
+  transitFee,
   transitWriteoff,
   unclaimedLiability,
 } from './accounts';
 import {
   type ClientRef,
+  type FeeAccrualDeclaration,
+  type FxExecution,
   type JournalEntry,
   type TrancheRef,
   type TrancheSettlement,
@@ -64,6 +68,27 @@ function trancheRef(dealId: string, trancheId: string): TrancheRef {
 
 function custodyOf(amount: Money<CurrencyCode>): Account {
   return bankNominal(amount.currency);
+}
+
+/**
+ * Запись плюс скрытые поля — носитель токена (`RecognisedShortfall`,
+ * `FeeAccrual`).
+ *
+ * Поля **неперечислимые** намеренно. Токен нужен типам, а не журналу: запись,
+ * попавшая в журнал, обязана остаться ровно `JournalEntry` — с той же формой
+ * при сериализации, при сравнении в тестах и в выгрузке для бухгалтерии.
+ * Перечислимое поле изменило бы значение записи ради удобства конструктора.
+ */
+function withToken<E extends Record<string, unknown>>(
+  entry: JournalEntry,
+  extra: E,
+): JournalEntry & E {
+  const copy: Record<string, unknown> = { ...entry };
+  const descriptors: PropertyDescriptorMap = {};
+  for (const [key, value] of Object.entries(extra)) {
+    descriptors[key] = { value, enumerable: false, writable: false, configurable: false };
+  }
+  return Object.freeze(Object.defineProperties(copy, descriptors)) as JournalEntry & E;
 }
 
 /**
@@ -232,56 +257,77 @@ export function overpaymentToClientAccount(
  * счёта, что и всё остальное, а не в отдельный «счёт продавца». Вывод наружу —
  * отдельное событие (И12.2).
  *
- * **Одна запись, включающая вывод комиссии на операционный счёт.** Красная
- * линия №2 требует буквально этого: «выводится на операционный в момент
- * расчёта, в том же журнале». Прежняя редакция признавала комиссию доходом, но
- * денег с номинального счёта не двигала, оставляя в файле транша ровно
- * комиссию, — то есть средства платформы на счёте клиентских средств. Вывод жил
- * отдельной функцией в приложении, забыть его ничего не мешало, и пофайловая
- * сверка этого не ловила: профицит по файлу считается покрытием.
- *
- * Теперь вывод — часть расчёта, а не следующий шаг:
- *
  * ```
  * Дт client:{плательщик}:tranche:{сделка}:{транш}   брутто   файл транша
  *     Кт client:{получатель}:free                     нетто   файл получателя
- *     Кт fee:income                                 комиссия
+ *     Кт fee:receivable                             комиссия   файл транша
  * Кт bank:nominal                                    брутто   файл транша
  * Дт bank:nominal                                     нетто   файл получателя
- * Дт bank:operating                                комиссия
+ * Дт transit:fee                                   комиссия   файл транша
  * ```
  *
- * Файл транша после записи пуст с обеих сторон, файл получателя обеспечен
- * ровно на нетто, комиссия на номинальном счёте не остаётся ни на минуту.
- * Второй контур — `assertPlatformIncomeSweptToOperating` в `createJournalEntry`:
- * даже собранная в обход словаря запись не признает доход, не выведя его.
+ * **[исправляет предыдущее] Комиссия здесь больше не признаётся доходом и не
+ * ложится на операционный счёт.** Прежняя редакция кредитовала `fee:income` и
+ * дебетовала `bank:operating` внутри записи расчёта — то есть утверждала, что
+ * межбанковский перевод уже дошёл, в тот же миг, когда он только начинается.
+ * Ровно этот зазор описан в §3.1 для списания невостребованного («два момента,
+ * а не один») и ровно его требует видеть Ф10: **начислено, удержано и получено
+ * — три разные величины**. Пока их было две, «удержано, но не переведено» было
+ * невыразимо.
+ *
+ * Теперь расчёт делает ровно одно: **удерживает** уже начисленную комиссию.
+ * Требование гасится (`Кт fee:receivable`), деньги уходят в транзит
+ * (`Дт transit:fee`) и доходят до операционного счёта третьей записью
+ * (`receiveFee`).
+ *
+ * Красная линия №2 держится по-прежнему и в той же силе: комиссия уходит с
+ * номинального счёта **в этой записи**, в файле транша не остаётся ни копейки,
+ * и держится это теперь не проверкой, а балансом — без дебета `transit:fee`
+ * запись просто не сходится повалютно. Формулировка красной линии при этом
+ * уточняется: «не хранится на номинальном счёте» — а не «в тот же миг лежит на
+ * операционном»; между банками деньги идут день-два, и `transit:fee` делает
+ * этот промежуток видимым вместо того, чтобы врать о нём.
+ *
+ * **Комиссия приходит токеном начисления, а не суммой.** Удержать то, что не
+ * начислено, теперь нельзя по типам: `FeeAccrual` собирается только
+ * `accrueFee`. Второй контур — баланс: удержание без начисления уводит
+ * `fee:receivable` в минус, и это ловит `platformAssetNegative`.
  *
  * Плательщик, получатель и сделка приходят **одним значением** (`settles`), и
- * оно же остаётся в записи: получатель расчёта связан со сделкой в самой
- * записи, а не в намерении вызывающего (красная линия №1, см. `entry.ts`).
- * Само `settles` собирается только из подтверждения домена
- * (`DealPartiesAttestation`), которого учёту нечем подделать, — иначе связь
- * была бы самосертификацией вызывающего.
+ * оно же остаётся в записи (красная линия №1, см. `entry.ts`).
  */
 export function settleTrancheToClientAccount(
   meta: EntryMeta,
   settles: TrancheSettlement,
   gross: Money<CurrencyCode>,
-  fee: Money<CurrencyCode> | null = null,
+  withheld: FeeAccrual | null = null,
 ): JournalEntry {
   const deal = settles.deal;
   const tranche = trancheRef(deal.dealId, deal.trancheId);
   const recipientRef = clientRef(settles.recipient);
   const custody = custodyOf(gross);
-  if (fee !== null) {
+  let fee: Money<CurrencyCode> | null = null;
+  if (withheld !== null) {
+    // Начисление по другой сделке к этому расчёту не подходит — та же логика,
+    // что у подтверждения сторон: значение, выданное на одну сделку, не
+    // открывает удержание по другой.
+    if (
+      withheld.accruedFor.dealId !== deal.dealId ||
+      withheld.accruedFor.trancheId !== deal.trancheId
+    ) {
+      throw new LedgerError(LedgerErrorCode.entryFeeAccrualMismatch, {
+        dealId: deal.dealId,
+        trancheId: deal.trancheId,
+        accruedDealId: withheld.accruedFor.dealId,
+        accruedTrancheId: withheld.accruedFor.trancheId,
+      });
+    }
     // Комиссия — часть той же суммы, а не отдельный платёж: валюты обязаны
     // совпасть до вычитания, иначе `subtract` вернул бы бессмысленное нетто.
-    assertSameCurrency(gross, fee);
+    assertSameCurrency(gross, withheld.accruedFee);
+    fee = withheld.accruedFee;
   }
-  // Нулевая комиссия — это отсутствие комиссии, а не проводка на ноль: ноль
-  // конструктор записи отвергает, и прятать его в расчёте нельзя.
-  const withheld = fee !== null && isPositive(fee) ? fee : null;
-  const net = withheld === null ? gross : subtract(gross, withheld);
+  const net = fee === null ? gross : subtract(gross, fee);
   return createJournalEntry({
     ...meta,
     kind: 'settlement',
@@ -290,13 +336,13 @@ export function settleTrancheToClientAccount(
     postings: [
       debit(clientLockedAccount(settles.payer, deal.dealId, deal.trancheId), gross, tranche),
       credit(clientFreeAccount(settles.recipient), net, recipientRef),
-      ...(withheld === null ? [] : [credit({ kind: 'fee_income' } as const, withheld)]),
+      ...(fee === null ? [] : [credit(feeReceivable, fee, tranche)]),
       // Кастодиан уходит из файла транша целиком: нетто переезжает в файл
-      // получателя, комиссия — на операционный счёт. Остатка в файле транша не
-      // остаётся, поэтому и забывать нечего.
+      // получателя, комиссия — в транзит на операционный счёт. Остатка в файле
+      // транша не остаётся, поэтому и забывать нечего.
       credit(custody, gross, tranche),
       debit(custody, net, recipientRef),
-      ...(withheld === null ? [] : [debit(bankOperating(withheld.currency), withheld)]),
+      ...(fee === null ? [] : [debit(transitFee, fee, tranche)]),
     ],
   });
 }
@@ -394,88 +440,148 @@ export function writeOffTransitArrived(
  *
  * ```
  * Кт bank:nominal:{исходная}    сумма   файл клиента
- * Дт fx:settlement              сумма   файл клиента
+ * Дт fx:settlement:{k}          сумма   файл клиента
  * ```
  *
- * **Исправленный дефект, второй по тяжести в батче.** Конвертация собиралась
- * одной записью в приложении: целевая валюта дебетовалась на номинальный счёт
- * без единого внешнего источника. Проба: номинальный в долларах был ноль и стал
- * 500 000 — счёт в валюте, которой платформа не держала, создан одной записью.
+ * **Исправленный дефект, доставшийся от прошлого батча.** Разделение
+ * конвертации на два момента вылечило только ногу исходной валюты. Нога
+ * встречной валюты повторяла прежнюю форму целиком: `bank:nominal:{целевая}`
+ * дебетовался, `client:{c}:free` кредитовался — актив и обязательство под него
+ * создавала одна и та же запись, внешнего источника не было. Проба: конвертация
+ * в лари при нулевом номинальном счёте в лари давала 21 349 500 ₾ на счёте,
+ * покрытие 1/1 и пустой список нарушений (см. `conversion-second-leg.test.ts`).
  *
- * Следствие тяжелее самого факта. Обязательство перед клиентом в новой валюте и
- * покрытие под него создавала **одна и та же запись**, поэтому отношение
- * покрытия после конвертации тождественно равнялось единице: красная линия №3
- * переставала быть утверждением о деньгах и не проверяла больше ничего.
+ * **Теперь моментов три, и это следствие повалютного баланса, а не вкуса.**
+ * FUNCTIONAL.md §3.3 требовал одновременно двух несовместимых вещей:
+ * «обязательство перед клиентом в момент 1 не трогается» и «встречная валюта
+ * приходит через контрагента, а не появляется». В записи, балансируемой в
+ * каждой валюте отдельно, обязательство в лари неизбежно возникает в той же
+ * записи, что и лари на счёте, — если этих записей всего две. Развести их
+ * можно только третьей:
  *
- * Конвертация — операция с внешним контрагентом: валюта уходит с одного счёта и
- * приходит на другой **через него**, а не появляется. Поэтому моментов два, как
- * и у списания невостребованного (§3.1, «два момента, а не один»): между ними
- * деньги клиента лежат на `fx:settlement` — они всё ещё его, всё ещё покрывают
- * его обязательство, но уже не на нашем счёте. Обязательство перед клиентом
- * здесь не трогается вовсе: пока встречная валюта не пришла, он должен получить
- * ровно то, что отдал.
+ * ```
+ * M1 sendForConversion     исходная валюта отдана контрагенту
+ * M2 executeConversion     обмен исполнен, обязательство переоформлено
+ * M3 receiveConversion     встречная валюта поставлена
+ * ```
  *
- * Что это закрывает: получить встречную валюту, не отдав исходную, больше
- * нельзя. Момент 2 обязан закрыть требование к контрагенту, а закрытие
- * несуществующего требования уводит `fx:settlement` в минус — отрицательный
- * остаток клиентского счёта, инвариант и стоп-кран.
+ * Что это закрывает: лари попадают на номинальный счёт **единственной** записью
+ * M3, и у неё нет ноги, создающей обязательство. Нарисовать покрытие в целевой
+ * валюте, не поставив денег, больше нельзя.
+ *
+ * Чего это не закрывает, честно: после M2 и до M3 позиция в целевой валюте
+ * лежит на `fx:settlement:{k}` — клиентском активе, — поэтому портфельное
+ * покрытие в этот промежуток по-прежнему сходится в единицу. Это состояние
+ * «встречная валюта не поставлена», и ловит его только инвариант
+ * `fxPositionOpen` по возрасту позиции (`invariants.ts`), потому что ни
+ * отрицательным остатком, ни покрытием оно не выражается.
  *
  * Конвертация запертой части здесь невыразима намеренно: сменить валюту
  * обязательства под живым траншем — решение домена о сумме сделки, а не
- * проводка (сумма транша деноминирована), и ни один сегодняшний поток этого не
- * требует. Появится потребность — появится своё объявление, по образцу
- * `TrancheSettlement`.
+ * проводка.
  */
 export function sendForConversion(
   meta: EntryMeta,
   owner: ClientKey,
-  source: Money<CurrencyCode>,
+  execution: FxExecution,
 ): JournalEntry {
   const ref = clientRef(owner);
+  const source = execution.converted.source;
   return createJournalEntry({
     ...meta,
     kind: 'settlement',
     memoKey: 'ledger.entry.fx_sent_for_conversion',
+    converts: execution,
     postings: [
       credit(custodyOf(source), source, ref),
-      debit(fxSettlement, source, ref),
+      debit(fxSettlement(execution.conversionId), source, ref),
     ],
   });
 }
 
 /**
- * Конвертация, **момент 2**: контрагент отдал встречную валюту.
+ * Конвертация, **момент 2**: обмен исполнен у контрагента, обязательство перед
+ * клиентом переоформлено в целевую валюту.
  *
  * ```
- * Дт client:{c}:free      80 000 USD   файл клиента   (старое обязательство)
- *     Кт fx:settlement        80 000 USD   файл клиента   (требование закрыто)
- * Дт bank:nominal:gel    213 495 GEL   файл клиента
- * Дт bank:operating:gel    1 505 GEL                  (наш спред)
+ * Дт client:{c}:free      80 000 USD   файл клиента   (старое обязательство закрыто)
+ *     Кт fx:settlement:{k}    80 000 USD   файл клиента   (требование в исходной закрыто)
+ * Дт fx:settlement:{k}   213 495 GEL   файл клиента   (требование во встречной)
  *     Кт client:{c}:free     213 495 GEL   файл клиента   (новое обязательство)
+ * ```
+ *
+ * Запись балансируется в каждой валюте отдельно и не двигает ни одного счёта в
+ * банке: это учётный факт исполнения сделки обмена, а не платёж. Прирост
+ * клиентского файла в ней нулевой в обеих валютах, поэтому
+ * `assertNoUnfundedClientFileGain` её пропускает по существу, а не по
+ * недосмотру.
+ *
+ * **Гарантия «получить ровно то, что отдал» переезжает из учёта в домен.**
+ * Прежняя редакция §3.3 держала её проводкой: обязательство до прихода
+ * встречной валюты оставалось в исходной. Держать её так и одновременно
+ * требовать внешнего источника встречной валюты нельзя (см. `sendForConversion`).
+ * До M3 обмен разворачивается у контрагента, а дефолт контрагента — это
+ * недостача платформы (§3.1, случай А), а не убыток клиента.
+ *
+ * M2 без M1 уводит `fx:settlement:{k}` в минус по исходной валюте —
+ * отрицательный остаток клиентского счёта, инвариант и стоп-кран.
+ */
+export function executeConversion(
+  meta: EntryMeta,
+  owner: ClientKey,
+  execution: FxExecution,
+): JournalEntry {
+  const ref = clientRef(owner);
+  const source = execution.converted.source;
+  const target = execution.converted.target;
+  const account = fxSettlement(execution.conversionId);
+  return createJournalEntry({
+    ...meta,
+    kind: 'settlement',
+    memoKey: 'ledger.entry.fx_executed',
+    converts: execution,
+    postings: [
+      debit(clientFreeAccount(owner), source, ref),
+      credit(account, source, ref),
+      debit(account, target, ref),
+      credit(clientFreeAccount(owner), target, ref),
+    ],
+  });
+}
+
+/**
+ * Конвертация, **момент 3**: контрагент поставил встречную валюту.
+ *
+ * ```
+ * Дт bank:nominal:gel    213 495 GEL   файл клиента
+ *     Кт fx:settlement:{k}   213 495 GEL   файл клиента   (требование закрыто)
+ * Дт bank:operating:gel    1 505 GEL                     (наш спред)
  *     Кт fx:income             1 505 GEL
  * ```
  *
- * Запись балансируется **в каждой валюте отдельно** (`assertBalanced`): по
- * доллару требование к контрагенту гасится обязательством, по лари пришедшее
- * от контрагента расходится между клиентом и нашим спредом. От контрагента
- * приходит вся сумма по эталонному курсу; клиенту зачисляется по клиентскому,
- * разница признаётся доходом и **в этой же записи** уходит на операционный
- * счёт: красная линия №2 и `assertPlatformIncomeSweptToOperating`. На
- * номинальном счёте наш спред не оседает ни на минуту.
+ * Обязательства перед клиентом эта запись не касается вовсе — оно уже
+ * переоформлено в M2. Единственное, что она делает, — переносит деньги из «у
+ * контрагента» в «на нашем счёте», и именно поэтому покрытие в целевой валюте
+ * перестало быть тождеством: ноги «создать обязательство» здесь нет.
  *
- * Суммы приходят готовыми из `@sdelka/money` (`ConvertedAmount`, `PlatformSpread`):
- * учёт не считает деньги, а курс с недавних пор несёт свою пару валют, поэтому
- * «умножить вместо разделить» здесь уже невыразимо.
+ * От контрагента приходит вся сумма по эталонному курсу: `target` закрывает
+ * требование клиента, разница уходит на операционный счёт и признаётся доходом
+ * **в этой же записи** (красная линия №2,
+ * `assertPlatformIncomeSweptToOperating`). На номинальном счёте наш спред не
+ * оседает ни на минуту.
+ *
+ * M3 без M2 уводит `fx:settlement:{k}` в минус по встречной валюте: закрытие
+ * несуществующего требования — отрицательный остаток клиентского счёта,
+ * инвариант и стоп-кран.
  */
 export function receiveConversion(
   meta: EntryMeta,
   owner: ClientKey,
-  converted: ConvertedAmount<CurrencyCode, CurrencyCode>,
+  execution: FxExecution,
   spread: PlatformSpread<CurrencyCode>,
 ): JournalEntry {
   const ref = clientRef(owner);
-  const source = converted.source;
-  const target = converted.target;
+  const target = execution.converted.target;
   assertSameCurrency(target, spread.amount);
   if (isNegative(spread.amount)) {
     // Клиентский курс лучше эталонного — это убыток платформы, и проводка у
@@ -493,17 +599,39 @@ export function receiveConversion(
   return createJournalEntry({
     ...meta,
     kind: 'settlement',
-    memoKey: 'ledger.entry.fx_converted',
+    memoKey: 'ledger.entry.fx_received',
+    converts: execution,
     postings: [
-      debit(clientFreeAccount(owner), source, ref),
-      credit(fxSettlement, source, ref),
       debit(custodyOf(target), target, ref),
-      credit(clientFreeAccount(owner), target, ref),
+      credit(fxSettlement(execution.conversionId), target, ref),
       ...(earned === null
         ? []
-        : [debit(bankOperating(earned.currency), earned), credit({ kind: 'fx_income' } as const, earned)]),
+        : [
+            debit(bankOperating(earned.currency), earned),
+            credit({ kind: 'fx_income' } as const, earned),
+          ]),
     ],
   });
+}
+
+/**
+ * Признанная недостача — единственное основание довнести деньги платформы в
+ * файл клиента.
+ *
+ * Ambient-символ, как у `DealPartiesAttestation`: значения этого типа нет ни в
+ * рантайме, ни в типах, поэтому объект с этим ключом построить нельзя нигде,
+ * кроме `absorbShortfall`. Токен **является записью признания** — не ссылкой на
+ * неё и не отдельным объектом: доказательством того, что недостача признана,
+ * может быть только сама запись признания.
+ */
+declare const recognisedByLedger: unique symbol;
+
+export interface RecognisedShortfall extends JournalEntry {
+  /** Клиент, чьё обязательство доведено до полной суммы за наш счёт. */
+  readonly recognisedOwner: ClientKey;
+  /** Сумма признанного расхода: потолок довнесения. */
+  readonly recognisedShortfall: Money<CurrencyCode>;
+  readonly [recognisedByLedger]: true;
 }
 
 /**
@@ -512,7 +640,7 @@ export function receiveConversion(
  *
  * ```
  * Дт bank:nominal          99 900   файл клиента
- * Дт shortfall:expense        100
+ * Дт shortfall:expense        100   файл клиента
  *     Кт client:{c}:free      100 000   файл клиента
  * ```
  *
@@ -527,6 +655,13 @@ export function receiveConversion(
  * (`@sdelka/intake`, §4.3.2) выдаёт план на счёт клиента, из которого транш
  * запирается обычной `lockForTranche`.
  *
+ * **Отнесение на проводке расхода.** Счёт не клиентских средств, поэтому для
+ * конструктора записи отнесение здесь инертно (`assertAttribution` его не
+ * смотрит). Оно стоит ради второго контура: инвариант `shortfallOverfunded`
+ * складывает признанное по каждой паре «клиент, валюта» и сравнивает с
+ * довнесённым. Без отнесения признание нельзя было бы сопоставить с клиентом
+ * вовсе.
+ *
  * ⚠ **Одной этой записи мало, и это не недосмотр.** Признание расхода — не
  * перевод денег: на номинальном счёте по-прежнему 99 900 против обязательства
  * в 100 000, файл клиента недообеспечен, красная линия №3 сработала, приём
@@ -539,7 +674,7 @@ export function absorbShortfall(
   owner: ClientKey,
   received: Money<CurrencyCode>,
   shortfall: Money<CurrencyCode>,
-): JournalEntry {
+): RecognisedShortfall {
   if (!isPositive(shortfall)) {
     // Недостача без недостачи — обычное зачисление (`clientTopUp`). Записывать
     // её этой формой значит прятать ноль в проводке и признавать расход,
@@ -552,16 +687,20 @@ export function absorbShortfall(
   // валюте недостачей по этому платежу не является.
   assertSameCurrency(received, shortfall);
   const ref = clientRef(owner);
-  return createJournalEntry({
+  const entry = createJournalEntry({
     ...meta,
     kind: 'settlement',
     memoKey: 'ledger.entry.shortfall_absorbed',
     postings: [
       debit(custodyOf(received), received, ref),
-      debit(shortfallExpense, shortfall),
+      debit(shortfallExpense, shortfall, ref),
       credit(clientFreeAccount(owner), add(received, shortfall), ref),
     ],
   });
+  return withToken(entry, {
+    recognisedOwner: owner,
+    recognisedShortfall: shortfall,
+  }) as unknown as RecognisedShortfall;
 }
 
 /**
@@ -582,16 +721,30 @@ export function absorbShortfall(
  * законный источник у такого прироста один — собственные деньги платформы,
  * ушедшие с её собственного счёта **в этой же записи**. Здесь он и стоит.
  *
+ * **Исправленный дефект: это был единственный конструктор без проверки входа.**
+ * Прежняя подпись `fundShortfall(meta, owner, amount)` — универсальный примитив
+ * «положить деньги платформы в файл произвольного клиента на произвольную
+ * сумму», и `assertNoUnfundedClientFileGain` пропускал его **по построению**:
+ * такое финансирование законно. То есть у формы не было ни одного контура
+ * защиты: ни в словаре, ни в конструкторе записи.
+ *
+ * Теперь контуров два, и они закрывают разные двери:
+ *
+ * 1. **Токен.** Владелец, валюта и сумма берутся из записи признания, а не из
+ *    аргументов. Форма «доложить кому угодно сколько угодно» исчезла из
+ *    словаря — она невыразима, а не запрещена проверкой.
+ * 2. **Инвариант** `shortfallOverfunded`: по каждой паре «клиент, валюта»
+ *    довнесённое не превышает признанного. Он закрывает низкоуровневую дверь
+ *    `createJournalEntry`, которой токен не указ.
+ *
  * Отнесение — файл клиента, а не транша: недостача признана на счёте клиента, и
  * если деньги успели запереться под транш, дыра осталась в файле клиента —
  * `lockForTranche` перенесла в файл транша полную сумму, которой на номинальном
  * счёте не было.
  */
-export function fundShortfall(
-  meta: EntryMeta,
-  owner: ClientKey,
-  amount: Money<CurrencyCode>,
-): JournalEntry {
+export function fundShortfall(meta: EntryMeta, recognised: RecognisedShortfall): JournalEntry {
+  const owner = recognised.recognisedOwner;
+  const amount = recognised.recognisedShortfall;
   const ref = clientRef(owner);
   return createJournalEntry({
     ...meta,
@@ -600,6 +753,139 @@ export function fundShortfall(
     postings: [
       debit(custodyOf(amount), amount, ref),
       credit(bankOperating(amount.currency), amount),
+    ],
+  });
+}
+
+/**
+ * Комиссия **начислена**: доход признан против требования платформы
+ * (FUNCTIONAL.md §4.6, CORE.md Ф16, история И14.3).
+ *
+ * ```
+ * Дт fee:receivable   комиссия   отнесение: сделка d, транш t
+ *     Кт fee:income       комиссия   отнесение: сделка d, транш t
+ * ```
+ *
+ * **Зачем отдельная запись, если раньше комиссия признавалась прямо в расчёте.**
+ * §4.1 и Ф16: удержание оформляется **двумя встречными фактами**, а не
+ * «уменьшенным платежом», и от этого зависит, признаётся ли налоговой базой
+ * наше вознаграждение или весь оборот через номинальный счёт. Начисление —
+ * первый из двух фактов. Пока его нет, «начислено» и «удержано» —
+ * одна величина, а Ф10 требует трёх раздельных.
+ *
+ * Денег эта запись не двигает вовсе, поэтому вывода на операционный счёт у неё
+ * нет. Именно ради неё в `assertPlatformIncomeSweptToOperating` появилось
+ * единственное именное исключение — доход против требования платформы.
+ *
+ * Отнесение к траншу стоит на обеих проводках. Для конструктора записи оно
+ * инертно (счета не клиентских средств), а `feePositions` без него не смогла бы
+ * ответить, по какой сделке комиссия начислена.
+ *
+ * `tariffVersionId` остаётся в токене и уходит в документ: И14.3 требует, чтобы
+ * на сделке хранился идентификатор версии плана и пересчёт задним числом был
+ * невозможен. Здесь он ещё не факт журнала — версия плана живёт на сделке, в
+ * домене; ledger хранит её ровно на время сборки записи расчёта.
+ */
+declare const accruedByLedger: unique symbol;
+
+export interface FeeAccrual extends JournalEntry {
+  readonly accruedFee: Money<CurrencyCode>;
+  readonly accruedFor: TrancheRef;
+  readonly tariffVersionId: string;
+  readonly [accruedByLedger]: true;
+}
+
+export function accrueFee(
+  meta: EntryMeta,
+  deal: TrancheRef,
+  fee: Money<CurrencyCode>,
+  tariffVersionId: string,
+): FeeAccrual {
+  if (!isPositive(fee)) {
+    // Нулевая комиссия — это отсутствие комиссии, а не проводка на ноль. План,
+    // который не берёт ничего, начисления не порождает вовсе.
+    throw new LedgerError(LedgerErrorCode.entryNonPositiveFee, {
+      amount: fee.minor.toString(),
+    });
+  }
+  assertAccountIdentifier(tariffVersionId, 'tariffVersionId');
+  const tranche = trancheRef(deal.dealId, deal.trancheId);
+  const entry = createJournalEntry({
+    ...meta,
+    kind: 'settlement',
+    memoKey: 'ledger.entry.fee_accrued',
+    accrues: { deal: tranche, fee, tariffVersionId },
+    postings: [
+      debit(feeReceivable, fee, tranche),
+      credit({ kind: 'fee_income' } as const, fee, tranche),
+    ],
+  });
+  return withToken(entry, {
+    accruedFee: fee,
+    accruedFor: tranche,
+    tariffVersionId,
+  }) as unknown as FeeAccrual;
+}
+
+/**
+ * Реверс начисления: сделка ушла в возвратную ветвь, комиссия за расчёт не
+ * начисляется (FUNCTIONAL.md §4.4, строки «отмена до конвертации» и «отмена
+ * после конвертации»).
+ *
+ * Запись типа `correction` со ссылкой на начисление — красная линия №11:
+ * журнал не редактируется, исправление только новой записью со ссылкой на
+ * предыдущую. Спред на конвертации этим не отменяется: услуга оказана, и
+ * §4.4 говорит об этом отдельной строкой.
+ */
+export function reverseFeeAccrual(meta: EntryMeta, accrual: FeeAccrual): JournalEntry {
+  return createJournalEntry({
+    ...meta,
+    kind: 'correction',
+    correctsEntryId: accrual.id,
+    memoKey: 'ledger.entry.fee_accrual_reversed',
+    accrues: {
+      deal: accrual.accruedFor,
+      fee: accrual.accruedFee,
+      tariffVersionId: accrual.tariffVersionId,
+    },
+    postings: [
+      debit({ kind: 'fee_income' } as const, accrual.accruedFee, accrual.accruedFor),
+      credit(feeReceivable, accrual.accruedFee, accrual.accruedFor),
+    ],
+  });
+}
+
+/**
+ * Комиссия **получена**: межбанковский перевод удержанной комиссии дошёл до
+ * операционного счёта.
+ *
+ * ```
+ * Дт bank:operating   комиссия   отнесение: сделка d, транш t
+ *     Кт transit:fee      комиссия   отнесение: сделка d, транш t
+ * ```
+ *
+ * Это факт банковской выписки, а не переход транша: автомату сказать о нём
+ * нечего, запись порождает сверка — ровно как у `writeOffTransitArrived`.
+ * Остаток `transit:fee` старше двух банковских дней — расхождение
+ * (`InvariantCode.transitStale`), а не норма.
+ *
+ * Отнесение к траншу обязательно: три величины Ф16 считаются по сделке, а
+ * перевод одной суммой за десять сделок разбирается на проводки по каждой —
+ * иначе «получено» перестаёт быть величиной сделки и становится величиной дня.
+ */
+export function receiveFee(
+  meta: EntryMeta,
+  deal: TrancheRef,
+  amount: Money<CurrencyCode>,
+): JournalEntry {
+  const tranche = trancheRef(deal.dealId, deal.trancheId);
+  return createJournalEntry({
+    ...meta,
+    kind: 'settlement',
+    memoKey: 'ledger.entry.fee_received',
+    postings: [
+      debit(bankOperating(amount.currency), amount, tranche),
+      credit(transitFee, amount, tranche),
     ],
   });
 }

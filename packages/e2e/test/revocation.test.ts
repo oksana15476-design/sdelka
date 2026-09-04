@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { money } from '@sdelka/money';
 import { payerKeyForDomain } from '@sdelka/compliance';
 import { accountBalance, bankOperating, clientFreeAccount } from '@sdelka/ledger';
 import {
@@ -6,14 +7,15 @@ import {
   applyDealEvent,
   applyTrancheEvent,
   approve,
-  attachRegistryExtract,
+  attachObservation,
   dealStatusOf,
   feeForTranche,
+  receiveTrancheFee,
   receiveExternalPayment,
   rejectTrancheEvent,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import {
   BANK_RESPONSE_SOURCE,
   BUYER,
@@ -21,6 +23,8 @@ import {
   GEL,
   POLICY_VERSION,
   SELLER,
+  CADASTRAL_CODE,
+  POLICY,
   registryWithTransfer,
 } from './support/fixtures';
 import { openDeal } from './support/open';
@@ -116,11 +120,16 @@ describe('отзыв средств покупателем', () => {
     const started = await toReserved('deal-revoke-c', 'tranche-revoke-c');
     let world = started.world;
     world = applyDealEvent(world, 'deal-revoke-c', { type: 'tranches_reserved' }, OPTIONS);
-    world = applyDealEvent(world, 'deal-revoke-c', { type: 'filing_registered', applicationId: 'app-3' }, OPTIONS);
+    world = applyDealEvent(
+      world,
+      'deal-revoke-c',
+      { type: 'filing_registered', applicationId: 'app-3', source: 'application_card' },
+      OPTIONS,
+    );
 
-    const extract = registryWithTransfer().paidExtract('cadastral-3');
-    if (extract === null) throw new Error('unreachable');
-    world = attachRegistryExtract(world, 'tranche-revoke-c', extract, 'evidence-bundle-3');
+    const answer = registryWithTransfer().paidExtract(CADASTRAL_CODE);
+    if (answer.kind !== 'found') throw new Error('unreachable');
+    world = attachObservation(world, 'tranche-revoke-c', answer.value, 'evidence-bundle-3', POLICY);
     world = applyTrancheEvent(
       world,
       'tranche-revoke-c',
@@ -152,8 +161,12 @@ describe('отзыв средств покупателем', () => {
     world = applyDealEvent(world, 'deal-revoke-c', { type: 'tranches_settled' }, OPTIONS);
     expect(dealStatusOf(world, 'deal-revoke-c')).toBe('settled');
     expect(accountBalance(world.journal, clientFreeAccount(started.sellerKey), GEL).minor).toBe(19_700_000n);
-    // Комиссия выведена той же записью расчёта, отдельного шага у приложения нет.
+    // Комиссия ушла с номинального счёта той же записью расчёта — в транзит.
+    // На операционном счёте её ещё нет, и это не забытый шаг, а факт: перевод
+    // между банками идёт день-два (`FUNCTIONAL.md` §3.1).
     expect(feeForTranche(world, 'tranche-revoke-c', DEAL_AMOUNT).minor).toBe(300_000n);
+    expect(accountBalance(world.journal, bankOperating(GEL), GEL).minor).toBe(0n);
+    world = receiveTrancheFee(world, 'deal-revoke-c', 'tranche-revoke-c', money(GEL, 300_000n));
     expect(accountBalance(world.journal, bankOperating(GEL), GEL).minor).toBe(300_000n);
   });
 });

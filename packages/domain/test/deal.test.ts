@@ -7,19 +7,21 @@ import {
   type DealStatus,
   type TrancheStatus,
   DEAL_STATUSES,
+  DEAL_TRANSITIONS,
   RejectionCode,
+  instant,
   dealState,
   initialDealState,
   reduceDeal,
 } from '../src/index';
-import { CONDITION_ACT, NOW } from './support/facts';
+import { CADASTRAL_CODE, CONDITION_ACT, NOW, dealFacts, filing, observation } from './support/facts';
 
 function context(
   trancheStatuses: readonly TrancheStatus[] = [],
   preparedBy: string | null = null,
   conditionAct: ConditionAct | null = CONDITION_ACT,
 ): DealContext {
-  return { dealId: 'deal-1', now: NOW, facts: { trancheStatuses, preparedBy, conditionAct } };
+  return { dealId: 'deal-1', now: NOW, facts: dealFacts({ trancheStatuses, preparedBy, conditionAct }) };
 }
 
 function step(state: DealState, event: DealEvent, ctx: DealContext = context()): DealState {
@@ -41,7 +43,11 @@ describe('сделка: оркестрация', () => {
     expect(state.status).toBe('funding');
     state = step(state, { type: 'tranches_reserved' }, context(['reserved', 'reserved']));
     expect(state.status).toBe('funded');
-    state = step(state, { type: 'filing_registered', applicationId: 'app-1' });
+    state = step(state, {
+      type: 'filing_registered',
+      applicationId: 'app-1',
+      source: 'application_card',
+    });
     state = step(state, { type: 'condition_established', conditionType: 'registration_transfer' });
     expect(state.status).toBe('settling');
     state = step(state, { type: 'tranches_settled' }, context(['paid_out', 'paid_out']));
@@ -216,6 +222,125 @@ describe('сделка: заморозка', () => {
       if (!result.ok) {
         expect(result.error.code).toBe(RejectionCode.terminalState);
       }
+    }
+  });
+});
+
+/**
+ * E3-2 · `CORE.md` Ф9, `ROADMAP.md` И3.2, `ORACLE.md` §9.
+ *
+ * До этого батча ребро `filed --deadline_reached--> unwinding` стояло **без
+ * единого guard'а**: сделка, по которой заявление уже подано и принято
+ * реестром, откатывалась по нашей отсечке автоматически. Ф9 называет это
+ * сценарием, производящим конфликт: «резерв снят, деньги у покупателя, объект
+ * тоже у покупателя».
+ */
+describe('сделка: автооткат и открытое заявление', () => {
+  function withFilings(filings: readonly ReturnType<typeof filing>[]): DealContext {
+    return { dealId: 'deal-1', now: NOW, facts: dealFacts({ filings }) };
+  }
+
+  it('unwinds on the deadline when no application has been filed', () => {
+    expect(step(dealState('filed'), { type: 'deadline_reached' }).status).toBe('unwinding');
+  });
+
+  it('still unwinds when the number was merely named by a party', () => {
+    // И3.2, критерий 1: номер, сообщённый стороной, помечен непроверенным и сам
+    // по себе автооткрата не запрещает — иначе сторона управляет нашим
+    // дедлайном одним сообщением.
+    const result = reduceDeal(
+      dealState('filed'),
+      { type: 'deadline_reached' },
+      withFilings([filing({ source: 'party_claim' })]),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses to unwind while a card-confirmed application is open', () => {
+    const result = reduceDeal(
+      dealState('filed'),
+      { type: 'deadline_reached' },
+      withFilings([filing({ source: 'application_card' })]),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(RejectionCode.guardFailed);
+      expect([...result.error.failedGuards]).toEqual(['g_no_open_filing']);
+    }
+  });
+
+  it('unwinds again once a paid extract has resolved the application, whatever its verdict', () => {
+    // Разрешает заявление только выписка — и любым вердиктом: после
+    // расхождения держать деньги дальше не на чем. Статус карточки «завершено»
+    // не разрешает ничего (Ф7).
+    for (const ownerCheck of ['established', 'refuted', 'insufficient'] as const) {
+      const resolved = filing({ resolution: observation({ ownerCheck }) });
+      const result = reduceDeal(
+        dealState('filed'),
+        { type: 'deadline_reached' },
+        withFilings([resolved]),
+      );
+      expect(result.ok).toBe(true);
+    }
+  });
+
+  it('does not accept a cheap signal as a resolution of the application', () => {
+    // Карточка заявления — не выписка: `L1` заявление не закрывает.
+    const result = reduceDeal(
+      dealState('filed'),
+      { type: 'deadline_reached' },
+      withFilings([filing({ resolution: observation({ level: 'L1' }) })]),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('does not accept an extract about another object as a resolution', () => {
+    // И3.2, крайний случай «сторона называет чужой номер»: сверка кадастрового
+    // кода — обязательная часть подтверждения.
+    const result = reduceDeal(
+      dealState('filed'),
+      { type: 'deadline_reached' },
+      withFilings([filing({ resolution: observation({ cadastralCode: '77.77.77.777.777' }) })]),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('keeps an old extract as a resolution: “application closed” is a historical fact', () => {
+    // Свежесть — требование к основанию для движения денег, а не к тому,
+    // разобрана ли регистрация. Иначе закрытое заявление снова открывалось бы
+    // по истечении времени, и сделка откатывалась бы после регистрации.
+    const stale = observation({ observedAt: instant(NOW - 30 * 24 * 60 * 60 * 1000) });
+    const result = reduceDeal(
+      dealState('filed'),
+      { type: 'deadline_reached' },
+      withFilings([filing({ resolution: stale })]),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('guards the other automatic door into unwinding as well', () => {
+    // Guard, стоящий на одной двери, состояние не защищает (§1.4, §4).
+    const edges = DEAL_TRANSITIONS.filter(
+      (item) => item.to === 'unwinding' && item.event === 'deadline_reached',
+    );
+    expect(edges.length).toBe(2);
+    for (const edge of edges) {
+      expect([...edge.guards]).toContain('g_no_open_filing');
+    }
+    // Отзыв покупателя — явное волеизъявление, а не автооткат: Ф9 запрещает
+    // именно автоматический откат, и guard'а здесь нет намеренно.
+    const revocation = DEAL_TRANSITIONS.find((item) => item.event === 'revocation_requested');
+    expect(revocation?.guards).toEqual([]);
+  });
+
+  it('records the source of the filing on the event, not as a flag', () => {
+    // И3.2, задача `packages/domain`: «источник факта как атрибут события, а не
+    // bool». Оба источника — законные значения события, и различает их тип.
+    for (const source of ['party_claim', 'application_card'] as const) {
+      expect(
+        step(dealState('funded'), { type: 'filing_registered', applicationId: 'app-1', source })
+          .status,
+      ).toBe('filed');
     }
   });
 });

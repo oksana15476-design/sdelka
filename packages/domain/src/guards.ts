@@ -9,6 +9,13 @@ import {
 import type { BeneficiaryLock } from './beneficiary';
 import { type ConditionAct, isConditionActValid } from './condition-act';
 import { type Instant, HOUR } from './instant';
+import {
+  type ObservationPolicy,
+  type ReleaseObservation,
+  type StatementFields,
+  allStatementFieldsMatch,
+  observationSatisfies,
+} from './observation';
 import { type PartyRef, isSameParty } from './party';
 import type { TrancheEvent } from './tranche-events';
 
@@ -23,6 +30,26 @@ export const GUARD_IDS = [
   'g_amount_sufficient',
   'g_payer_matches',
   'g_evidence_present',
+  /**
+   * введено E3-1 (`ORACLE.md` §6.4, `STATE-MACHINES.md` §1.3): **наблюдение
+   * оракула вообще годится как основание** — оно существует, оно о том же типе
+   * условия, что и акт получателя, его источник и уровень доверия удовлетворяют
+   * требованию типа (`registration_transfer` → платная выписка, L3+), его
+   * кадастровый код — код объекта сделки, и его возраст в пределах политики.
+   *
+   * Отдельный guard, а не расширение `g_fields_match`: «документ, на который мы
+   * опираемся, годен» и «содержимое документа сошлось» — два разных
+   * утверждения, и §7 требует, чтобы каждое проверялось поимённо. Тот же довод,
+   * которым разведены `g_beneficiary_locked` и `g_beneficiary_verified`.
+   *
+   * Документ требовал «L3+» столбцом источника в §8, а уровня в коде не было
+   * вовсе: пять полей выписки и вердикт по собственнику лежали в фактах
+   * **порознь и без документа**, и фикстура законно клала пять `true`, не имея
+   * за ними ни одной выписки. `CORE.md` Ф7: «автоматический релиз по
+   * недокументированному источнику — риск с максимальной вероятностью и
+   * максимальным ущербом».
+   */
+  'g_observation_sufficient',
   'g_fields_match',
   'g_owner_is_buyer',
   'g_approvals_sufficient',
@@ -135,16 +162,6 @@ export const GUARD_IDS = [
 ] as const;
 
 export type GuardId = (typeof GUARD_IDS)[number];
-
-/** Пять полей выписки из FUNCTIONAL.md §3.5. Проверяются поимённо, а не счётчиком. */
-export interface StatementFields {
-  readonly cadastralCode: boolean;
-  /** Собственник сверяется по номеру документа, не по имени: латинизация необратима. */
-  readonly ownerDocumentNumber: boolean;
-  readonly share: boolean;
-  readonly basis: boolean;
-  readonly noUnexpectedEncumbrances: boolean;
-}
 
 export interface ApprovalTier {
   /** Верхняя граница включительно в минорных единицах; `null` — всё, что выше. */
@@ -271,8 +288,30 @@ export interface TrancheFacts {
    */
   readonly conditionAct: ConditionAct | null;
   readonly evidenceBundleId: string | null;
-  readonly statementFields: StatementFields;
-  readonly registryOwnerIsBuyer: boolean;
+  /**
+   * Наблюдение оракула, на которое опирается расчёт (`ORACLE.md` §4). `null` —
+   * наблюдения нет, и это законное состояние почти всю жизнь транша.
+   *
+   * **Одно значение вместо двух плавающих ответов.** Раньше здесь лежали
+   * `statementFields` (пять булевых) и `registryOwnerIsBuyer` (одно булево)
+   * порознь и **без документа**: собрать факты с пятью `true` и «собственник —
+   * покупатель», не имея ни одной выписки, было законной конструкцией типа, и
+   * фикстура интерфейса ровно это и делала. Один документ — один вердикт:
+   * наблюдения нет — вердикта нет, и «забыть сбросить булево» больше нечего.
+   */
+  readonly observation: ReleaseObservation | null;
+  /**
+   * Кадастровый код объекта **этой** сделки. Наблюдение по чужому объекту —
+   * полноценное, свежее, L3 — не должно разрешать выплату по нашей сделке
+   * (`ORACLE.md` §6.2).
+   */
+  readonly expectedCadastralCode: string;
+  /**
+   * Политика наблюдения (свежесть). Лежит в фактах рядом с `approvalPolicy` и
+   * по той же причине: `CORE.md` Ф11 требует, чтобы решение хранило версию
+   * политики, действовавшую в момент принятия.
+   */
+  readonly observationPolicy: ObservationPolicy;
   readonly beneficiary: BeneficiaryLock;
   /** Учётная запись, готовившая операцию: она не может быть утверждающей. */
   readonly preparedBy: string | null;
@@ -402,12 +441,29 @@ export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> =
   },
   g_evidence_present: ({ facts }) =>
     facts.evidenceBundleId !== null && facts.evidenceBundleId.length > 0,
+  /**
+   * Документ, на который опирается расчёт, годен — `ORACLE.md` §6.
+   *
+   * Тип условия берётся **из акта получателя**, а не из наблюдения: иначе
+   * наблюдение отвечало бы само себе, о чём оно. Акта нет — отказ закрытый:
+   * без акта у отложенного платежа нет основания вовсе (Ф13).
+   */
+  g_observation_sufficient: ({ facts, now }) => {
+    const act = facts.conditionAct;
+    if (act === null) return false;
+    return observationSatisfies(facts.observation, {
+      conditionType: act.conditionType,
+      expectedCadastralCode: facts.expectedCadastralCode,
+      now,
+      policy: facts.observationPolicy,
+    });
+  },
+  /**
+   * Пять полей **наблюдения**, поимённо (FUNCTIONAL.md §3.5). Наблюдения нет —
+   * нет и полей: их отсутствие не читается как совпадение (Ф7, fail-closed).
+   */
   g_fields_match: ({ facts }) =>
-    facts.statementFields.cadastralCode &&
-    facts.statementFields.ownerDocumentNumber &&
-    facts.statementFields.share &&
-    facts.statementFields.basis &&
-    facts.statementFields.noUnexpectedEncumbrances,
+    facts.observation !== null && allStatementFieldsMatch(facts.observation.fields),
   /**
    * Перед выплатой сверяется, что новый собственник в выписке — **покупатель**:
    * это и есть доказательство, что переход права состоялся. Выписка, всё ещё
@@ -417,8 +473,16 @@ export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> =
    * сделки (Ф3) и сюда не относится. Раньше оба момента назывались одним
    * guard'ом `g_owner_matches`, и STATE-MACHINES.md §1.3 с FUNCTIONAL.md §3.5
    * определяли его противоположно. См. §1.3.
+   *
+   * Вердикт берётся из наблюдения и сравнивается **с `established`**, а не
+   * «не опровергнуто». `insufficient` — выписка не отдала номер документа
+   * собственника — роняет guard ровно так же, как `refuted`: это открытый
+   * вопрос `CORE.md` Ф7 по иностранцам, и до ответа реестра он читается как
+   * «оснований нет», а не «наверное совпало» (`ORACLE.md` §5.3). Различаются
+   * два исхода ключом причины и видом задачи оператора, но не разрешением:
+   * автоматического пути из `insufficient` к выплате нет ни при какой сумме.
    */
-  g_owner_is_buyer: ({ facts }) => facts.registryOwnerIsBuyer,
+  g_owner_is_buyer: ({ facts }) => facts.observation?.ownerCheck === 'established',
   g_approvals_sufficient: ({ facts }) => {
     const required = requiredApprovals(
       facts.approvalPolicy,

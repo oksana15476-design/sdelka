@@ -19,7 +19,7 @@ import {
   rejectTrancheEvent,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import {
   BUYER,
   CREATED_ON,
@@ -159,10 +159,20 @@ describe('конвертация с сорванной котировкой', ()
     expect(decision.converted?.target.minor).toBe(20_000_000n);
 
     // --- Только теперь деньги двигаются ---
-    // Целевой валюты в аргументах нет: её несёт курс. И это **два шага мира**,
-    // а не один: между ними доллары клиента лежат на `fx:settlement` — у
-    // валютного контрагента, — и промежуток обязан проходить инварианты.
-    const converted = convertBalance(world, opened.buyerKey, DEAL_AMOUNT_USD, FX_RATES, CREATED_ON);
+    // Целевой валюты в аргументах нет: её несёт курс. И это **три шага мира**,
+    // а не один: между ними деньги клиента лежат на `fx:settlement:{k}` — у
+    // валютного контрагента, — и каждый промежуток обязан проходить инварианты.
+    // Ключ конверсии обязателен: без него позиции разных обменов нетятся в
+    // общем пуле, и «сколько нам не поставили по этому обмену» перестаёт быть
+    // величиной.
+    const converted = convertBalance(
+      world,
+      opened.buyerKey,
+      'fx-intake-1',
+      DEAL_AMOUNT_USD,
+      FX_RATES,
+      CREATED_ON,
+    );
     world = converted.world;
     expect(accountBalance(world.journal, clientFreeAccount(opened.buyerKey), USD).minor).toBe(0n);
     expect(accountBalance(world.journal, clientFreeAccount(opened.buyerKey), GEL).minor).toBe(20_000_000n);

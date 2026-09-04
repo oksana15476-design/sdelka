@@ -2,6 +2,12 @@ import { type ConditionAct, isConditionActValid } from './condition-act';
 import type { ComplianceFreezeReason, FreezeReason, UnfreezeTarget } from './freeze';
 import type { Instant } from './instant';
 import type { Intent } from './intents';
+import {
+  type FilingSource,
+  type ReleaseObservation,
+  OBSERVATION_REQUIREMENTS,
+  observationLevelAtLeast,
+} from './observation';
 import { RELEASE_CONDITIONS } from './release-condition';
 import { type Rejection, type Result, RejectionCode, failure, ok, rejection } from './result';
 import type { ReleaseConditionType } from './release-condition';
@@ -44,7 +50,17 @@ export type DealEvent =
   | { readonly type: 'property_verified' }
   | { readonly type: 'funds_received' }
   | { readonly type: 'tranches_reserved' }
-  | { readonly type: 'filing_registered'; readonly applicationId: string }
+  /**
+   * Подача зарегистрирована. `source` обязателен (E3-2, `ROADMAP.md` И3.2,
+   * задача «источник факта как атрибут события, а не bool»): номер, названный
+   * стороной, и номер, подтверждённый карточкой заявления, — два разных факта,
+   * и от разницы зависит, запрещён ли автооткат (`g_no_open_filing`).
+   */
+  | {
+      readonly type: 'filing_registered';
+      readonly applicationId: string;
+      readonly source: FilingSource;
+    }
   | { readonly type: 'condition_established'; readonly conditionType: ReleaseConditionType }
   | { readonly type: 'condition_failed' }
   | { readonly type: 'deadline_reached' }
@@ -85,10 +101,48 @@ export const DEAL_GUARD_IDS = [
   'g_all_tranches_paid_out',
   'g_all_tranches_refunded',
   'g_no_live_tranche',
+  /**
+   * введено E3-2 (`CORE.md` Ф9, `ROADMAP.md` И3.2, `ORACLE.md` §9):
+   * **автооткат запрещён, если заявление подано и не завершено.**
+   *
+   * До этого батча запрета не было **вовсе**: ребро
+   * `filed --deadline_reached--> unwinding` стояло без единого guard'а, то есть
+   * сделка, по которой заявление уже подано и принято реестром, откатывалась по
+   * нашей отсечке автоматически. Это ровно тот сценарий, который Ф9 называет
+   * производящим конфликт: «резерв снят, деньги у покупателя, объект тоже у
+   * покупателя».
+   *
+   * Открытым считается заявление, подтверждённое **карточкой** и не разрешённое
+   * платной выпиской. Номер, названный стороной, автооткрата не запрещает —
+   * иначе сторона управляет нашим дедлайном одним сообщением (И3.2, критерий 1).
+   */
+  'g_no_open_filing',
   'g_unfreeze_approvers_distinct',
 ] as const;
 
 export type DealGuardId = (typeof DEAL_GUARD_IDS)[number];
+
+/**
+ * Заявление о регистрации, поданное по этой сделке (E3-2, `ORACLE.md` §9).
+ *
+ * Не булево «заявление подано»: от источника зависит, запрещает ли оно
+ * автооткат, а от наличия выписки — закрыто ли оно. Оба ответа обязаны лежать
+ * при самом заявлении, иначе их складывает в одно вызывающий.
+ */
+export interface DealFiling {
+  readonly applicationId: string;
+  readonly source: FilingSource;
+  /**
+   * Наблюдение, которым заявление разрешено. `null` — не разрешено.
+   *
+   * **Статус карточки сюда не попадает никогда.** По `CORE.md` Ф7 статус
+   * «завершено» не значит ничего: заявление может быть закрыто отказом.
+   * Разрешает заявление только платная выписка — и **любым** своим вердиктом:
+   * после расхождения автооткат снова законен, потому что дальше держать деньги
+   * не на чем.
+   */
+  readonly resolution: ReleaseObservation | null;
+}
 
 export interface DealFacts {
   readonly trancheStatuses: readonly TrancheStatus[];
@@ -96,6 +150,45 @@ export interface DealFacts {
   readonly preparedBy: string | null;
   /** Акт получателя об условии (CORE.md Ф13). `null` — приём средств закрыт. */
   readonly conditionAct: ConditionAct | null;
+  /** Заявления по этой сделке. Пустой список — не подавали. */
+  readonly filings: readonly DealFiling[];
+  /**
+   * Кадастровый код объекта сделки. Сверяется с кодом наблюдения, разрешающего
+   * заявление: выписка по чужому объекту нашего заявления не закрывает
+   * (И3.2, крайний случай «сторона называет чужой номер»).
+   */
+  readonly objectCadastralCode: string;
+}
+
+/**
+ * Разрешено ли заявление платной выпиской.
+ *
+ * Возраст наблюдения здесь **не проверяется намеренно**, в отличие от
+ * `g_observation_sufficient` (`ORACLE.md` §6.3). Свежесть — требование к
+ * основанию для движения денег: устаревшая выписка не утверждает ничего о
+ * сегодняшних обременениях. А «заявление закрыто» — исторический факт: выписка,
+ * полученная неделю назад, не перестаёт свидетельствовать, что регистрация уже
+ * разобрана. Смешать эти два вопроса значило бы снова открывать закрытое
+ * заявление по истечении времени и откатывать сделку после регистрации.
+ */
+function resolvedByPaidExtract(filing: DealFiling, facts: DealFacts): boolean {
+  const resolution = filing.resolution;
+  if (resolution === null) {
+    return false;
+  }
+  const required = OBSERVATION_REQUIREMENTS.registration_transfer;
+  if (resolution.sourceKey !== required.sourceKey) {
+    return false;
+  }
+  if (!observationLevelAtLeast(resolution.level, required.minLevel)) {
+    return false;
+  }
+  // Пустой ожидаемый код — не «совпало с чем угодно», а отсутствие объекта, с
+  // которым сверяться: отказ закрытый, заявление остаётся открытым.
+  if (facts.objectCadastralCode.length === 0) {
+    return false;
+  }
+  return resolution.cadastralCode === facts.objectCadastralCode;
 }
 
 export interface DealContext {
@@ -120,6 +213,18 @@ const DEAL_GUARDS: Readonly<
     facts.trancheStatuses.every((status) => status === 'refunded'),
   // §3.3: сделка не закрывается, пока жив хотя бы один транш.
   g_no_live_tranche: (facts) => facts.trancheStatuses.every(isTerminalTrancheStatus),
+  /**
+   * Нет ни одного открытого заявления — CORE.md Ф9, ORACLE.md §9.
+   *
+   * Заявления, названного стороной (`party_claim`), здесь как бы нет: он не
+   * проверен, и признать его основанием для удержания денег значит отдать наш
+   * дедлайн стороне (И3.2). Подтверждённое карточкой держит откат до тех пор,
+   * пока его не разрешит платная выписка — любым вердиктом.
+   */
+  g_no_open_filing: (facts) =>
+    facts.filings.every(
+      (filing) => filing.source !== 'application_card' || resolvedByPaidExtract(filing, facts),
+    ),
   g_unfreeze_approvers_distinct: (facts, event) => {
     if (event.type !== 'unfreeze') return false;
     const approvers = new Set(event.userIds.filter((userId) => userId !== facts.preparedBy));
@@ -171,12 +276,30 @@ export const DEAL_TRANSITIONS: readonly DealTransition[] = Object.freeze([
   transition('property_pending', 'property_verified', 'ready'),
   transition('ready', 'funds_received', 'funding', ['g_condition_agreed']),
   transition('funding', 'tranches_reserved', 'funded', ['g_all_tranches_reserved']),
-  transition('funding', 'deadline_reached', 'unwinding'),
+  /**
+   * Тот же guard, что и на отсечке из `filed`, — на **обоих** автоматических
+   * входах в откат, а не на одном (§1.4, §4: guard, стоящий на одной двери,
+   * состояние не защищает). Подтверждённое заявление у сделки в `funding` — это
+   * рассогласование данных, и уж точно не повод вернуть деньги молча.
+   *
+   * `revocation_requested` guard'а не несёт: отзыв — явное волеизъявление
+   * покупателя (§1.4), а Ф9 запрещает **автоматический** откат.
+   */
+  transition('funding', 'deadline_reached', 'unwinding', ['g_no_open_filing']),
   transition('funding', 'revocation_requested', 'unwinding'),
   transition('funded', 'filing_registered', 'filed'),
   transition('filed', 'condition_established', 'settling'),
   transition('filed', 'condition_failed', 'unwinding'),
-  transition('filed', 'deadline_reached', 'unwinding'),
+  /**
+   * Автооткат по отсечке — **только если нет открытого заявления** (E3-2,
+   * `CORE.md` Ф9). Раньше это ребро не несло ни одного guard'а, и сделка, по
+   * которой заявление уже подано и принято реестром, откатывалась автоматически:
+   * деньги возвращались покупателю, а объект наутро регистрировался на него же.
+   *
+   * `condition_failed` guard'а не получает: это явный внешний факт «условие не
+   * наступило», а не течение времени, и держать деньги после него не на чем.
+   */
+  transition('filed', 'deadline_reached', 'unwinding', ['g_no_open_filing']),
   transition('settling', 'tranches_settled', 'settled', ['g_all_tranches_paid_out', 'g_no_live_tranche']),
   transition('unwinding', 'tranches_refunded', 'unwound', ['g_all_tranches_refunded', 'g_no_live_tranche']),
   ...NON_TERMINAL_DEAL_STATUSES.map((status) => transition(status, 'compliance_hold', 'frozen')),

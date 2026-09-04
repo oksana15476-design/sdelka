@@ -11,6 +11,7 @@ import {
   coverageByTranche,
   createJournalEntry,
   credit,
+  feePositions,
   debit,
   isClientObligationAccount,
   shortfallExpense,
@@ -19,17 +20,19 @@ import {
 } from '@sdelka/ledger';
 import type { ClientKey, JournalEntry } from '@sdelka/ledger';
 import { type Intent, reduceTranche } from '@sdelka/domain';
+import { money } from '@sdelka/money';
 import {
   applyTrancheEvent,
   approve,
   contextFor,
   coverageOk,
   payerOf,
+  receiveTrancheFee,
   recipientOf,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import {
   BANK_RESPONSE_SOURCE,
   BUYER,
@@ -98,28 +101,63 @@ describe('красные линии в сквозном прогоне', () => {
     world = applyTrancheEvent(world, TRANCHE, { type: 'payout_result', outcome: 'settled' }, SETTLED).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('paid_out');
 
-    // --- Комиссия признана и выведена одной записью ---
+    // --- Комиссия: две встречные записи, а не одна (`CORE.md` Ф16, И14.1) ---
+    // Начисление признаёт доход против требования платформы, расчёт это
+    // требование гасит и кладёт деньги в транзит. Формулировка красной линии
+    // при этом уточнена и в документе: «не хранится на номинальном счёте» — а
+    // не «в тот же миг лежит на операционном»; межбанк идёт день-два.
+    const accrual = world.journal.entries.find(
+      (entry) => entry.memoKey === 'ledger.entry.fee_accrued',
+    );
     const settlement = world.journal.entries.find(
       (entry) => entry.memoKey === 'ledger.entry.tranche_settled',
     );
+    expect(accrual).toBeDefined();
     expect(settlement).toBeDefined();
-    if (settlement === undefined) throw new Error('unreachable');
-    const income = settlement.postings.find(
+    if (accrual === undefined || settlement === undefined) throw new Error('unreachable');
+    const income = accrual.postings.find(
       (posting) => posting.account.kind === 'fee_income' && posting.direction === 'credit',
     );
-    const swept = settlement.postings.find(
-      (posting) => posting.account.kind === 'bank_operating' && posting.direction === 'debit',
+    const receivable = accrual.postings.find(
+      (posting) => posting.account.kind === 'fee_receivable' && posting.direction === 'debit',
     );
-    // Обе ноги — в **одной** записи. Отдельного шага вывода в приложении больше
-    // нет: `sweepFeeToOperating` удалён, а конструктор расчёта отвергает
-    // признание дохода без встречного дебета операционного счёта.
     expect(income?.amount.minor).toBe(FEE);
-    expect(swept?.amount.minor).toBe(FEE);
+    expect(receivable?.amount.minor).toBe(FEE);
+    // Расчёт гасит требование и уводит комиссию в транзит **в той же записи**:
+    // без дебета `transit:fee` она не сходится повалютно, то есть красная линия
+    // №2 держится теперь балансом, а не проверкой.
+    const closed = settlement.postings.find(
+      (posting) => posting.account.kind === 'fee_receivable' && posting.direction === 'credit',
+    );
+    const transit = settlement.postings.find(
+      (posting) => posting.account.kind === 'transit_fee' && posting.direction === 'debit',
+    );
+    expect(closed?.amount.minor).toBe(FEE);
+    expect(transit?.amount.minor).toBe(FEE);
 
     // --- Прогон, а не чтение: на номинальном счёте ровно обязательство ---
     expect(accountBalance(world.journal, bankNominal(GEL), GEL).minor).toBe(NET);
     expect(accountBalance(world.journal, clientFreeAccount(path.sellerKey), GEL).minor).toBe(NET);
+    // На операционном счёте комиссии **ещё нет**: перевод не дошёл. Три
+    // величины видны раздельно, и «удержано» не выдаётся за «получено».
+    expect(accountBalance(world.journal, bankOperating(GEL), GEL).minor).toBe(0n);
+    const positionBeforeArrival = feePositions(world.journal).find(
+      (item) => item.deal.trancheId === TRANCHE,
+    );
+    expect(positionBeforeArrival?.accrued.minor).toBe(FEE);
+    expect(positionBeforeArrival?.notWithheld.minor).toBe(0n);
+    expect(positionBeforeArrival?.withheld.minor).toBe(FEE);
+    expect(positionBeforeArrival?.received.minor).toBe(0n);
+    expect(positionBeforeArrival?.inTransit.minor).toBe(FEE);
+
+    // --- Перевод дошёл: тот же факт банковской выписки, что у списания ---
+    world = receiveTrancheFee(world, DEAL, TRANCHE, money(GEL, FEE));
     expect(accountBalance(world.journal, bankOperating(GEL), GEL).minor).toBe(FEE);
+    const positionAfterArrival = feePositions(world.journal).find(
+      (item) => item.deal.trancheId === TRANCHE,
+    );
+    expect(positionAfterArrival?.received.minor).toBe(FEE);
+    expect(positionAfterArrival?.inTransit.minor).toBe(0n);
     // Файл транша пуст с обеих сторон: ни обязательства, ни средств.
     const file = coverageByTranche(world.journal).find(
       (item) => item.deal.trancheId === TRANCHE && item.currency === GEL,

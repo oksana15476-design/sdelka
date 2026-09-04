@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { money } from '@sdelka/money';
 import {
   createPayout,
   payoutIdempotencyKey,
@@ -13,10 +14,11 @@ import {
   advance,
   dealStatusOf,
   feeForTranche,
+  receiveTrancheFee,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-} from '../src/index';
+} from '@sdelka/app';
 import { BANK_RESPONSE_SOURCE, DAY_MS, DEAL_AMOUNT, GEL, POLICY_VERSION, STATEMENT_SOURCE, bankPort, settledOutcome, unknownOutcome } from './support/fixtures';
 import { toPayingOut } from './support/paths';
 
@@ -140,11 +142,14 @@ describe('банк не ответил', () => {
     expect(trancheStatusOf(world, TRANCHE)).toBe('paid_out');
     expect(trancheOf(world, TRANCHE).payouts.at(-1)?.status).toBe('settled');
 
-    // Комиссия ушла на операционный счёт той же записью расчёта: отдельного
-    // шага вывода в приложении больше нет.
+    // Комиссия ушла с номинального счёта той же записью расчёта — **в
+    // транзит**, а не сразу на операционный: межбанк идёт день-два, и до
+    // прихода она видна отдельной величиной (`CORE.md` Ф16).
     expect(feeForTranche(world, TRANCHE, DEAL_AMOUNT).minor).toBe(300_000n);
-    expect(accountBalance(world.journal, bankOperating(GEL), GEL).minor).toBe(300_000n);
+    expect(accountBalance(world.journal, bankOperating(GEL), GEL).minor).toBe(0n);
     expect(accountBalance(world.journal, bankNominal(GEL), GEL).minor).toBe(19_700_000n);
+    world = receiveTrancheFee(world, DEAL, TRANCHE, money(GEL, 300_000n));
+    expect(accountBalance(world.journal, bankOperating(GEL), GEL).minor).toBe(300_000n);
     world = applyDealEvent(world, DEAL, { type: 'tranches_settled' }, OPTIONS);
     expect(dealStatusOf(world, DEAL)).toBe('settled');
     expect(accountBalance(world.journal, clientFreeAccount(path.sellerKey), GEL).minor).toBe(19_700_000n);
