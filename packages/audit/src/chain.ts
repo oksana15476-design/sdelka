@@ -1,3 +1,4 @@
+import { canonicalDigest } from './digest';
 import { AuditError, AuditErrorCode } from './errors';
 import { type Sha256Hex, ZERO_HASH } from './hash';
 import type { AuditInstant } from './instant';
@@ -67,6 +68,77 @@ function build(
     body: Object.freeze({ ...input.body }) as AuditBody,
   };
   return Object.freeze({ ...envelope, recordHash: recordDigest(envelope) });
+}
+
+/**
+ * Проверки, которые нельзя выразить типом, — на входе в цепочку.
+ *
+ * Здесь, а не у вызывающего: после сборки запись заморожена и её хеш посчитан,
+ * а журнал не редактируется (красная линия №11). Всё, что не отвергнуто до
+ * `build`, остаётся в цепочке навсегда — включая ложь.
+ *
+ * Виды событий безопасности и настроек встроены в ту же дверь, что и остальные:
+ * отдельного пути в цепочку у них нет, поэтому сцепка, монотонность времени и
+ * запрет сырых идентификаторов действуют на них ровно так же.
+ */
+function checkBodyInvariants(input: AuditRecordInput): void {
+  const body = input.body;
+  const scope = input.subject.scope;
+
+  if (
+    body.kind === 'session_established' ||
+    body.kind === 'session_denied' ||
+    body.kind === 'role_changed'
+  ) {
+    // Субъект события безопасности — учётная запись, и только она. Запись о
+    // входе, поданная под сделкой, сделала бы выборку по субъекту ложью, а
+    // досье по сделке — засоренным чужими событиями.
+    if (scope !== 'account') {
+      throw new AuditError(AuditErrorCode.subjectScopeMismatch, {
+        kind: body.kind,
+        scope,
+      });
+    }
+  }
+
+  if (body.kind === 'role_changed' && body.previous === body.next) {
+    // Роль не менялась. Запись о смене, в которой ничего не сменилось, —
+    // это либо ошибка вызывающего, либо попытка спрятать настоящую смену
+    // среди пустых; отличить их через год будет нечем.
+    throw new AuditError(AuditErrorCode.roleChangeIsNoop, { roleId: String(body.next) });
+  }
+
+  if (body.kind === 'setting_changed') {
+    if (scope !== 'setting') {
+      throw new AuditError(AuditErrorCode.subjectScopeMismatch, { kind: body.kind, scope });
+    }
+    if (input.subject.id !== body.setting) {
+      // Изменение настройки A, поданное под настройкой B, — не запись, а
+      // подмена: искать её будут по субъекту.
+      throw new AuditError(AuditErrorCode.settingSubjectMismatch, {
+        setting: body.setting,
+        subjectId: input.subject.id,
+      });
+    }
+    if (body.effectiveFrom < input.recordedAt) {
+      // `ROADMAP.md` И16.2: «пересчёт задним числом невозможен, а не запрещён
+      // правилом». Настройка, введённая в действие раньше собственной записи,
+      // — и есть пересчёт задним числом.
+      throw new AuditError(AuditErrorCode.settingEffectiveFromBackdated, {
+        effectiveFrom: body.effectiveFrom.toString(),
+        recordedAt: input.recordedAt.toString(),
+      });
+    }
+    if (
+      body.change === 'updated' &&
+      canonicalDigest(body.previous) === canonicalDigest(body.next)
+    ) {
+      // Сравнение по канонической форме, а не по ссылке: `{a:1,b:2}` и
+      // `{b:2,a:1}` — одно и то же значение настройки, и запись об их «смене»
+      // была бы шумом в журнале, который читают ради денежных решений.
+      throw new AuditError(AuditErrorCode.settingChangeIsNoop, { setting: body.setting });
+    }
+  }
 }
 
 /**
@@ -144,6 +216,7 @@ export function appendRecord(chain: AuditChain, input: AuditRecordInput): AuditC
       });
     }
   }
+  checkBodyInvariants(input);
   const record = build(chain.chainId, last.seq + 1, last.recordHash, input);
   return sealed(chain.chainId, [...chain.records, record]);
 }

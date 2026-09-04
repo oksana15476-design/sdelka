@@ -6,6 +6,17 @@ import {
   REF_SCOPES,
 } from '@sdelka/audit';
 import {
+  AUTH_EVENT_KINDS,
+  AUTH_REASON_KEYS,
+  CAPABILITIES,
+  CAPABILITY_SPECS,
+  FACTOR_STRENGTH,
+  PRIMARY_METHODS,
+  ROLE_IDS,
+  ROLE_SPECS,
+  SECOND_FACTOR_KINDS,
+} from '@sdelka/auth';
+import {
   BENEFICIARY_STATUSES,
   DEAL_STATUSES,
   FILING_SOURCES,
@@ -66,6 +77,15 @@ describe('перечни базы — построчное зеркало мас
     ['fingerprint_subject', FINGERPRINT_SUBJECTS],
     ['ref_scope', REF_SCOPES],
     ['account_kind_code', ACCOUNT_KINDS],
+    // packages/auth: хранилища у пакета нет, перечни есть. Значение, добавленное
+    // в роль или полномочие и не доехавшее до `0010`, — это либо запрет, который
+    // база пропускает, либо разрешение, которое она отвергает.
+    ['role_id', ROLE_IDS],
+    ['capability', CAPABILITIES],
+    ['second_factor_kind', SECOND_FACTOR_KINDS],
+    ['auth_primary_method', PRIMARY_METHODS],
+    ['auth_event_kind', AUTH_EVENT_KINDS],
+    ['auth_reason_key', Object.values(AUTH_REASON_KEYS)],
   ];
 
   for (const [name, expected] of cases) {
@@ -74,6 +94,28 @@ describe('перечни базы — построчное зеркало мас
       // виден в `ORDER BY`. Разошедшийся порядок — это тихо разошедшаяся
       // сортировка в отчёте дежурному.
       expect(enumValues(name)).toEqual([...expected]);
+    });
+  }
+
+  /**
+   * Перечни, у которых в TS нет массива, — только объединение типов. Сверяются
+   * по множеству значений, использованных картами: метка, которой не
+   * пользуется ни одна запись карты, и значение карты, которого нет в перечне,
+   * одинаково означают расхождение.
+   */
+  const derived: readonly [string, readonly string[]][] = [
+    ['role_audience', ROLE_IDS.map((role) => ROLE_SPECS[role].audience)],
+    ['capability_effect', CAPABILITIES.map((item) => CAPABILITY_SPECS[item].effect)],
+    [
+      'second_factor_requirement',
+      CAPABILITIES.map((item) => CAPABILITY_SPECS[item].secondFactor),
+    ],
+    ['factor_strength', SECOND_FACTOR_KINDS.map((kind) => FACTOR_STRENGTH[kind])],
+  ];
+
+  for (const [name, used] of derived) {
+    it(`sdelka.${name} — множество совпадает с использованным в TS`, () => {
+      expect([...enumValues(name)].sort()).toEqual([...new Set(used)].sort());
     });
   }
 

@@ -5,6 +5,7 @@ export * from './decide';
 export * from './errors';
 export * from './events';
 export * from './ids';
+export * from './journal';
 export * from './keys';
 export * from './legacy';
 export * from './roles';

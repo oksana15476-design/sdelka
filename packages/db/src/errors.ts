@@ -29,6 +29,39 @@ export const DbErrorCode = {
    * началом» неразличимы (`packages/audit/src/chain.ts`, `genesisChain`).
    */
   auditGenesisRequired: 'db.audit.genesis_required',
+  /**
+   * Учётные записи и сессии (`0010`). Ключи с префиксом `auth.` база поднимает
+   * **теми же** именами, что и `packages/auth` (`AUTH_REASON_KEYS`): правило
+   * одно, значит и сообщение дежурному одно. Здесь только то, чему в коде имени
+   * нет и быть не могло, — запреты, невыразимые над значением.
+   */
+  /** Журнал доступа, подтверждения, привязки и гранты только дополняются. */
+  authAppendOnly: 'db.auth.append_only',
+  /**
+   * Попытка изменить у сессии что-либо, кроме отметки активности и отзыва.
+   * Абсолютный срок продлению не подлежит: продлеваемый абсолютный срок — не
+   * срок (`auth/src/session.ts`).
+   */
+  authSessionImmutable: 'db.auth.session_immutable',
+  /** Отозванная сессия не оживает: после отзыва строка не меняется вовсе. */
+  authSessionRevived: 'db.auth.session_revived',
+  /** Отметка активности сдвинута назад — так воскрешают сессию, стоявшую в простое. */
+  authLastSeenRegression: 'db.auth.last_seen_regression',
+  /** Роль в сессии не совпала с ролью учётной записи. Переключателя ролей нет. */
+  authAccountRoleMismatch: 'db.auth.account_role_mismatch',
+  /**
+   * Человек в сессии не совпал с человеком за учётной записью. Разделение
+   * обязанностей сравнивает пару «запись и человек» (`auth/src/ids.ts`);
+   * подменённая половина проходит любую проверку.
+   */
+  authAccountPersonMismatch: 'db.auth.account_person_mismatch',
+  /**
+   * Смена роли при действующей сессии. Смена роли отзывает сессии **всегда**
+   * (`RoleChangeOutcome`), иначе снятое полномочие живёт до истечения сессии.
+   */
+  authRoleChangeWithLiveSession: 'db.auth.role_change_with_live_session',
+  /** Грант выписан раньше, чем открылась сессия, на которую ссылается. */
+  authGrantBeforeSession: 'db.auth.grant_before_session',
   /** Роль приложения не владеет объектами схемы и не является суперпользователем. */
   roleNotSeparated: 'db.role.not_separated',
   /** Роли схемы не заведены: см. `scripts/dev-db.sh`. */

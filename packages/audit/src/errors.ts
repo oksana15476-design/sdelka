@@ -23,6 +23,23 @@ export const AuditErrorCode = {
   rawSourceByteLengthInvalid: 'audit.raw_source.byte_length_invalid',
   /** Предъявленные байты не сходятся с записанной ссылкой: длиной или отпечатком. */
   rawSourceNotAttested: 'audit.raw_source.not_attested',
+  /**
+   * Субъект записи не той природы, что её вид: вход, отказ во входе и смена
+   * роли — про учётную запись, изменение настройки — про настройку. Запись о
+   * входе, поданная под сделкой, сделала бы выборку по субъекту ложью.
+   */
+  subjectScopeMismatch: 'audit.record.subject_scope_mismatch',
+  /** Ключ настройки в теле и в субъекте записи разошлись. */
+  settingSubjectMismatch: 'audit.setting.subject_mismatch',
+  /**
+   * Настройка вводится в действие раньше, чем записана. `ROADMAP.md` И16.2:
+   * пересчёт задним числом невозможен, а не запрещён правилом.
+   */
+  settingEffectiveFromBackdated: 'audit.setting.effective_from_backdated',
+  /** Прежнее и новое значение настройки совпали: смены не было. */
+  settingChangeIsNoop: 'audit.setting.change_is_noop',
+  /** Прежняя и новая роль совпали: смены не было. */
+  roleChangeIsNoop: 'audit.role_change.is_noop',
 } as const;
 
 export type AuditErrorCode = (typeof AuditErrorCode)[keyof typeof AuditErrorCode];

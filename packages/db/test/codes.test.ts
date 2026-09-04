@@ -1,4 +1,5 @@
 import { AuditErrorCode } from '@sdelka/audit';
+import { AUTH_REASON_KEYS } from '@sdelka/auth';
 import { InvariantCode, LedgerErrorCode } from '@sdelka/ledger';
 import { describe, expect, it } from 'vitest';
 import { DbErrorCode } from '../src/errors.ts';
@@ -15,6 +16,10 @@ const KNOWN = new Set<string>([
   ...Object.values(LedgerErrorCode),
   ...Object.values(InvariantCode),
   ...Object.values(AuditErrorCode),
+  // Правило, у которого имя в коде уже есть, база поднимает **тем же** именем:
+  // отказ «сессия отозвана» читается одинаково независимо от того, поймал его
+  // `decideCapability` или триггер вставки гранта.
+  ...Object.values(AUTH_REASON_KEYS),
   ...Object.values(DbErrorCode),
 ]);
 

@@ -161,8 +161,12 @@ export interface DealEconomics {
  * Естественная сторона счёта. Дохода — кредит, актива и расхода — дебет.
  * Считается из типа счёта, а не из перечня имён: счёт, заведённый мимо перечня,
  * иначе тихо считался бы с обратным знаком.
+ *
+ * Экспортируется ради сводки за период (`owner-period.ts`): второй способ
+ * читать знак проводки — это вторая модель проводок, а расхождение двух моделей
+ * в этом проекте уже случалось (см. `clientFileGains` в `packages/ledger`).
  */
-function signedMinor(posting: Posting): bigint {
+export function naturalMinor(posting: Posting): bigint {
   const type = accountType(posting.account);
   const natural = type === 'asset' || type === 'expense' ? 'debit' : 'credit';
   return posting.direction === natural ? posting.amount.minor : -posting.amount.minor;
@@ -273,13 +277,13 @@ export function dealEconomics(
         // что журнал сделки построен по ней.
         if (kind !== 'fx_income' && !belongsTo(posting, deal)) continue;
         const bucket = bucketOf(buckets, currency);
-        bucket.revenue.set(kind, (bucket.revenue.get(kind) ?? 0n) + signedMinor(posting));
+        bucket.revenue.set(kind, (bucket.revenue.get(kind) ?? 0n) + naturalMinor(posting));
         continue;
       }
       if (isExpenseKind(kind)) {
         if (!belongsTo(posting, deal)) continue;
         const bucket = bucketOf(buckets, currency);
-        bucket.expenses.set(kind, (bucket.expenses.get(kind) ?? 0n) + signedMinor(posting));
+        bucket.expenses.set(kind, (bucket.expenses.get(kind) ?? 0n) + naturalMinor(posting));
         continue;
       }
       // Оборот сделки — сумма, списанная с запертой части при расчёте: именно

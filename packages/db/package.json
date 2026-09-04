@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@sdelka/audit": "workspace:*",
+    "@sdelka/auth": "workspace:*",
     "@sdelka/domain": "workspace:*",
     "@sdelka/ledger": "workspace:*",
     "@sdelka/money": "workspace:*",

@@ -75,6 +75,19 @@ importers:
 
   packages/audit: {}
 
+  packages/auth:
+    dependencies:
+      '@sdelka/compliance':
+        specifier: workspace:*
+        version: link:../compliance
+      '@sdelka/domain':
+        specifier: workspace:*
+        version: link:../domain
+    devDependencies:
+      '@sdelka/audit':
+        specifier: workspace:*
+        version: link:../audit
+
   packages/compliance:
     dependencies:
       '@sdelka/domain':
@@ -89,6 +102,9 @@ importers:
       '@sdelka/audit':
         specifier: workspace:*
         version: link:../audit
+      '@sdelka/auth':
+        specifier: workspace:*
+        version: link:../auth
       '@sdelka/domain':
         specifier: workspace:*
         version: link:../domain

@@ -3,7 +3,14 @@ import { type Sha256Hex, canonicalDigest } from './digest';
 import type { AuditInstant } from './instant';
 import type { Anchor, TimestampToken } from './ports';
 import type { RawSourceRef } from './raw-source';
-import type { AuditAmount, AuditAttributes, AuditFingerprint, AuditRef } from './values';
+import type {
+  AuditAmount,
+  AuditAttributes,
+  AuditFingerprint,
+  AuditRef,
+  AuditSettingValue,
+  AuditToken,
+} from './values';
 
 /* ------------------------------------------------------------------------- */
 /* Версия политики                                                           */
@@ -88,6 +95,22 @@ export const AUDIT_RECORD_KINDS = [
   'correction',
   'timestamp_token',
   'anchor_published',
+  /**
+   * События безопасности и изменения настроек. Дописаны **в конец**: порядок
+   * меток зеркалится в `sdelka.audit_record_kind`, а `ALTER TYPE ... ADD VALUE`
+   * умеет только дописывать в конец (см. `application_card` в `raw-source.ts`).
+   *
+   * До них двенадцать видов описывали деньги, решения и просмотр персональных
+   * данных: вход, отказ во входе, смена роли и изменение настройки не
+   * описывались ни одним, и `packages/auth` порождал события, которым было
+   * некуда лечь (`auth/src/events.ts`). Класть их под `decision_made` нельзя —
+   * у того тела обязательны версия политики и непустой пакет доказательств, и
+   * подставлять их ради формы значит врать журналу.
+   */
+  'session_established',
+  'session_denied',
+  'role_changed',
+  'setting_changed',
 ] as const;
 export type AuditRecordKind = (typeof AUDIT_RECORD_KINDS)[number];
 
@@ -232,6 +255,170 @@ export interface AnchorPublishedBody {
   readonly anchor: Anchor;
 }
 
+/* ------------------------------------------------------------------------- */
+/* События безопасности                                                      */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Способ первичного подтверждения входа и вид второго фактора.
+ *
+ * Дубль `PRIMARY_METHODS` и `SECOND_FACTOR_KINDS` из
+ * `auth/src/second-factor.ts` — вынужденный по той же причине, что и
+ * `AUDIT_ROLES`: пакет аудита не зависит ни от кого, журнал обязан пережить
+ * переделку аутентификации. Молчаливым расхождение не является: сверку ведёт
+ * `auth/test/journal.test.ts` — тот пакет видит оба перечня.
+ *
+ * Значение в журнале осмысленно и через год: `magic_link` у консольной роли —
+ * это `ACTORS.md` §11 Р6 B, то есть попытка войти по компрометируемому каналу,
+ * а `sms` вторым фактором — подменяемая SIM.
+ */
+export const AUDIT_PRIMARY_METHODS = ['passkey', 'password', 'federated', 'magic_link'] as const;
+export type AuditPrimaryMethod = (typeof AUDIT_PRIMARY_METHODS)[number];
+
+export const AUDIT_SECOND_FACTOR_KINDS = ['webauthn', 'totp', 'push', 'sms', 'email'] as const;
+export type AuditSecondFactorKind = (typeof AUDIT_SECOND_FACTOR_KINDS)[number];
+
+/**
+ * Отпечатки устройства и сети — **обязательные поля, а не необязательные**.
+ *
+ * Дословно перенесённое требование `auth/src/events.ts`: умолчание `null`
+ * означало «отпечатка нет», и получалось оно молчанием — ровно в записи, ради
+ * которой журнал входов и ведётся (`ACTORS.md` §4.1 A2: подбор пароля, вход из
+ * чужой сети). `null` остаётся законным ответом, но его надо написать. Журнал
+ * не редактируется, дописать поле потом нельзя.
+ *
+ * Сырых значений тут нет и быть не может: только `AuditFingerprint`
+ * (`FINGERPRINT_SUBJECTS`: `device`, `network_address`).
+ */
+export interface AuditOrigin {
+  readonly device: AuditFingerprint | null;
+  readonly network: AuditFingerprint | null;
+}
+
+/** Вход. Субъект записи — учётная запись (`ref_scope` `account`), см. `chain.ts`. */
+export interface SessionEstablishedBody extends AuditOrigin {
+  readonly kind: 'session_established';
+  readonly sessionId: AuditToken;
+  readonly primaryMethod: AuditPrimaryMethod;
+  /** `null` — второй фактор при входе не требовался политикой кабинета. */
+  readonly secondFactor: AuditSecondFactorKind | null;
+  readonly expiresAt: AuditInstant;
+}
+
+/**
+ * Отказ во входе.
+ *
+ * Идентификатора сессии здесь нет и не появится: сессии не возникло. Причина —
+ * ключ (`AUTH_REASON_KEYS`), а не текст: `CLAUDE.md`, ни одной строки
+ * пользовательского текста в коде.
+ */
+export interface SessionDeniedBody extends AuditOrigin {
+  readonly kind: 'session_denied';
+  readonly primaryMethod: AuditPrimaryMethod;
+  readonly reasonKey: string;
+}
+
+/**
+ * Чьим распоряжением сменилась роль.
+ *
+ * Два варианта, и оба обязаны быть названы. `auth/src/events.ts` допускает
+ * `orderedBy: null` — «распоряжение вне системы»; в журнале это не может быть
+ * пустым полем: смена роли без указания, кто её распорядился, и есть тихая
+ * раздача доступа. Поэтому распоряжение извне выражено **ссылкой на документ**:
+ * приказ, служебная записка, решение владельца — тот самый сырой ответ, без
+ * которого «разобранные поля суд не убедят» (`CORE.md` Ф11).
+ */
+export type RoleChangeOrder =
+  | { readonly kind: 'ordered_by'; readonly actor: AuditActor }
+  | { readonly kind: 'external_order'; readonly document: RawSourceRef };
+
+/**
+ * Смена роли учётной записи.
+ *
+ * Одной записью, а не парой «снял — назначил»: пара оставляла момент, в который
+ * прежней роли уже нет, а новой ещё нет, и восстановление состояния по журналу
+ * зависело от порядка чтения. Здесь прежнее и новое значение стоят рядом, и
+ * запись читается сама по себе.
+ *
+ * Ветви разделены типом: первичное назначение (`previous: null`) и смена или
+ * снятие (`previous` — роль). Пары `null → null` не существует, и собрать её
+ * нельзя. Совпадение `previous` и `next` отвергается при добавлении в цепочку
+ * (`chain.ts`): запись о смене, в которой ничего не сменилось, — ложь.
+ *
+ * ⚠ Роль здесь — `AuditRoleId`, восемь значений. Перечень `auth` шире
+ * (двенадцать плюс два нечеловеческих актора), и `financial_controller` с
+ * `head_of_operations` оба отображаются в `approver`, а `principal`, `auditor`,
+ * `client_counsel`, `compliance_officer` и `oracle_operator` не отображаются
+ * никуда. Это известное расхождение `ACTORS.md` §13 (миграция
+ * `sdelka.audit_role`), а не свойство этой записи; сверка — в
+ * `auth/src/journal.ts` и `auth/test/journal.test.ts`.
+ */
+export type RoleChangedBody =
+  | {
+      readonly kind: 'role_changed';
+      /** Первичное назначение: прежней роли не было. */
+      readonly previous: null;
+      readonly next: AuditRoleId;
+      readonly order: RoleChangeOrder;
+      readonly reasonKey: string;
+    }
+  | {
+      readonly kind: 'role_changed';
+      readonly previous: AuditRoleId;
+      /** `null` — роль снята без замены: доступа у записи больше нет. */
+      readonly next: AuditRoleId | null;
+      readonly order: RoleChangeOrder;
+      readonly reasonKey: string;
+    };
+
+/**
+ * Изменение управляемой настройки: тариф, наценка к курсу, перечень валют,
+ * пороги (`BACKLOG.md` E16-4…E16-7, E16-11, E16-12; `FX.md` §7.1).
+ *
+ * `BACKLOG.md`: «настройка, которую можно поменять без следа и задним числом, —
+ * это не настройка, а способ переписать историю денег». Отсюда состав полей, и
+ * каждое из них обязательно типом:
+ *
+ * - **что изменено** — `setting`, ключ настройки (не текст);
+ * - **прежнее значение** — `previous`, и `null` в нём невыразим (см.
+ *   `AuditSettingValue`); отсутствие прежнего значения — отдельная ветвь
+ *   `introduced`;
+ * - **новое значение** — `next`;
+ * - **кто** — `orderedBy`, распорядившийся. Актор конверта отвечает на другой
+ *   вопрос: кто внёс. Совпадение допустимо, но названо, а не подразумевается;
+ * - **на каком основании** — `reasonKey` и `policy`: ключ причины и редакция
+ *   настройки, которую это изменение вводит (`fx/2026-09-04.1` — формат
+ *   `PolicyRef` совпадает с `FxMarkupPolicy.version` из `FX.md` §7.1);
+ * - **с какого момента действует** — `effectiveFrom`. Момент раньше момента
+ *   записи отвергается при добавлении в цепочку (`chain.ts`): «пересчёт задним
+ *   числом невозможен, а не запрещён правилом» (`ROADMAP.md` И16.2).
+ */
+export type SettingChangedBody =
+  | {
+      readonly kind: 'setting_changed';
+      /** Настройка вводится впервые: прежнего значения нет и подставить его нечем. */
+      readonly change: 'introduced';
+      /** `never` закрывает лазейку союза: у этой ветви поля нет вовсе. */
+      readonly previous?: never;
+      readonly setting: AuditToken;
+      readonly next: AuditSettingValue;
+      readonly orderedBy: AuditActor;
+      readonly reasonKey: string;
+      readonly policy: PolicyRef;
+      readonly effectiveFrom: AuditInstant;
+    }
+  | {
+      readonly kind: 'setting_changed';
+      readonly change: 'updated';
+      readonly previous: AuditSettingValue;
+      readonly setting: AuditToken;
+      readonly next: AuditSettingValue;
+      readonly orderedBy: AuditActor;
+      readonly reasonKey: string;
+      readonly policy: PolicyRef;
+      readonly effectiveFrom: AuditInstant;
+    };
+
 export type AuditBody =
   | ChainOpenedBody
   | DecisionMadeBody
@@ -244,7 +431,11 @@ export type AuditBody =
   | PersonalDataViewedBody
   | CorrectionBody
   | TimestampTokenBody
-  | AnchorPublishedBody;
+  | AnchorPublishedBody
+  | SessionEstablishedBody
+  | SessionDeniedBody
+  | RoleChangedBody
+  | SettingChangedBody;
 
 /* ------------------------------------------------------------------------- */
 /* Запись                                                                    */

@@ -295,4 +295,81 @@ suite.run(suite.title, () => {
       );
     });
   });
+  it('виды записей о безопасности принимаются журналом (0011)', async () => {
+    if (pool === null) return;
+    await withRollback(pool, async (client) => {
+      // Запросом, а не построителем пакета: проверяется **перечень в базе** и
+      // ограничение `0007`, а не сборка тела. Хеши здесь произвольные: их
+      // значение база не пересчитывает и не обязана (`0007`, «чего база не
+      // делает»), а сцепку и нумерацию проверяет — поэтому цепочка настоящая.
+      const zero = '0'.repeat(64);
+      const genesisHash = 'a'.repeat(64);
+      await client.query(INSERT, [
+        'chain-sec', 0, 'chain-sec:0', 1, zero, genesisHash,
+        String(Date.UTC(2026, 8, 4, 9, 0, 0)),
+        'acc-op', 'operator', null, 'chain', 'chain-sec', '[]', 'chain_opened',
+        JSON.stringify({ kind: 'chain_opened' }),
+      ]);
+
+      // Вход, отказ во входе, смена роли и изменение настройки — четыре новых
+      // вида; `account` и `setting` — два новых субъекта.
+      const cases: readonly [string, string, string][] = [
+        ['session_established', 'account', 'acc-op'],
+        ['session_denied', 'account', 'acc-op'],
+        ['role_changed', 'account', 'acc-op'],
+        ['setting_changed', 'setting', 'fee.tier.1'],
+      ];
+      let seq = 0;
+      let previous = genesisHash;
+      for (const [kind, scope, subject] of cases) {
+        seq += 1;
+        const hash = String(seq).repeat(64).slice(0, 64).replace(/[^0-9a-f]/gu, '0');
+        await client.query(INSERT, [
+          'chain-sec', seq, `chain-sec:${seq}`, 1, previous, hash,
+          String(Date.UTC(2026, 8, 4, 9, seq, 0)),
+          'acc-op', 'operator', null, scope, subject, '[]', kind,
+          JSON.stringify({ kind }),
+        ]);
+        previous = hash;
+      }
+
+      const rows = await client.query<{ kind: string }>(
+        `SELECT kind FROM sdelka.audit_record WHERE chain_id = 'chain-sec' ORDER BY seq`,
+      );
+      expect(rows.rows.map((row) => row.kind)).toEqual([
+        'chain_opened',
+        ...cases.map(([kind]) => kind),
+      ]);
+    });
+  });
+
+  it('вид записи о безопасности обязан совпасть с телом', async () => {
+    if (pool === null) return;
+    await withRollback(pool, async (client) => {
+      // `audit_record_kind_matches_body` из `0007` вида не разбирает и поэтому
+      // работает и для новых: колонка и тело обязаны говорить одно и то же —
+      // иначе выборка по виду становится ложью, а хеш считается по телу.
+      const zero = '0'.repeat(64);
+      await client.query(INSERT, [
+        'chain-sec2', 0, 'chain-sec2:0', 1, zero, 'a'.repeat(64),
+        String(Date.UTC(2026, 8, 4, 9, 0, 0)),
+        'acc-op', 'operator', null, 'chain', 'chain-sec2', '[]', 'chain_opened',
+        JSON.stringify({ kind: 'chain_opened' }),
+      ]);
+      let failed = false;
+      try {
+        await client.query(INSERT, [
+          'chain-sec2', 1, 'chain-sec2:1', 1, 'a'.repeat(64), 'b'.repeat(64),
+          String(Date.UTC(2026, 8, 4, 9, 1, 0)),
+          'acc-op', 'operator', null, 'account', 'acc-op', '[]', 'session_denied',
+          JSON.stringify({ kind: 'session_established' }),
+        ]);
+      } catch (error) {
+        failed = true;
+        expect(sqlState(error)).toBe('23514');
+        expect(String(error)).toContain('audit_record_kind_matches_body');
+      }
+      expect(failed, 'вид записи разошёлся с телом').toBe(true);
+    });
+  });
 });
