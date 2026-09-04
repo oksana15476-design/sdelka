@@ -39,12 +39,34 @@ export const AUTH_REASON_KEYS = {
   sodCauserCannotLift: 'auth.sod.causer_cannot_lift',
   sodEconomicsExcludesMoney: 'auth.sod.economics_excludes_money',
   sodSelfApproval: 'auth.sod.self_approval',
+  /**
+   * Факт, по которому проверяется несовместимость, вызывающему неизвестен.
+   *
+   * Не то же самое, что «никто»: «никто» — это утверждение, за которое отвечает
+   * вызывающий, а «неизвестно» — признание, что проверить нечем. Проверка, для
+   * которой нет факта, не считается пройденной, поэтому это отказ.
+   */
+  sodContextUnknown: 'auth.sod.context_unknown',
 
   /* --- Кворум утверждений --- */
   quorumLevelOneMissing: 'auth.quorum.level_one_missing',
   quorumLevelTwoMissing: 'auth.quorum.level_two_missing',
   quorumApproversNotDistinct: 'auth.quorum.approvers_not_distinct',
   quorumTierNotOffered: 'auth.quorum.tier_not_offered',
+  /** Ступень требует не 1 и не 2 подписи. Ноль сюда попадает первым. */
+  quorumRequirementInvalid: 'auth.quorum.requirement_invalid',
+  /** Кто готовил операцию — неизвестно. Н1 проверить нечем, кворум не берётся. */
+  quorumPreparerUnknown: 'auth.quorum.preparer_unknown',
+
+  /* --- Доказательство полномочия --- */
+  /** Грант выписан слишком давно (или позже момента применения). */
+  authorityStale: 'auth.authority.stale',
+
+  /* --- Управление доступом --- */
+  /** Действующая роль учётной записи вызывающему неизвестна. */
+  accessCurrentRoleUnknown: 'auth.access.current_role_unknown',
+  /** Переданное назначение относится к другой учётной записи или к другому человеку. */
+  accessCurrentRoleMismatch: 'auth.access.current_role_mismatch',
 
   /* --- Реквизиты выплаты --- */
   beneficiaryValueDisclosedToNoRole: 'auth.beneficiary.value_disclosed_to_no_role',

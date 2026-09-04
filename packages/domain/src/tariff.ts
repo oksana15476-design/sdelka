@@ -1,12 +1,11 @@
 import {
-  type CurrencyCode,
-  type Money,
-  type Rational,
-  applyRational,
-  compareRational,
-  money,
-  rational,
-} from '@sdelka/money';
+  DEFAULT_FEE_CEILING,
+  type FeeCeiling,
+  feeCeiling,
+  feeCeilingCap,
+  feeWithinCeiling,
+} from '@sdelka/ledger';
+import type { CurrencyCode, Money, Rational } from '@sdelka/money';
 import { DomainError, RejectionCode } from './result';
 
 /**
@@ -25,10 +24,27 @@ import { DomainError, RejectionCode } from './result';
  * промах по клавише, после которого продавец получает половину суммы сделки, а
  * запись расчёта выглядит безупречно.
  *
- * Правило живёт в домене, а не в учёте, по той же причине, по которой здесь
- * живут пороги утверждения: «сколько законно удержать» — это норма о деньгах
- * клиента, а не арифметика проводки. Учёт не может её знать: ему приходит
- * готовая сумма, и любая сходится.
+ * **[исправляет предыдущее] Само правило переехало в учёт.** Прежняя редакция
+ * этого файла объясняла, почему предел обязан жить здесь, а не в учёте: «учёт
+ * не может её знать: ему приходит готовая сумма, и любая сходится». Ровно
+ * поэтому предел и не запрещал ничего. Единственный путь, которым комиссия
+ * удерживается, — запись расчёта (`settleTrancheToClientAccount`), и в ней учёт
+ * видит **обе** величины сразу: брутто уходит с запертой части плательщика,
+ * нетто приходит в свободную часть получателя, разница между ними и есть
+ * удержание. Ни `accrueFee`, ни `settleTrancheToClientAccount`, ни проекция
+ * расчёта в `packages/app` этот модуль не звали — и удержание 99 % собиралось.
+ *
+ * Теперь запрет стоит в `@sdelka/ledger` (`fee-ceiling.ts` и
+ * `assertSettlementCeiling`), где его нечем обойти: он считается из самих
+ * проводок, а не из величины, которую принесёт вызывающий. Здесь осталась
+ * норма — «сколько законно удержать по политике этого транша» — и она по-прежнему
+ * домен: пороги утверждения, политика наблюдения и потолок удержания лежат
+ * рядом, потому что все три суть решения о деньгах клиента, хранимые вместе с
+ * версией политики на момент принятия (`CORE.md` Ф11).
+ *
+ * Величина одна на оба пакета: домен ссылается на значение учёта, а не заводит
+ * своё. Две правды об одном пределе разошлись бы молча — как уже расходились
+ * две модели проводок.
  */
 
 /**
@@ -36,20 +52,12 @@ import { DomainError, RejectionCode } from './result';
  * решение обязано хранить версию политики, действовавшую в момент принятия, а
  * константу модуля в запись решения не положишь. Та же форма, что у
  * `ApprovalPolicy` и `ObservationPolicy`.
+ *
+ * Структурно это `FeeCeiling` учёта: политика транша обязана доезжать до записи
+ * расчёта без перевода из одного типа в другой, иначе перевод станет местом,
+ * где предел теряется.
  */
-export interface FeeCeilingPolicy {
-  /**
-   * Предельная доля суммы к распределению, которую можно удержать **всего** —
-   * комиссия платформы, вознаграждение партнёра и что бы ни добавилось потом.
-   *
-   * Именно всего, а не по строке: три удержания по одной пятой каждое — это
-   * три законных строки и три пятых суммы клиента. Потолок, стоящий на строке,
-   * обходится добавлением строки.
-   *
-   * Рациональное число, а не число с плавающей точкой: красная линия №4.
-   */
-  readonly maxShare: Rational;
-}
+export type FeeCeilingPolicy = FeeCeiling;
 
 /**
  * Рабочее умолчание — **два процента**, и это не норма.
@@ -70,23 +78,28 @@ export interface FeeCeilingPolicy {
  * потолок останавливает деньги, слишком широкий их выпускает. Отказ здесь
  * закрытый, поэтому ошибка в строгую сторону стоит задачи оператору, а ошибка
  * в мягкую — доли суммы клиента.
+ *
+ * ⚠ **Это же значение — жёсткий предел учёта** (`DEFAULT_FEE_CEILING`).
+ * Политика транша может его только **сузить**: расчёт с потолком выше этого не
+ * соберётся, даже если политику выставили шире. Поднять предел — отдельное
+ * решение владельца и отдельная правка учёта, а не следствие настройки.
  */
-export const DEFAULT_FEE_CEILING_POLICY: FeeCeilingPolicy = Object.freeze({
-  maxShare: rational(2n, 100n),
-});
+export const DEFAULT_FEE_CEILING_POLICY: FeeCeilingPolicy = DEFAULT_FEE_CEILING;
 
-/** Потолок ставки как величина: доля не бывает отрицательной и не бывает больше единицы. */
+/**
+ * Потолок ставки как величина: доля не бывает отрицательной и не бывает больше
+ * единицы. Отказ на конструкторе, а не при применении.
+ *
+ * Проверяет учёт (там же, где предел и применяется), а отвечает домен своей
+ * ошибкой: для вызывающего в домене негодная политика — это `DomainError` с
+ * кодом отказа, а не ошибка чужого пакета.
+ */
 export function feeCeilingPolicy(maxShare: Rational): FeeCeilingPolicy {
-  if (compareRational(maxShare, rational(0n, 1n)) < 0) {
-    throw new DomainError(RejectionCode.feeCeilingInvalid, 'negative');
+  try {
+    return feeCeiling(maxShare);
+  } catch {
+    throw new DomainError(RejectionCode.feeCeilingInvalid, 'out_of_range');
   }
-  // Доля больше единицы — не «очень щедрый потолок», а величина, которой не
-  // существует: удержать больше суммы нельзя ни при какой ставке, и потолок,
-  // разрешающий это, не потолок. Отказ на конструкторе, а не при применении.
-  if (compareRational(maxShare, rational(1n, 1n)) > 0) {
-    throw new DomainError(RejectionCode.feeCeilingInvalid, 'above_one');
-  }
-  return Object.freeze({ maxShare });
 }
 
 /**
@@ -103,7 +116,7 @@ export function maxWithholding<C extends CurrencyCode>(
   if (gross.minor < 0n) {
     throw new DomainError(RejectionCode.feeCeilingInvalid, 'negative_gross');
   }
-  return money(gross.currency, applyRational(gross.minor, policy.maxShare, 'trunc'));
+  return feeCeilingCap(gross, policy);
 }
 
 /**
@@ -118,13 +131,7 @@ export function withholdingWithinCeiling(
   withheld: Money<CurrencyCode>,
   policy: FeeCeilingPolicy = DEFAULT_FEE_CEILING_POLICY,
 ): boolean {
-  if (gross.currency !== withheld.currency) {
-    return false;
-  }
-  if (withheld.minor < 0n) {
-    return false;
-  }
-  return withheld.minor <= maxWithholding(gross, policy).minor;
+  return feeWithinCeiling(gross, withheld, policy);
 }
 
 /**
@@ -135,6 +142,11 @@ export function withholdingWithinCeiling(
  * автомата, а настройкой тарифа, то есть это ошибка того, кто её выставил.
  * Отказ автомата разбирает оператор, а здесь разбирать нечего — величина
  * неверна сама по себе.
+ *
+ * ⚠ Эта функция — **не** тот контур, на котором держится правило: её зовёт
+ * тот, кто помнит о ней. Контур, который обойти нельзя, стоит в записи расчёта
+ * (`@sdelka/ledger`, `entryFeeExceedsCeiling`). Здесь — ранний и внятный отказ
+ * до того, как собирать проводки.
  */
 export function assertWithholdingWithinCeiling(
   gross: Money<CurrencyCode>,

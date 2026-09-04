@@ -380,10 +380,18 @@ export function roleHasCapability(roleId: RoleId, capability: Capability): boole
 /**
  * Полномочия роли с учётом дежурства. Дежурство **добавляет** три сужающих и не
  * убирает ничего: базовая роль и её запреты остаются в силе (§7.1 п.2).
+ *
+ * Флаг дежурства сам по себе полномочий не даёт: он даёт их только роли, которая
+ * дежурит (§7.1 — режим поверх ОП, ФК и РО, и больше ни поверх чего). Проверка
+ * стояла только на выдаче сессии (`establishSession`), а решение читало флаг из
+ * готовой сессии — то есть сессия, поднятая из хранилища с `onDuty: true` на
+ * комплаенс-аналитике, получала стоп-кран без единой ошибки. Второй рубеж здесь
+ * по той же причине, что и рантайм-проверка полномочия: типы не переживают
+ * границу процесса.
  */
 export function effectiveCapabilities(roleId: RoleId, onDuty: boolean): readonly Capability[] {
   const base = ROLE_CAPABILITIES[roleId];
-  if (!onDuty) return base;
+  if (!onDuty || !ROLE_SPECS[roleId].dutyEligible) return base;
   const merged = new Set<Capability>(base);
   for (const capability of DUTY_CAPABILITIES) merged.add(capability);
   return Object.freeze([...merged]);

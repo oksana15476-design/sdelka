@@ -2,8 +2,8 @@ import type { Capability } from './capabilities';
 import { CAPABILITY_SPECS } from './capabilities';
 import { assertExhausted } from './errors';
 import { type AuthReasonKey, AUTH_REASON_KEYS } from './keys';
-import type { ActorRef } from './ids';
-import { includesActor } from './ids';
+import type { ActorFact, ActorRef } from './ids';
+import { UNKNOWN_FACT, includesActor } from './ids';
 import { APPROVAL_LEVELS } from './approval';
 import { type RoleId, roleHasCapability } from './roles';
 
@@ -135,31 +135,69 @@ const N6: readonly SodRuleId[] = Object.freeze(['n6_economics_not_money']);
  * Факты о том, кто что уже делал. Пакет их не добывает — они приходят из
  * журнала и из состояния сделки, ровно как факты guard'ов в `packages/domain`.
  *
- * Пустой перечень значит «никто», а не «неизвестно». Разница существенная:
- * если вызывающий не знает, кто готовил операцию, он обязан не вызвать решение,
- * а не подставить пустоту — иначе Н1 отключается молчанием.
+ * **Все четыре поля обязательны, и у каждого три ответа, а не два.** Пустой
+ * перечень значит «никто» — это утверждение вызывающего, за которое он отвечает;
+ * `UNKNOWN_FACT` значит «не выяснял» — и тогда несовместимость, которой нужен
+ * этот факт, не считается пройденной, а даёт нарушение с ключом
+ * `sodContextUnknown`.
+ *
+ * Прежняя редакция просила того же прозой («вызывающий обязан не вызвать решение,
+ * а не подставить пустоту») и не давала это выразить: у пустоты и незнания была
+ * одна форма записи. Проза не ломается при правке кода — тип ломается.
  */
 export interface ActionContext {
   /** Кто готовил операцию, по которой запрашивается утверждение. Н1. */
-  readonly preparedBy: readonly ActorRef[];
+  readonly preparedBy: ActorFact;
   /** Кто вносил наблюдение оракула по этой сделке. Н2. */
-  readonly observedBy: readonly ActorRef[];
+  readonly observedBy: ActorFact;
   /** Кто запрашивал или вводил изменение реквизитов. Н4. */
-  readonly beneficiaryChangeRequestedBy: readonly ActorRef[];
+  readonly beneficiaryChangeRequestedBy: ActorFact;
   /** Чьё действие вызвало расхождение или остановку. Н5. */
-  readonly causedBy: readonly ActorRef[];
+  readonly causedBy: ActorFact;
 }
 
-export const EMPTY_CONTEXT: ActionContext = Object.freeze({
-  preparedBy: Object.freeze([]),
-  observedBy: Object.freeze([]),
-  beneficiaryChangeRequestedBy: Object.freeze([]),
-  causedBy: Object.freeze([]),
+/**
+ * Контекст, в котором не известно ничего.
+ *
+ * Он **не** «пустой»: полномочие, связанное хоть одной несовместимостью на
+ * фактах, с ним не выдаётся. Годится ровно там, где фактов и не требуется, —
+ * чтение сделки, стоп-кран, — и именно поэтому им нельзя молча закрыть
+ * утверждение выплаты. Прежний `EMPTY_CONTEXT` делал ровно это: четыре пустых
+ * перечня отключали Н1, Н2, Н4 и Н5 разом и без следа.
+ */
+export const UNKNOWN_CONTEXT: ActionContext = Object.freeze({
+  preparedBy: UNKNOWN_FACT,
+  observedBy: UNKNOWN_FACT,
+  beneficiaryChangeRequestedBy: UNKNOWN_FACT,
+  causedBy: UNKNOWN_FACT,
 });
 
 export interface SodViolation {
   readonly rule: SodRuleId;
   readonly reason: AuthReasonKey;
+}
+
+/**
+ * Проверка одной несовместимости, стоящей на факте.
+ *
+ * Три исхода, а не два: лицо в перечне — нарушение с причиной правила; лица нет —
+ * чисто; факт неизвестен — нарушение с причиной «проверить нечем». Третий исход
+ * и есть вся правка: раньше он был неотличим от второго.
+ */
+function checkActorFact(
+  violations: SodViolation[],
+  rule: SodRuleId,
+  fact: ActorFact,
+  actor: ActorRef,
+  reason: AuthReasonKey,
+): void {
+  if (fact === UNKNOWN_FACT) {
+    violations.push({ rule, reason: AUTH_REASON_KEYS.sodContextUnknown });
+    return;
+  }
+  if (includesActor(fact, actor)) {
+    violations.push({ rule, reason });
+  }
 }
 
 /**
@@ -180,15 +218,23 @@ export function evaluateSeparation(
   for (const rule of separationRulesFor(capability)) {
     switch (rule) {
       case 'n1_preparer_not_approver':
-        if (includesActor(context.preparedBy, actor)) {
-          violations.push({ rule, reason: AUTH_REASON_KEYS.sodPreparerCannotApprove });
-        }
+        checkActorFact(
+          violations,
+          rule,
+          context.preparedBy,
+          actor,
+          AUTH_REASON_KEYS.sodPreparerCannotApprove,
+        );
         break;
 
       case 'n2_observer_not_approver':
-        if (includesActor(context.observedBy, actor)) {
-          violations.push({ rule, reason: AUTH_REASON_KEYS.sodObserverCannotApprove });
-        }
+        checkActorFact(
+          violations,
+          rule,
+          context.observedBy,
+          actor,
+          AUTH_REASON_KEYS.sodObserverCannotApprove,
+        );
         break;
 
       case 'n3_levels_distinct':
@@ -200,15 +246,23 @@ export function evaluateSeparation(
         break;
 
       case 'n4_requester_not_approver':
-        if (includesActor(context.beneficiaryChangeRequestedBy, actor)) {
-          violations.push({ rule, reason: AUTH_REASON_KEYS.sodRequesterCannotApprove });
-        }
+        checkActorFact(
+          violations,
+          rule,
+          context.beneficiaryChangeRequestedBy,
+          actor,
+          AUTH_REASON_KEYS.sodRequesterCannotApprove,
+        );
         break;
 
       case 'n5_causer_not_lifter':
-        if (includesActor(context.causedBy, actor)) {
-          violations.push({ rule, reason: AUTH_REASON_KEYS.sodCauserCannotLift });
-        }
+        checkActorFact(
+          violations,
+          rule,
+          context.causedBy,
+          actor,
+          AUTH_REASON_KEYS.sodCauserCannotLift,
+        );
         break;
 
       case 'n6_economics_not_money':

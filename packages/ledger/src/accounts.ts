@@ -392,6 +392,17 @@ export function isPlatformIncomeAccount(account: Account): boolean {
  * тогда, когда обе стороны сравнения собраны по одним и тем же правилам.
  */
 export function assertAccountIdentifier(value: string, field: string): string {
+  // Отсутствующее значение — тоже негодный идентификатор, и отвечать на него
+  // обязана эта функция, а не рантайм. Типы здесь не защита: журнал приезжает
+  // из базы и из сериализации, где `undefined` на месте `dealId` — обычное
+  // дело, а `value.length` на нём давал `TypeError` без кода, без поля и без
+  // ключа локализации, то есть ошибку, которую нечем показать и нечем разобрать.
+  if (typeof value !== 'string') {
+    throw new LedgerError(LedgerErrorCode.accountInvalidIdentifier, {
+      field,
+      type: value === null ? 'null' : typeof value,
+    });
+  }
   // Двоеточие — разделитель кода счёта, вертикальная черта — разделитель
   // внутренних ключей источника средств (`entry.ts`). Идентификатор с любым из
   // них делает два разных счёта неотличимыми в сверке.

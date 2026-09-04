@@ -42,6 +42,16 @@ describe('сверка перечней ролей', () => {
     expect(Object.keys(coverage)).toHaveLength(6);
   });
 
+  it('сверка по пустому перечню — ошибка, а не «всё сошлось»', () => {
+    // Единственное значение аргумента, при котором сверка отвечала «нарушений
+    // нет», ничего не сверив: перечень, приехавший пустым, выглядел зелёным.
+    expect(() => unmappedLegacyRoles([])).toThrow();
+  });
+
+  it('чужое значение вне карты видно поимённо', () => {
+    expect(unmappedLegacyRoles(['operator', 'notary'])).toEqual(['notary']);
+  });
+
   it('цели карты существуют в новом перечне', () => {
     expect(danglingLegacyTargets()).toEqual([]);
   });

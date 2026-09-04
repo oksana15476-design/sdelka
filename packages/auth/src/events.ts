@@ -151,13 +151,23 @@ export function sessionEstablished(
   });
 }
 
+/**
+ * Отказ во входе.
+ *
+ * Отпечатки устройства и сети — **обязательные аргументы без умолчания**.
+ * Умолчание `null` означало «отпечатка нет», и получалось оно молчанием: ровно
+ * в записи, ради которой журнал входов и ведётся (§4.1 A2 — подбор пароля,
+ * вход из чужой сети), поле оказывалось пустым не потому, что отпечатка не
+ * было, а потому, что его забыли передать. Журнал не редактируется — дописать
+ * потом нельзя. `null` остаётся законным ответом, но теперь его надо написать.
+ */
 export function sessionDenied(
   actor: AuthEventActor,
   primaryMethod: PrimaryMethod,
   reason: AuthReasonKey,
   at: Instant,
-  device: Fingerprint | null = null,
-  network: Fingerprint | null = null,
+  device: Fingerprint | null,
+  network: Fingerprint | null,
 ): SessionDeniedEvent {
   return Object.freeze({
     kind: 'session_denied',

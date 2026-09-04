@@ -259,7 +259,42 @@ function assertShortfallFundingResolves(journal: Journal, entry: JournalEntry): 
   }
 }
 
+/**
+ * Запись обязана быть записью целиком, а не «почти записью».
+ *
+ * Проба, ради которой проверка появилась: объект, у которого нет поля `funds`
+ * (запись, собранная до появления объявления довнесения, либо приехавшая из
+ * сериализации), доходил до `assertShortfallFundingResolves` и падал там
+ * `TypeError: Cannot read properties of undefined (reading 'recognisedEntryId')`
+ * — без кода, без ключа локализации и без единого слова о том, какая запись
+ * виновата. То же самое ждало `correctsEntryId`: `undefined !== null` заводило
+ * запись в ветку исправления и отвечало «цель исправления не найдена», то есть
+ * называло не ту причину.
+ *
+ * Необязательные по смыслу поля объявлены `T | null`, а не `T | undefined`,
+ * именно затем, чтобы «поля нет» и «поле пусто» были разными состояниями.
+ * Здесь это различение и защищается: `null` — законное значение, `undefined` —
+ * негодная запись.
+ */
+function assertEntryWellFormed(entry: JournalEntry): void {
+  const fail = (field: string): never => {
+    throw new LedgerError(LedgerErrorCode.journalEntryMalformed, {
+      id: typeof entry.id === 'string' ? entry.id : '',
+      field,
+    });
+  };
+  if (typeof entry.id !== 'string' || entry.id.length === 0) fail('id');
+  if (typeof entry.occurredAt !== 'string') fail('occurredAt');
+  if (entry.kind !== 'settlement' && entry.kind !== 'correction') fail('kind');
+  if (!Array.isArray(entry.postings)) fail('postings');
+  if (typeof entry.memoKey !== 'string') fail('memoKey');
+  for (const field of ['correctsEntryId', 'settles', 'converts', 'accrues', 'funds'] as const) {
+    if (entry[field] === undefined) fail(field);
+  }
+}
+
 export function appendEntry(journal: Journal, entry: JournalEntry): Journal {
+  assertEntryWellFormed(entry);
   if (journal.entries.some((existing) => existing.id === entry.id)) {
     throw new LedgerError(LedgerErrorCode.journalDuplicateEntryId, { id: entry.id });
   }

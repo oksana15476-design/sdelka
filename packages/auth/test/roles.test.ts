@@ -125,6 +125,18 @@ describe('дежурство', () => {
     expect(DUTY_CAPABILITIES).toHaveLength(3);
   });
 
+  it('роли, которая не дежурит, флаг дежурства ничего не добавляет', () => {
+    // §7.1: дежурство — режим поверх ОП, ФК и РО, и больше ни поверх чего.
+    // Проверка стояла только на выдаче сессии; здесь второй рубеж, потому что
+    // флаг приезжает из хранилища вместе с сессией.
+    const onDuty = effectiveCapabilities('compliance_analyst', true);
+    expect(onDuty).toEqual(ROLE_CAPABILITIES.compliance_analyst);
+    for (const capability of DUTY_CAPABILITIES) {
+      if (roleHasCapability('compliance_analyst', capability)) continue;
+      expect(onDuty).not.toContain(capability);
+    }
+  });
+
   it('не даёт снять остановку — расширяющего полномочия у дежурства нет', () => {
     expect(effectiveCapabilities('operator', true)).not.toContain('lift_halt');
     for (const capability of DUTY_CAPABILITIES) {

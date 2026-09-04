@@ -116,6 +116,20 @@ export const EXTERNAL_SESSION_POLICY: SessionPolicy = Object.freeze({
   secondFactorAtLogin: true,
 });
 
+/**
+ * Политика — **функция роли, а не аргумент**.
+ *
+ * Аргументом она была подменяема, и подмена ничего не ломала: `establishSession`
+ * с политикой кабинета выдавал консольной роли сессию **без второго фактора** и
+ * на сутки, а `sessionStatus` с чужой политикой продлевал допустимый простой
+ * вчетверо. Проверка при этом отрабатывала и возвращала «да» — отключало её
+ * значение аргумента, а не отсутствие кода.
+ *
+ * Поэтому политику принимают только функции, которым нечего защищать
+ * (`policyForRole` — сама карта), а решения берут её отсюда. Разная политика для
+ * одной роли (арендатор, окружение) — правка этой функции и развилка владельца,
+ * а не необязательный параметр на каждом вызове.
+ */
 export function policyForRole(roleId: RoleId): SessionPolicy {
   switch (ROLE_SPECS[roleId].audience) {
     case 'console':
@@ -147,10 +161,10 @@ export interface SessionRequest {
  */
 export function establishSession(
   request: SessionRequest,
-  policy: SessionPolicy,
   now: Instant,
 ): Result<Session, AuthReasonKey> {
   const spec = ROLE_SPECS[request.roleId];
+  const policy = policyForRole(request.roleId);
 
   // Ссылка в письме для консоли — Р6 B: почта и есть компрометируемый канал.
   if (spec.audience === 'console' && request.primary.method === 'magic_link') {
@@ -193,7 +207,8 @@ export function establishSession(
   );
 }
 
-export function sessionStatus(session: Session, policy: SessionPolicy, now: Instant): SessionStatus {
+export function sessionStatus(session: Session, now: Instant): SessionStatus {
+  const policy = policyForRole(session.roleId);
   if (session.revokedAt !== null && now >= session.revokedAt) return 'revoked';
   if (now >= session.expiresAt) return 'expired';
   if (now - session.lastSeenAt >= policy.idleTtl) return 'idle';
@@ -240,9 +255,9 @@ export function withAssertion(session: Session, assertion: SecondFactorAssertion
  */
 export function stepUpSatisfied(
   session: Session,
-  policy: SessionPolicy,
   now: Instant,
 ): Result<SecondFactorAssertion, AuthReasonKey> {
+  const policy = policyForRole(session.roleId);
   const freshest = freshestAssertion(session.factors);
   if (freshest === null) {
     return failure(AUTH_REASON_KEYS.secondFactorMissing);

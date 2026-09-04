@@ -1,3 +1,4 @@
+import { AuthError, AuthErrorCode } from './errors';
 import type { NonHumanActorId, RoleId } from './roles';
 import { NON_HUMAN_ACTORS, ROLE_IDS } from './roles';
 
@@ -58,8 +59,16 @@ const KNOWN: ReadonlySet<string> = new Set<string>([...ROLE_IDS, ...NON_HUMAN_AC
 /**
  * Значения чужого перечня, которым здесь нет соответствия. Пусто — перечни не
  * разошлись; непусто — разошлись, и вот чем именно.
+ *
+ * Пустой перечень на входе — **ошибка, а не «всё сошлось»**. Это единственное
+ * значение аргумента, при котором сверка отвечает «нарушений нет», ничего не
+ * сверив: перечень, приехавший пустым из-за неудачного импорта или
+ * переименованного экспорта, выглядел бы как зелёный тест.
  */
 export function unmappedLegacyRoles(external: readonly string[]): readonly string[] {
+  if (external.length === 0) {
+    throw new AuthError(AuthErrorCode.legacyRoleListEmpty);
+  }
   const mapped = new Set<string>(Object.keys(LEGACY_ROLE_MAP));
   return Object.freeze(external.filter((value) => !mapped.has(value)));
 }

@@ -12,7 +12,7 @@ import {
   sessionEstablished,
   sessionRevoked,
 } from '../src/index';
-import { NOW, at, sessionFor } from './support';
+import { NOW, at, context, sessionFor } from './support';
 
 describe('журнал входов', () => {
   it('вход записывается с ролью, способом и сроком', () => {
@@ -30,9 +30,30 @@ describe('журнал входов', () => {
       'magic_link',
       AUTH_REASON_KEYS.primaryMethodNotAllowedForConsole,
       NOW,
+      null,
+      null,
     );
     expect(event.sessionId).toBeNull();
     expect(event.reason).toBe(AUTH_REASON_KEYS.primaryMethodNotAllowedForConsole);
+  });
+
+  it('отпечатки в отказе не проставляются умолчанием', () => {
+    const attempt = () => {
+      // @ts-expect-error device и network обязательны: запись об отказе во входе
+      // ведётся ради них, а умолчание `null` получалось молчанием вызывающего.
+      sessionDenied(
+        {
+          accountId: accountId('acc-fc'),
+          personId: personId('per-fc'),
+          roleId: null,
+          onDuty: false,
+        },
+        'password',
+        AUTH_REASON_KEYS.secondFactorMissing,
+        NOW,
+      );
+    };
+    expect(attempt).toBeTypeOf('function');
   });
 
   it('отзыв записывается отдельным событием', () => {
@@ -75,13 +96,13 @@ describe('журнал смен роли', () => {
 describe('журнал решений', () => {
   it('чтение сделки журнал не засоряет', () => {
     const session = sessionFor('operator', 'acc-op');
-    const outcome = decide(session, 'read_deal', at(1000));
+    const outcome = decide(session, 'read_deal', at(1000), context());
     expect(authorizationOutcome(session, outcome, at(1000))).toBeNull();
   });
 
   it('успешное действие с последствиями записывается', () => {
     const session = sessionFor('operator', 'acc-op');
-    const outcome = decide(session, 'create_deal', at(1000));
+    const outcome = decide(session, 'create_deal', at(1000), context());
     const event = authorizationOutcome(session, outcome, at(1000));
     expect(event?.kind).toBe('authorization_granted');
     expect(event?.capability).toBe('create_deal');
@@ -89,7 +110,12 @@ describe('журнал решений', () => {
 
   it('отказ записывается всегда, включая отказ по чтению', () => {
     const session = sessionFor('support', 'acc-pd');
-    const outcome = decideCapability({ session, capability: 'read_audit', now: at(1000) });
+    const outcome = decideCapability({
+      session,
+      capability: 'read_audit',
+      now: at(1000),
+      context: context(),
+    });
     const event = authorizationOutcome(session, outcome, at(1000));
     expect(event?.kind).toBe('authorization_denied');
     expect(event?.reason).toBe(AUTH_REASON_KEYS.capabilityNotGranted);

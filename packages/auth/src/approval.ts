@@ -1,9 +1,10 @@
 import { type Result, failure, ok } from '@sdelka/domain';
 import { type DualControl, dualControlSatisfied } from '@sdelka/compliance';
 import type { Instant } from '@sdelka/domain';
+import { AuthError, AuthErrorCode } from './errors';
 import { type AuthReasonKey, AUTH_REASON_KEYS } from './keys';
-import type { ActorRef } from './ids';
-import { includesActor, sameActor } from './ids';
+import type { ActorRef, UnknownFact } from './ids';
+import { UNKNOWN_FACT, includesActor, sameActor } from './ids';
 import { type RoleId, ROLE_IDS } from './roles';
 
 /**
@@ -77,19 +78,57 @@ export function recordApproval(
   return ok(Object.freeze({ actor, roleId, level, at }));
 }
 
+/**
+ * Сколько подписей требует ступень тарифа — **1 или 2, и ничего больше**.
+ *
+ * Прежде здесь стоял `number`, и `evaluateQuorum({ required: 0 })` отвечал
+ * «кворум набран» без единого утверждения: ноль проходил все три проверки
+ * (`>= 0` у различности, `required >= 1` и `required >= 2` — ложны). Ноль
+ * подтверждений — это не низкий порог, а его отсутствие, то есть автоматический
+ * релиз, прямо запрещённый при любой сумме (`ACTORS.md` §6.10, И16.5;
+ * `packages/domain/src/guards.ts` — «ступени с нулём утверждений здесь нет и
+ * быть не может»).
+ *
+ * Двойка — верх не по осторожности, а по устройству кворума: уровней всего два
+ * (`APPROVAL_LEVELS`), и третью подпись брать неоткуда. Ступень «три подписи»
+ * потребует сначала третьего уровня; до тех пор она невыразима.
+ */
+export const APPROVAL_REQUIREMENTS = [1, 2] as const;
+export type ApprovalRequirement = (typeof APPROVAL_REQUIREMENTS)[number];
+
+/**
+ * Разбор числа подписей, пришедшего из-за границы процесса (ступень тарифа
+ * лежит в базе, `requiredApprovals` в `packages/domain` возвращает `number`).
+ *
+ * Бросает, а не возвращает отказ, ровно как конструкторы идентификаторов:
+ * ступень с нулём, тройкой или дробью — это не отказ в кворуме конкретной
+ * сделке, а испорченная настройка, и продолжать по ней нельзя.
+ */
+export function approvalRequirement(value: number): ApprovalRequirement {
+  const known = APPROVAL_REQUIREMENTS.find((candidate) => candidate === value);
+  if (known === undefined) {
+    throw new AuthError(AuthErrorCode.approvalRequirementInvalid, { value: String(value) });
+  }
+  return known;
+}
+
 export interface QuorumRequest {
   /**
-   * Сколько подписей требует ступень тарифа. `null` — ступень не берётся вовсе
-   * (`FUNCTIONAL.md` §3.5: свыше 500 000 ₾ на пилоте не берём), и это не
-   * «нужно много», а «нельзя никак».
-   *
-   * **Ноль здесь недостижим намеренно.** `packages/domain` уже запретил ступень
-   * с нулём утверждений: автоматический релиз запрещён при любой сумме, и
-   * владелец не вправе завести такую ступень (`ACTORS.md` §6.10, И16.5).
+   * Требование ступени. `null` — ступень не берётся вовсе (`FUNCTIONAL.md` §3.5:
+   * свыше 500 000 ₾ на пилоте не берём), и это не «нужно много», а «нельзя
+   * никак». Ноль невыразим типом; из базы значение приходит через
+   * `approvalRequirement`.
    */
-  readonly required: number | null;
-  /** Кто готовил операцию. Он не может её утверждать — Н1. */
-  readonly preparedBy: ActorRef | null;
+  readonly required: ApprovalRequirement | null;
+  /**
+   * Кто готовил операцию. Он не может её утверждать — Н1.
+   *
+   * `UNKNOWN_FACT` вместо прежнего `null`: «готовившего нет» и «готовившего не
+   * выясняли» — разные вещи, а `null` покрывал обе и отключал Н1 в кворуме
+   * молча. Неизвестность отказывает; операции без человека-подготовителя
+   * (подготовка `system`) сегодня невыразимы — см. отчёт.
+   */
+  readonly preparedBy: ActorRef | UnknownFact;
   readonly approvals: readonly ApprovalRecord[];
 }
 
@@ -105,10 +144,13 @@ export interface Quorum {
  * попавшее утверждение лица сохраняется, повторное отбрасывается: одна и та же
  * рука, нажавшая дважды, — это одно утверждение.
  */
-function eligibleApprovals(request: QuorumRequest): readonly ApprovalRecord[] {
+function eligibleApprovals(
+  approvals: readonly ApprovalRecord[],
+  preparedBy: ActorRef,
+): readonly ApprovalRecord[] {
   const accepted: ApprovalRecord[] = [];
-  for (const approval of request.approvals) {
-    if (request.preparedBy !== null && sameActor(approval.actor, request.preparedBy)) continue;
+  for (const approval of approvals) {
+    if (sameActor(approval.actor, preparedBy)) continue;
     if (includesActor(accepted.map((item) => item.actor), approval.actor)) continue;
     accepted.push(approval);
   }
@@ -134,7 +176,24 @@ export function evaluateQuorum(request: QuorumRequest): Result<Quorum, AuthReaso
     return failure(AUTH_REASON_KEYS.quorumTierNotOffered);
   }
 
-  const counted = eligibleApprovals(request);
+  /*
+   * Рантайм-дубль компиляционного рубежа. Тип не переживает границу процесса:
+   * ступень приходит из базы и попадает сюда приведением. Ноль, тройка и дробь
+   * обязаны отказать здесь, а не разойтись по ветвям сравнения ниже, где ноль
+   * когда-то и означал «кворум набран».
+   */
+  const required = APPROVAL_REQUIREMENTS.find((candidate) => candidate === request.required);
+  if (required === undefined) {
+    return failure(AUTH_REASON_KEYS.quorumRequirementInvalid);
+  }
+
+  // Н1 в кворуме проверять нечем — значит он не проверен, значит отказ.
+  if (request.preparedBy === UNKNOWN_FACT) {
+    return failure(AUTH_REASON_KEYS.quorumPreparerUnknown);
+  }
+  const preparedBy = request.preparedBy;
+
+  const counted = eligibleApprovals(request.approvals, preparedBy);
 
   /*
    * Различность учётных записей — общий примитив комплаенса, а не пятая копия
@@ -142,22 +201,23 @@ export function evaluateQuorum(request: QuorumRequest): Result<Quorum, AuthReaso
    * уже отработано в `eligibleApprovals` выше.
    */
   const accountControl: DualControl = {
-    preparedBy: request.preparedBy === null ? null : request.preparedBy.accountId,
+    preparedBy: preparedBy.accountId,
     approvals: counted.map((item) => item.actor.accountId),
-    requiredApprovals: request.required,
+    requiredApprovals: required,
   };
   if (!dualControlSatisfied(accountControl)) {
     return failure(AUTH_REASON_KEYS.quorumApproversNotDistinct);
   }
 
+  // Уровень 1 нужен всегда: ступени, не требующей ни одной подписи, не бывает.
   const levelOne = counted.find((item) => item.level === 1) ?? null;
-  if (request.required >= 1 && levelOne === null) {
+  if (levelOne === null) {
     return failure(AUTH_REASON_KEYS.quorumLevelOneMissing);
   }
 
-  if (request.required >= 2) {
+  if (required === 2) {
     const levelTwo = counted.find(
-      (item) => item.level === 2 && (levelOne === null || !sameActor(item.actor, levelOne.actor)),
+      (item) => item.level === 2 && !sameActor(item.actor, levelOne.actor),
     );
     if (levelTwo === undefined) {
       return failure(AUTH_REASON_KEYS.quorumLevelTwoMissing);

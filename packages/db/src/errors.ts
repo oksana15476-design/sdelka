@@ -41,6 +41,13 @@ export const DbErrorCode = {
   migrationMissing: 'db.migration.missing',
   /** `SDELKA_DATABASE_URL` не задан: строка подключения только из окружения. */
   databaseUrlMissing: 'db.env.database_url_missing',
+  /**
+   * База не ответила за отведённый срок (`PROBE_TIMEOUT_MS`). Отдельный ключ, а
+   * не текст драйвера: по нему `isDatabaseUnreachable` отличает «до базы не
+   * добрались» (законный пропуск набора) от «сервер ответил отказом» (дефект
+   * настройки, обязан ронять прогон).
+   */
+  connectTimeout: 'db.connect.timeout',
 } as const;
 
 export type DbErrorCode = (typeof DbErrorCode)[keyof typeof DbErrorCode];

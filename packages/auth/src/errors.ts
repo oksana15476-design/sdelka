@@ -8,6 +8,13 @@ export const AuthErrorCode = {
   capabilityNotGranted: 'auth.capability.not_granted',
   durationInvalid: 'auth.duration.invalid',
   /**
+   * Число подписей ступени вне {1, 2}. Ноль — первый и главный случай:
+   * «ноль утверждений» это не порог, а его отсутствие (`ACTORS.md` §6.10, И16.5).
+   */
+  approvalRequirementInvalid: 'auth.approval_requirement.invalid',
+  /** Сверка перечней ролей запрошена по пустому перечню — сверять нечего. */
+  legacyRoleListEmpty: 'auth.legacy.role_list_empty',
+  /**
    * Единственный способ дойти сюда — расширить перечень значением и не разобрать
    * его в месте разбора. Компилятор ловит это раньше; исключение остаётся на
    * случай, когда значение пришло из-за границы процесса (база, HTTP).

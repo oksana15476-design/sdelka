@@ -31,7 +31,7 @@ const REQUEST = {
 
 describe('выдача сессии', () => {
   it('консольная роль входит с устойчивым фактором', () => {
-    const result = establishSession(REQUEST, CONSOLE_SESSION_POLICY, NOW);
+    const result = establishSession(REQUEST, NOW);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.expiresAt).toBe(at(60 * 60 * 1000));
@@ -39,24 +39,19 @@ describe('выдача сессии', () => {
   });
 
   it('консольная роль без второго фактора не входит', () => {
-    const result = establishSession({ ...REQUEST, factors: [] }, CONSOLE_SESSION_POLICY, NOW);
+    const result = establishSession({ ...REQUEST, factors: [] }, NOW);
     expect(result).toEqual({ ok: false, error: AUTH_REASON_KEYS.secondFactorMissing });
   });
 
   it('код в письме вторым фактором для консоли не считается', () => {
     // Р6 вариант B: защищает от чего угодно, кроме сценария, который нас убивает.
-    const result = establishSession(
-      { ...REQUEST, factors: [factor('email')] },
-      CONSOLE_SESSION_POLICY,
-      NOW,
-    );
+    const result = establishSession({ ...REQUEST, factors: [factor('email')] }, NOW);
     expect(result).toEqual({ ok: false, error: AUTH_REASON_KEYS.secondFactorTooWeak });
   });
 
   it('ссылка в письме первичным способом для консоли запрещена', () => {
     const result = establishSession(
       { ...REQUEST, primary: { method: 'magic_link', at: NOW, device: null, network: null } },
-      CONSOLE_SESSION_POLICY,
       NOW,
     );
     expect(result).toEqual({
@@ -66,79 +61,65 @@ describe('выдача сессии', () => {
   });
 
   it('срок сверх политики не выдаётся', () => {
-    const result = establishSession(
-      { ...REQUEST, requestedTtl: duration(48 * 60 * 60 * 1000) },
-      CONSOLE_SESSION_POLICY,
-      NOW,
-    );
+    const ttl = duration(48 * 60 * 60 * 1000);
+    const result = establishSession({ ...REQUEST, requestedTtl: ttl }, NOW);
     expect(result).toEqual({ ok: false, error: AUTH_REASON_KEYS.sessionTtlTooLong });
   });
 
   it('кабинет стороны входит без второго фактора', () => {
-    const result = establishSession(
-      { ...REQUEST, roleId: 'party', factors: [] },
-      CLIENT_SESSION_POLICY,
-      NOW,
-    );
+    const result = establishSession({ ...REQUEST, roleId: 'party', factors: [] }, NOW);
     expect(result.ok).toBe(true);
   });
 });
 
 describe('дежурство при выдаче', () => {
   it('включается только тем ролям, которые дежурят', () => {
-    const ok = establishSession({ ...REQUEST, onDuty: true }, CONSOLE_SESSION_POLICY, NOW);
+    const ok = establishSession({ ...REQUEST, onDuty: true }, NOW);
     expect(ok.ok).toBe(true);
   });
 
   it('на комплаенс-аналитика не включается: дежурство — не новая роль', () => {
-    const result = establishSession(
-      { ...REQUEST, roleId: 'compliance_analyst', onDuty: true },
-      CONSOLE_SESSION_POLICY,
-      NOW,
-    );
+    const request = { ...REQUEST, roleId: 'compliance_analyst' as const, onDuty: true };
+    const result = establishSession(request, NOW);
     expect(result).toEqual({ ok: false, error: AUTH_REASON_KEYS.dutyRoleNotEligible });
   });
 });
 
 describe('срок сессии', () => {
-  const policy = CONSOLE_SESSION_POLICY;
-
   it('жива, пока не истекла и не простаивала', () => {
     const session = sessionFor('operator', 'acc-op');
-    expect(sessionStatus(session, policy, at(60 * 1000))).toBe('active');
+    expect(sessionStatus(session, at(60 * 1000))).toBe('active');
     expect(sessionRejection('active')).toBeNull();
   });
 
   it('истекает по абсолютному сроку', () => {
     const session = sessionFor('operator', 'acc-op', { expiresAt: at(1000) });
-    expect(sessionStatus(session, policy, at(1000))).toBe('expired');
+    expect(sessionStatus(session, at(1000))).toBe('expired');
     expect(sessionRejection('expired')).toBe(AUTH_REASON_KEYS.sessionExpired);
   });
 
   it('истекает по простою, и отметка активности не двигает абсолютный срок', () => {
     const session = sessionFor('operator', 'acc-op');
     const idleAt = at(20 * 60 * 1000);
-    expect(sessionStatus(session, policy, idleAt)).toBe('idle');
+    expect(sessionStatus(session, idleAt)).toBe('idle');
 
     const touched = touch(session, at(10 * 60 * 1000));
-    expect(sessionStatus(touched, policy, idleAt)).toBe('active');
+    expect(sessionStatus(touched, idleAt)).toBe('active');
     expect(touched.expiresAt).toBe(session.expiresAt);
   });
 
   it('отозванная не оживает отметкой активности', () => {
     const session = touch(revoke(sessionFor('operator', 'acc-op'), at(1000)), at(2000));
-    expect(sessionStatus(session, policy, at(2000))).toBe('revoked');
+    expect(sessionStatus(session, at(2000))).toBe('revoked');
   });
 });
 
 describe('свежесть второго фактора', () => {
-  const policy = CONSOLE_SESSION_POLICY;
-
   it('свежее подтверждение проходит', () => {
     const session = sessionFor('financial_controller', 'acc-fc', {
       factors: [factor('webauthn', at(60 * 1000))],
     });
-    const result = stepUpSatisfied(session, policy, at(2 * 60 * 1000));
+    const result = stepUpSatisfied(session, at(2 * 60 * 1000));
     expect(result.ok).toBe(true);
   });
 
@@ -146,7 +127,7 @@ describe('свежесть второго фактора', () => {
     const session = sessionFor('financial_controller', 'acc-fc', {
       factors: [factor('webauthn', instant(NOW - 8 * 60 * 60 * 1000))],
     });
-    expect(stepUpSatisfied(session, policy, NOW)).toEqual({
+    expect(stepUpSatisfied(session, NOW)).toEqual({
       ok: false,
       error: AUTH_REASON_KEYS.secondFactorStale,
     });
@@ -160,7 +141,45 @@ describe('свежесть второго фактора', () => {
       factor('webauthn', at(60 * 1000)),
     );
     expect(session.factors).toHaveLength(2);
-    expect(stepUpSatisfied(session, policy, at(2 * 60 * 1000)).ok).toBe(true);
+    expect(stepUpSatisfied(session, at(2 * 60 * 1000)).ok).toBe(true);
+  });
+});
+
+describe('политика не подменяется аргументом', () => {
+  it('выдача сессии политику не принимает', () => {
+    const attempt = () => {
+      // @ts-expect-error третьего аргумента нет. С политикой кабинета консольная
+      // роль входила без второго фактора и на сутки вместо восьми часов.
+      establishSession({ ...REQUEST, factors: [] }, CLIENT_SESSION_POLICY, NOW);
+    };
+    expect(attempt).toBeTypeOf('function');
+  });
+
+  it('консольной роли клиентская политика входа не достаётся', () => {
+    // Тот самый вход: консольная роль, второго фактора нет. По клиентской
+    // политике он был бы законным, по политике роли — нет.
+    expect(CLIENT_SESSION_POLICY.secondFactorAtLogin).toBe(false);
+    const result = establishSession({ ...REQUEST, factors: [] }, NOW);
+    expect(result).toEqual({ ok: false, error: AUTH_REASON_KEYS.secondFactorMissing });
+  });
+
+  it('срок жизни ограничен политикой роли, а не переданной', () => {
+    // 24 часа законны для кабинета и вдвое больше консольного потолка.
+    const ttl = CLIENT_SESSION_POLICY.maxTtl;
+    const result = establishSession({ ...REQUEST, requestedTtl: ttl }, NOW);
+    expect(result).toEqual({ ok: false, error: AUTH_REASON_KEYS.sessionTtlTooLong });
+  });
+
+  it('состояние и свежесть фактора считаются по роли сессии', () => {
+    const idleAt = at(20 * 60 * 1000);
+    expect(sessionStatus(sessionFor('financial_controller', 'acc-fc'), idleAt)).toBe('idle');
+    expect(sessionStatus(sessionFor('party', 'acc-pt'), idleAt)).toBe('active');
+
+    const attempt = () => {
+      // @ts-expect-error политика перестала быть аргументом и здесь
+      stepUpSatisfied(sessionFor('party', 'acc-pt'), CLIENT_SESSION_POLICY, NOW);
+    };
+    expect(attempt).toBeTypeOf('function');
   });
 });
 

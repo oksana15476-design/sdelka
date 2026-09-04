@@ -4,6 +4,7 @@ import {
   type Money,
   convertAtRate,
   isPositive,
+  money,
 } from '@sdelka/money';
 import {
   type Account,
@@ -26,6 +27,12 @@ import {
   poolDirection,
 } from './accounts';
 import { LedgerError, LedgerErrorCode } from './errors';
+import {
+  DEFAULT_FEE_CEILING,
+  type FeeCeiling,
+  feeCeilingCap,
+  strictestFeeCeiling,
+} from './fee-ceiling';
 
 export type Direction = 'debit' | 'credit';
 
@@ -126,6 +133,20 @@ export interface TrancheSettlement {
   readonly recipient: ClientKey;
   /** Ссылка на пакет доказательств, под которым домен подтвердил стороны. */
   readonly evidenceRef: string;
+  /**
+   * Потолок удержания, действующий для этого расчёта (`fee-ceiling.ts`).
+   *
+   * Едет в объявлении, а не аргументом записи, по той же причине, что и
+   * стороны: политика принадлежит решению домена, принятому в момент расчёта
+   * (`CORE.md` Ф11), а не настройке, действующей в момент сборки проводки.
+   *
+   * **Только сужает.** Действующим считается строжайший из объявленного и
+   * жёсткого предела учёта (`DEFAULT_FEE_CEILING`), поэтому объявление не
+   * может разрешить больше, чем разрешает учёт: `feeCeiling(rational(1n, 1n))`
+   * — законная величина, и без этого правила запись приносила бы себе право
+   * удержать всё.
+   */
+  readonly ceiling: FeeCeiling;
   readonly __trancheSettlement: unique symbol;
 }
 
@@ -178,6 +199,12 @@ export function trancheSettlement(
   payer: ClientKey,
   recipient: ClientKey,
   attestation: DealPartiesAttestation,
+  /**
+   * Потолок удержания по политике транша. Необязателен, и это безопасно ровно
+   * потому, что умолчание — жёсткий предел учёта: пропуск аргумента не может
+   * ослабить правило, а объявление — только ужесточить его.
+   */
+  ceiling: FeeCeiling = DEFAULT_FEE_CEILING,
 ): TrancheSettlement {
   assertAccountIdentifier(deal.dealId, 'dealId');
   assertAccountIdentifier(deal.trancheId, 'trancheId');
@@ -219,6 +246,7 @@ export function trancheSettlement(
     payer,
     recipient,
     evidenceRef: attestation.evidenceRef,
+    ceiling: strictestFeeCeiling(ceiling, DEFAULT_FEE_CEILING),
   }) as unknown as TrancheSettlement;
 }
 
@@ -637,6 +665,56 @@ function assertAttribution(postings: readonly Posting[]): void {
   }
 }
 
+/**
+ * Комиссия связывается со сделкой **только отнесением** — значит отнесение
+ * обязательно.
+ *
+ * У счетов комиссии файла в коде нет и быть не может: `fee:receivable` один на
+ * всю платформу (`accounts.ts`), в отличие от `client:{c}:tranche:{d}:{t}`, где
+ * файл записан в самом коде. Поэтому «по какой сделке начислено» знает
+ * исключительно отнесение проводки — и до этой проверки отнесение на счетах
+ * комиссии было **необязательным**: `assertAttribution` смотрит только счета
+ * клиентских средств и мимо `fee:receivable` проходит молча.
+ *
+ * **Что через это проходило** (проба в `test/fee-ceiling.test.ts`). Запись
+ * `Дт fee:receivable / Кт fee:income` без отнесения собиралась
+ * `createJournalEntry` и ложилась в журнал. Дальше она:
+ *
+ *  · не попадала в `openFeeReceivables` и `feePositions` — оба отбрасывают
+ *    проводку без отнесения к траншу, то есть требование на балансе есть, а в
+ *    отчётах его нет;
+ *  · не попадала в `feeAccrualTranches`, а значит идемпотентность
+ *    (`journalFeeAccruedTwice`) её не видела: следом законно проходило второе,
+ *    уже отнесённое начисление по тому же траншу. `fee:receivable` вдвое, доход
+ *    признан дважды, инварианты пусты.
+ *
+ * Отнесение к **файлу клиента** отвергается тем же правилом и по той же
+ * причине: требование по комиссии — не деньги клиента, файл клиента для него не
+ * файл, а все три отчёта ключуются парой «сделка, транш». Отнесение к клиенту
+ * для них неотличимо от его отсутствия.
+ *
+ * Правило стоит на `fee:receivable`, а не на «любом счёте комиссии»: `fee:income`
+ * — обычный счёт дохода, и признание дохода помимо тарифного начисления законно
+ * (см. `assertPlatformIncomeSweptToOperating`). Но как только в записи есть
+ * требование по комиссии, признание в ней — начисление, и его доходная нога
+ * обязана назвать тот же файл: иначе `feePositions` показала бы «не удержано
+ * 500» при «начислено 0».
+ */
+function assertFeeAccrualAttributed(postings: readonly Posting[]): void {
+  const touchesReceivable = postings.some((posting) => posting.account.kind === 'fee_receivable');
+  const needsTranche = (account: Account): boolean =>
+    account.kind === 'fee_receivable' || (account.kind === 'fee_income' && touchesReceivable);
+  for (const posting of postings) {
+    if (!needsTranche(posting.account)) continue;
+    const attribution = posting.attribution;
+    if (attribution !== null && !isClientRef(attribution)) continue;
+    throw new LedgerError(LedgerErrorCode.postingFeeWithoutTrancheAttribution, {
+      account: accountCode(posting.account),
+      attribution: attribution === null ? '' : attribution.clientKey,
+    });
+  }
+}
+
 function assertFeeNeverLandsOnClientFunds(
   kind: JournalEntryKind,
   postings: readonly Posting[],
@@ -896,6 +974,88 @@ function assertSettlementShape(
   }
   if (!touchesLocked) {
     fail({ account: lockedCode, reason: 'not_applied' });
+  }
+  assertSettlementCeiling(postings, settles, lockedCode, freeCode);
+}
+
+/**
+ * Потолок удержания стоит **здесь** — на записи расчёта (`fee-ceiling.ts`,
+ * эпик E16).
+ *
+ * **Что было.** Предел был написан в `@sdelka/domain` (`tariff.ts`) и не
+ * запрещал ничего: домен клал его в намерение расчёта полем `maxWithholding`,
+ * `packages/app` (`projectSettlementIntent`) это поле не читал, а учёт о нём не
+ * знал вовсе. Удержание 99 000 из 100 000 собиралось `accrueFee` +
+ * `settleTrancheToClientAccount`, сходилось повалютно, не роняло покрытие и не
+ * поднимало ни одного инварианта. Правило существовало там, где его некому
+ * нарушить, и отсутствовало там, где нарушение и происходит.
+ *
+ * **Почему проверка именно такая.** Удержание считается **вычитанием**: сколько
+ * ушло с запертой части плательщика минус сколько дошло до свободной части
+ * получателя. Не «сумма проводок по `fee:receivable`» — тогда правило
+ * обходилось бы сменой счёта назначения (`service:income`, любой будущий счёт
+ * дохода), ровно как отмывка однажды прошла через `unclaimed:liability` мимо
+ * перечня счетов. И не «по строке» — тогда оно обходилось бы добавлением
+ * строки. Разница брутто и нетто не зависит ни от числа строк, ни от их имён.
+ *
+ * Поэтому обойти его нельзя и низкоуровневой дверью: `createJournalEntry` зовёт
+ * эту проверку у **любой** записи с объявлением расчёта, а без объявления
+ * расчёта не бывает вовсе — межвладельческое движение обязательства без
+ * `settles` отвергает `assertClientOwnerMoveOnlySettles`.
+ *
+ * **Тип записи правило не спрашивает — только направление.** Исправление
+ * двигает те же счета в обратную сторону: запертая часть кредитуется, разность
+ * выходит отрицательной, и мерить её потолком нечем — такая запись пропускается
+ * по знаку, а не по типу. Ровно поэтому исправление, двигающее деньги **вперёд**
+ * (дебет запертой части, кредит получателя), под правило попадает наравне с
+ * расчётом: у `correction` нет послаблений на направление в
+ * `assertSettlementShape`, и освобождение по типу открывало бы второй расчёт под
+ * видом исправления.
+ *
+ * ⚠ **[открыто]** Правило накрывает удержание из расчёта по траншу. Списание
+ * комиссии прямо со свободной части счёта клиента (вне расчёта) под него не
+ * попадает: у такого движения нет брутто, от которого считается доля, и в
+ * словаре такой формы сегодня нет. Появится — предел ей нужен свой.
+ */
+function assertSettlementCeiling(
+  postings: readonly Posting[],
+  settles: TrancheSettlement,
+  lockedCode: string,
+  freeCode: string,
+): void {
+  // Объявление может только сужать: строжайший из объявленного и жёсткого
+  // предела учёта. Запись, принёсшая с собой потолок в единицу, ничего себе не
+  // разрешает.
+  const ceiling = strictestFeeCeiling(settles.ceiling ?? DEFAULT_FEE_CEILING, DEFAULT_FEE_CEILING);
+  const gross = new Map<CurrencyCode, bigint>();
+  const paidOut = new Map<CurrencyCode, bigint>();
+  for (const posting of postings) {
+    if (!isClientObligationAccount(posting.account)) continue;
+    const code = accountCode(posting.account);
+    const currency = posting.amount.currency;
+    const signed = posting.direction === 'debit' ? posting.amount.minor : -posting.amount.minor;
+    if (code === lockedCode) {
+      gross.set(currency, (gross.get(currency) ?? 0n) + signed);
+    } else if (code === freeCode) {
+      paidOut.set(currency, (paidOut.get(currency) ?? 0n) - signed);
+    }
+  }
+  for (const [currency, taken] of gross) {
+    if (taken <= 0n) continue;
+    const withheld = taken - (paidOut.get(currency) ?? 0n);
+    if (withheld <= 0n) continue;
+    const cap = feeCeilingCap(money(currency, taken), ceiling);
+    if (withheld > cap.minor) {
+      throw new LedgerError(LedgerErrorCode.entryFeeExceedsCeiling, {
+        dealId: settles.deal.dealId,
+        trancheId: settles.deal.trancheId,
+        currency,
+        gross: taken.toString(),
+        withheld: withheld.toString(),
+        cap: cap.minor.toString(),
+        maxShare: `${ceiling.maxShare.numerator}/${ceiling.maxShare.denominator}`,
+      });
+    }
   }
 }
 
@@ -1249,6 +1409,7 @@ export function createJournalEntry(input: JournalEntryInput): JournalEntry {
   assertNoLockedToLocked(input.postings);
   assertClientOwnerMoveOnlySettles(input.kind, input.postings, input.settles);
   assertFeeNeverLandsOnClientFunds(input.kind, input.postings);
+  assertFeeAccrualAttributed(input.postings);
   assertPlatformIncomeSweptToOperating(input.postings);
   assertNoClientCrossSubsidy(input.postings);
   assertNoOwnedObligationIntoIntakePool(input.kind, input.postings);

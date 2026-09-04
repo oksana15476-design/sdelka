@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   type ActorRef,
   type ApprovalRecord,
+  type ApprovalRequirement,
+  APPROVAL_REQUIREMENTS,
   AUTH_REASON_KEYS,
+  UNKNOWN_FACT,
+  approvalRequirement,
   evaluateQuorum,
   recordApproval,
 } from '../src/index';
@@ -122,5 +126,70 @@ describe('кворум по набору уровней', () => {
       approvals: [approval(FC, 'financial_controller'), approval(RO, 'head_of_operations')],
     });
     expect(result).toEqual({ ok: false, error: AUTH_REASON_KEYS.quorumTierNotOffered });
+  });
+});
+
+describe('ноль утверждений — не кворум, а его отсутствие', () => {
+  it('ступень с нулём подписей невыразима типом', () => {
+    const attempt = () => {
+      // @ts-expect-error `required` это 1 | 2 | null. Раньше стоял `number`, и
+      // `{ required: 0 }` отвечало «кворум набран» без единого утверждения.
+      evaluateQuorum({ required: 0, preparedBy: OPERATOR, approvals: [] });
+    };
+    expect(attempt).toBeTypeOf('function');
+  });
+
+  it('и не проходит, если пришла из-за границы процесса', () => {
+    // Ступень лежит в базе; тип туда не поедет, поэтому рантайм-рубеж обязателен.
+    const fromDatabase = 0 as unknown as ApprovalRequirement;
+    const result = evaluateQuorum({
+      required: fromDatabase,
+      preparedBy: OPERATOR,
+      approvals: [],
+    });
+    expect(result).toEqual({ ok: false, error: AUTH_REASON_KEYS.quorumRequirementInvalid });
+  });
+
+  it('и не проходит даже с полным набором подписей', () => {
+    // Отказ именно по ступени, а не по нехватке утверждений: подписи на месте.
+    const result = evaluateQuorum({
+      required: 0 as unknown as ApprovalRequirement,
+      preparedBy: OPERATOR,
+      approvals: [approval(FC, 'financial_controller'), approval(RO, 'head_of_operations')],
+    });
+    expect(result).toEqual({ ok: false, error: AUTH_REASON_KEYS.quorumRequirementInvalid });
+  });
+
+  it('разбор ступени из настройки отвергает ноль, тройку и дробь', () => {
+    expect(() => approvalRequirement(0)).toThrow();
+    expect(() => approvalRequirement(-1)).toThrow();
+    expect(() => approvalRequirement(3)).toThrow();
+    expect(() => approvalRequirement(1.5)).toThrow();
+    expect(() => approvalRequirement(Number.NaN)).toThrow();
+    expect(approvalRequirement(1)).toBe(1);
+    expect(approvalRequirement(2)).toBe(2);
+    expect(APPROVAL_REQUIREMENTS).toHaveLength(2);
+  });
+});
+
+describe('неизвестный готовивший кворум не закрывает', () => {
+  it('«не выясняли, кто готовил» — отказ, а не отсутствие Н1', () => {
+    // Прежде поле было `ActorRef | null`, и `null` молча снимал проверку Н1:
+    // готовивший засчитывался в кворум наравне со всеми.
+    const result = evaluateQuorum({
+      required: 1,
+      preparedBy: UNKNOWN_FACT,
+      approvals: [approval(FC, 'financial_controller')],
+    });
+    expect(result).toEqual({ ok: false, error: AUTH_REASON_KEYS.quorumPreparerUnknown });
+  });
+
+  it('операция без готовившего вовсе не выражается', () => {
+    const attempt = () => {
+      // @ts-expect-error `null` больше не значение этого поля — см. отчёт:
+      // подготовка нечеловеческим актором (`system`) невыразима намеренно.
+      evaluateQuorum({ required: 1, preparedBy: null, approvals: [] });
+    };
+    expect(attempt).toBeTypeOf('function');
   });
 });

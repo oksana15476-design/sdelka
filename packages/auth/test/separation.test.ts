@@ -1,19 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import {
-  type ActionContext,
-  AUTH_REASON_KEYS,
-  EMPTY_CONTEXT,
-  evaluateSeparation,
-} from '../src/index';
-import { actor } from './support';
+import { AUTH_REASON_KEYS, UNKNOWN_CONTEXT, UNKNOWN_FACT, evaluateSeparation } from '../src/index';
+import { actor, context } from './support';
 
 const FC = actor('acc-fc', 'per-fc');
 const OPERATOR = actor('acc-op', 'per-op');
 const ORACLE = actor('acc-or', 'per-or');
-
-function context(patch: Partial<ActionContext>): ActionContext {
-  return { ...EMPTY_CONTEXT, ...patch };
-}
 
 describe('Н1 — готовил ≠ утверждает', () => {
   it('утверждение готовившего отвергается', () => {
@@ -71,7 +62,7 @@ describe('Н2 — установил факт ≠ утвердил выплат�
 
 describe('Н3 — уровень утверждения', () => {
   it('роль без уровня утверждающей не является', () => {
-    const violations = evaluateSeparation('approve_payout', 'support', actor('acc-pd'), EMPTY_CONTEXT);
+    const violations = evaluateSeparation('approve_payout', 'support', actor('acc-pd'), context());
     expect(violations.map((item) => item.reason)).toContain(
       AUTH_REASON_KEYS.sodApprovalLevelMissing,
     );
@@ -116,22 +107,62 @@ describe('Н5 — вызвал расхождение ≠ снял остано�
 
 describe('Н6 — видит маржу ≠ имеет полномочие с денежным эффектом', () => {
   it('аудитор, видящий экономику, ничего не утверждает', () => {
-    const violations = evaluateSeparation('approve_payout', 'auditor', actor('acc-au'), EMPTY_CONTEXT);
+    const violations = evaluateSeparation('approve_payout', 'auditor', actor('acc-au'), context());
     expect(violations.map((item) => item.reason)).toContain(
       AUTH_REASON_KEYS.sodEconomicsExcludesMoney,
     );
   });
 
   it('чтение экономики само по себе ничего не нарушает', () => {
-    expect(evaluateSeparation('read_economics', 'principal', actor('acc-vl'), EMPTY_CONTEXT)).toEqual(
+    expect(evaluateSeparation('read_economics', 'principal', actor('acc-vl'), context())).toEqual(
       [],
     );
   });
 
   it('рычаги владельцу принадлежат и Н6 их не задевает', () => {
     expect(
-      evaluateSeparation('manage_settings', 'principal', actor('acc-vl'), EMPTY_CONTEXT),
+      evaluateSeparation('manage_settings', 'principal', actor('acc-vl'), context()),
     ).toEqual([]);
+  });
+});
+
+describe('неизвестный факт — не «никто»', () => {
+  it('утверждение при неизвестном готовившем не проходит Н1', () => {
+    // Прежде это был тот же вход, что и «никто не готовил»: пустой перечень.
+    // Разница видна только здесь — правило обязано отказать, а не промолчать.
+    const violations = evaluateSeparation(
+      'approve_payout',
+      'financial_controller',
+      FC,
+      context({ preparedBy: UNKNOWN_FACT }),
+    );
+    expect(violations).toContainEqual({
+      rule: 'n1_preparer_not_approver',
+      reason: AUTH_REASON_KEYS.sodContextUnknown,
+    });
+  });
+
+  it('контекст без единого выясненного факта валит все несовместимости на фактах', () => {
+    const violations = evaluateSeparation(
+      'approve_lift_block',
+      'head_of_operations',
+      FC,
+      UNKNOWN_CONTEXT,
+    );
+    expect(violations.map((item) => item.rule)).toEqual([
+      'n1_preparer_not_approver',
+      'n4_requester_not_approver',
+      'n5_causer_not_lifter',
+    ]);
+    for (const violation of violations) {
+      expect(violation.reason).toBe(AUTH_REASON_KEYS.sodContextUnknown);
+    }
+  });
+
+  it('там, где фактов не требуется, незнание ничему не мешает', () => {
+    // `read_deal` не связан ни одной несовместимостью: спрашивать было нечего,
+    // значит и отказывать не за что.
+    expect(evaluateSeparation('read_deal', 'operator', OPERATOR, UNKNOWN_CONTEXT)).toEqual([]);
   });
 });
 

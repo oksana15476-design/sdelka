@@ -1,7 +1,14 @@
 import { describe } from 'vitest';
 import { DATABASE_URL_ENV, databaseUrl } from '../../../src/env.ts';
+import { DbError } from '../../../src/errors.ts';
 import { migrate } from '../../../src/migrate.ts';
-import { type Pool, type PoolClient, createPool } from '../../../src/pool.ts';
+import {
+  type Pool,
+  type PoolClient,
+  createPool,
+  isDatabaseUnreachable,
+  probeConnection,
+} from '../../../src/pool.ts';
 
 /**
  * Каркас интеграционных тестов.
@@ -17,13 +24,21 @@ import { type Pool, type PoolClient, createPool } from '../../../src/pool.ts';
  *
  * Граница проведена **по стадии**, а не по тексту ошибки:
  *
- * - базы нет — соединиться не удалось: **пропуск с причиной**. Это законное
- *   состояние машины без поднятого кластера;
+ * - до базы не добрались: **пропуск с причиной**. Это законное состояние машины
+ *   без поднятого кластера;
  * - база есть, миграция упала — **падение**. Это дефект схемы, и он обязан
  *   быть виден там же, где случился.
  *
  * Разбирать сообщение драйвера вместо стадии было бы гаданием: тексты ошибок
  * не наш контракт и меняются с версией `pg`.
+ *
+ * Стадии соединения при этом мало: «соединиться не удалось» — не то же самое,
+ * что «базы нет». Неверный пароль, отсутствующая база и запрещающий `pg_hba`
+ * падают на той же стадии, но сервер при этом **ответил** — это настройка, а не
+ * недоступность, и пропуск здесь снова превратил бы непроверенную схему в
+ * зелёный прогон. Кто именно недоступен, решает `isDatabaseUnreachable`
+ * (`src/pool.ts`) по роду ошибки, а сроки ожидания задают таймауты пула: без
+ * них недоступный адрес не пропускал набор, а вешал прогон на минуты.
  */
 export interface Environment {
   readonly available: boolean;
@@ -38,13 +53,31 @@ export interface Environment {
  */
 export interface EnvironmentDeps {
   readonly connect: (url: string) => Pool;
+  readonly probe: (pool: Pool) => Promise<void>;
   readonly migrate: (pool: Pool) => Promise<unknown>;
 }
 
 export const DEFAULT_ENVIRONMENT_DEPS: EnvironmentDeps = Object.freeze({
   connect: createPool,
+  probe: probeConnection,
   migrate,
 });
+
+/**
+ * Причина пропуска в читаемом виде. Строка подключения в неё не попадает
+ * никогда: в ней пароль (красная линия №12). У `DbError` сообщение — это
+ * технический ключ, поэтому подробности («сколько ждали») дописываем отдельно,
+ * иначе `db.connect.timeout` не отличить от мгновенного отказа.
+ */
+function reasonOf(error: unknown): string {
+  if (error instanceof DbError) {
+    const details = Object.entries(error.details)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(' ');
+    return details.length === 0 ? error.code : `${error.code} ${details}`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
 
 /** Пропуск: базы нет. Причина печатается при загрузке модуля, а не копится молча. */
 function unavailable(reason: string): Environment {
@@ -65,11 +98,17 @@ export async function resolveEnvironment(
   }
   const pool = deps.connect(url);
   try {
-    await pool.query('SELECT 1');
+    await deps.probe(pool);
   } catch (error) {
-    // Не соединились: кластер не поднят, базы нет, доступа нет. Пропуск.
+    // Пул закрываем в обоих случаях: брошенный сокет держал бы прогон живым
+    // после того, как всё уже решено.
     await pool.end().catch(() => undefined);
-    return unavailable(error instanceof Error ? error.message : String(error));
+    if (!isDatabaseUnreachable(error)) {
+      // Сервер ответил (или ошибка неизвестного рода) — это не «базы нет».
+      // Молчать нельзя: пропуск требует доказательства недоступности.
+      throw error;
+    }
+    return unavailable(reasonOf(error));
   }
   try {
     await deps.migrate(pool);

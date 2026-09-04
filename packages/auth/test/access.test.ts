@@ -3,6 +3,7 @@ import {
   type Grant,
   AUTH_REASON_KEYS,
   ROLE_IDS,
+  UNKNOWN_FACT,
   accountId,
   changeAccountRole,
   decideCapability,
@@ -10,7 +11,7 @@ import {
   roleHasCapability,
   sessionId,
 } from '../src/index';
-import { NOW, sessionFor } from './support';
+import { NOW, at, context, sessionFor } from './support';
 
 describe('назначение роли', () => {
   it('полномочия manage_access сегодня нет ни у одной роли', () => {
@@ -28,6 +29,7 @@ describe('назначение роли', () => {
         session: sessionFor(roleId, `acc-${roleId}`),
         capability: 'manage_access',
         now: NOW,
+        context: context(),
       });
       expect(result.ok).toBe(false);
       if (result.ok) continue;
@@ -66,6 +68,56 @@ describe('смена роли, когда полномочие будет выд
       NOW,
     );
     expect(result.ok).toBe(false);
+  });
+
+  it('доказательство полномочия не бессрочно', () => {
+    // Грант — значение; без срока он переживал и простой сессии, и её отзыв.
+    // Срок берётся из `stepUpMaxAge` политики роли: `manage_access` — step_up.
+    const result = changeAccountRole(
+      authority,
+      null,
+      { accountId: accountId('acc-1'), personId: personId('per-1'), roleId: 'operator' },
+      at(6 * 60 * 1000),
+    );
+    expect(result).toEqual({ ok: false, error: AUTH_REASON_KEYS.authorityStale });
+  });
+
+  it('в пределах свежести подтверждения — проходит', () => {
+    const result = changeAccountRole(
+      authority,
+      null,
+      { accountId: accountId('acc-1'), personId: personId('per-1'), roleId: 'operator' },
+      at(4 * 60 * 1000),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('невыясненная действующая роль — отказ, а не первое назначение', () => {
+    // `null` покрывал и «роли не было», и «не смотрели». Во втором случае в
+    // журнал не попадало `role_revoked`, а журнал не редактируется.
+    const result = changeAccountRole(
+      authority,
+      UNKNOWN_FACT,
+      { accountId: accountId('acc-1'), personId: personId('per-1'), roleId: 'operator' },
+      NOW,
+    );
+    expect(result).toEqual({ ok: false, error: AUTH_REASON_KEYS.accessCurrentRoleUnknown });
+  });
+
+  it('чужое назначение в роли действующего не принимается', () => {
+    const result = changeAccountRole(
+      authority,
+      {
+        accountId: accountId('acc-2'),
+        personId: personId('per-2'),
+        roleId: 'operator',
+        assignedAt: NOW,
+        assignedBy: null,
+      },
+      { accountId: accountId('acc-1'), personId: personId('per-1'), roleId: 'support' },
+      NOW,
+    );
+    expect(result).toEqual({ ok: false, error: AUTH_REASON_KEYS.accessCurrentRoleMismatch });
   });
 
   it('смена роли отзывает сессии и пишет два события', () => {

@@ -1,5 +1,6 @@
 import { type DurationMs, type Instant, duration, instant } from '@sdelka/domain';
 import {
+  type ActionContext,
   type ActorRef,
   type PrimaryAuthentication,
   type RoleId,
@@ -24,6 +25,25 @@ export const MINUTE: DurationMs = duration(60 * 1000);
 
 export function actor(name: string, person: string = name): ActorRef {
   return actorRef(accountId(name), personId(person));
+}
+
+/**
+ * Контекст «все факты выяснены, и никто ничего не делал».
+ *
+ * Живёт в тестах и **не** экспортируется пакетом: в бою такой контекст — это
+ * утверждение о четырёх фактах сразу, и собирать его одним именем значит снова
+ * дать одно значение, отключающее Н1, Н2, Н4 и Н5. Тесту он нужен как исходная
+ * точка, от которой каждый случай задаёт свой факт.
+ */
+export const NO_PRIOR_ACTIONS: ActionContext = Object.freeze({
+  preparedBy: Object.freeze([]),
+  observedBy: Object.freeze([]),
+  beneficiaryChangeRequestedBy: Object.freeze([]),
+  causedBy: Object.freeze([]),
+});
+
+export function context(patch: Partial<ActionContext> = {}): ActionContext {
+  return { ...NO_PRIOR_ACTIONS, ...patch };
 }
 
 export function factor(

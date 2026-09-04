@@ -200,14 +200,22 @@ describe('комиссия: начислено, удержано, получен
  * исключение обязано быть **условием**, а не перечнем счетов.
  */
 describe('признание дохода против требования платформы', () => {
+  /**
+   * Отнесение к траншу на проводках комиссии — не украшение фикстуры.
+   * `fee:receivable` один на всю платформу, файла в его коде нет, и связать
+   * требование со сделкой может только отнесение; без него запись отвергается
+   * (`assertFeeAccrualAttributed`). Здесь проверяется другое правило — именное
+   * послабление в выводе дохода, — поэтому запись обязана быть законной во всём
+   * остальном, иначе тест мерил бы не то.
+   */
   it('accepts income recognised against a platform receivable', () => {
     const entry = createJournalEntry({
       ...at('x1'),
       kind: 'settlement',
       memoKey: 'ledger.entry.fee_accrued',
       postings: [
-        debit(feeReceivable, money('GEL', 500n)),
-        credit(feeIncome, money('GEL', 500n)),
+        debit(feeReceivable, money('GEL', 500n), dealA),
+        credit(feeIncome, money('GEL', 500n), dealA),
       ],
     });
     expect(entry.postings).toHaveLength(2);
@@ -228,8 +236,8 @@ describe('признание дохода против требования пл
           kind: 'settlement',
           memoKey: 'ledger.entry.fee_accrued',
           postings: [
-            debit(feeReceivable, money('GEL', 500n)),
-            credit(feeIncome, money('GEL', 500n)),
+            debit(feeReceivable, money('GEL', 500n), dealA),
+            credit(feeIncome, money('GEL', 500n), dealA),
             debit({ kind: 'shortfall_expense' } as const, money('GEL', 100n), {
               clientKey: buyer,
             }),
@@ -251,9 +259,9 @@ describe('признание дохода против требования пл
           kind: 'settlement',
           memoKey: 'ledger.entry.fee_accrued',
           postings: [
-            debit(feeReceivable, money('GEL', 500n)),
-            credit(feeIncome, money('GEL', 500n)),
-            credit(feeReceivable, money('GEL', 500n)),
+            debit(feeReceivable, money('GEL', 500n), dealA),
+            credit(feeIncome, money('GEL', 500n), dealA),
+            credit(feeReceivable, money('GEL', 500n), dealA),
             debit({ kind: 'psp_fee_expense' } as const, money('GEL', 500n)),
           ],
         }),

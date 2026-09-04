@@ -17,6 +17,14 @@ export const LedgerErrorCode = {
   entryNonPositiveExcess: 'ledger.entry.non_positive_excess',
   entryNonPositiveShortfall: 'ledger.entry.non_positive_shortfall',
   entryNonPositiveFee: 'ledger.entry.non_positive_fee',
+  // Запись расчёта оставляет платформе больше, чем позволяет потолок удержания
+  // (`fee-ceiling.ts`, эпик E16). Удержание считается вычитанием — брутто с
+  // запертой части минус то, что дошло до получателя, — поэтому под правило
+  // попадает любое удержание, а не только то, что названо комиссией.
+  entryFeeExceedsCeiling: 'ledger.entry.fee_exceeds_ceiling',
+  // Сам потолок задан величиной, которой не существует: отрицательной, больше
+  // единицы либо применённой к отрицательной сумме.
+  feeCeilingInvalid: 'ledger.fee_ceiling.invalid',
   // Клиентский курс лучше эталонного: на конвертации не доход, а убыток, и
   // проводка у него другая. Молча вывернуть направление значило бы признать
   // убыток доходом (см. `receiveConversion`).
@@ -38,9 +46,19 @@ export const LedgerErrorCode = {
   entryCorrectionWithoutReference: 'ledger.entry.correction_without_reference',
   entrySettlementWithReference: 'ledger.entry.settlement_with_reference',
   postingNonPositiveAmount: 'ledger.posting.non_positive_amount',
+  // Требование по комиссии живёт без отнесения к траншу либо отнесено к файлу
+  // клиента. Комиссия связывается со сделкой **только** отнесением: в коде
+  // счёта `fee:receivable` файла нет и быть не может. Без отнесения начисление
+  // не видит ни `openFeeReceivables`, ни идемпотентность `journalFeeAccruedTwice`.
+  postingFeeWithoutTrancheAttribution: 'ledger.posting.fee_without_tranche_attribution',
   postingCustodyWithoutAttribution: 'ledger.posting.custody_without_attribution',
   postingAttributionMismatch: 'ledger.posting.attribution_mismatch',
   postingClientAttributionMismatch: 'ledger.posting.client_attribution_mismatch',
+  // Запись пришла в журнал без обязательного поля: не `JournalEntry`, а объект,
+  // похожий на него. Журнал приходит из базы и из сериализации, поэтому такое
+  // значение обязано отвергаться названной ошибкой, а не падать `TypeError` на
+  // первом же обращении к отсутствующему полю.
+  journalEntryMalformed: 'ledger.journal.entry_malformed',
   journalDuplicateEntryId: 'ledger.journal.duplicate_entry_id',
   journalCorrectionTargetMissing: 'ledger.journal.correction_target_missing',
   // Второе начисление комиссии по тому же траншу. Идемпотентность начисления

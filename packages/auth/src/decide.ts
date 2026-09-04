@@ -4,17 +4,10 @@ import { type Capability, CAPABILITY_SPECS } from './capabilities';
 import { type AuthReasonKey, AUTH_REASON_KEYS } from './keys';
 import type { AccountId, ActorRef, PersonId, SessionId } from './ids';
 import { type CapabilityOf, type RoleId, effectiveCapabilities } from './roles';
-import {
-  type ActionContext,
-  type SodViolation,
-  EMPTY_CONTEXT,
-  evaluateSeparation,
-} from './separation';
+import { type ActionContext, type SodViolation, evaluateSeparation } from './separation';
 import {
   type RoleSession,
   type Session,
-  type SessionPolicy,
-  policyForRole,
   sessionActor,
   sessionRejection,
   sessionStatus,
@@ -69,8 +62,18 @@ export interface AuthorizationRequest {
   readonly session: Session;
   readonly capability: Capability;
   readonly now: Instant;
-  readonly context?: ActionContext;
-  readonly policy?: SessionPolicy;
+  /**
+   * Факты, по которым проверяется разделение обязанностей. **Обязателен.**
+   *
+   * Был необязательным, и это делало разделение обязанностей дисциплиной, а не
+   * правом: вызов без поля не отказывал — он молча получал четыре пустых
+   * перечня и проходил Н1, Н2, Н4 и Н5 насквозь. Ошибиться так можно было
+   * невнимательностью, а увидеть — только чтением чужого кода.
+   *
+   * Теперь незнание выражается значением (`UNKNOWN_CONTEXT`) и отказывает, а
+   * умолчания нет вовсе.
+   */
+  readonly context: ActionContext;
 }
 
 /**
@@ -82,13 +85,17 @@ export interface AuthorizationRequest {
  * 3. второй фактор — до разделения обязанностей, потому что несовместимость
  *    проверяет, **тот ли человек**, а фактор — **человек ли это вообще**;
  * 4. разделение обязанностей.
+ *
+ * Политика сессии здесь **не аргумент**: она берётся по роли (`policyForRole`).
+ * Аргументом она была подменяема — консольной сессии можно было передать
+ * политику кабинета и получить пятнадцатиминутный простой длиной в час, а
+ * требование устойчивого к фишингу фактора — сниженным до кода в SMS. Ослабить
+ * проверку значением аргумента больше нечем.
  */
 export function decideCapability(request: AuthorizationRequest): Result<Grant<Capability>, Denial> {
-  const { session, capability, now } = request;
-  const policy = request.policy ?? policyForRole(session.roleId);
-  const context = request.context ?? EMPTY_CONTEXT;
+  const { session, capability, now, context } = request;
 
-  const status = sessionStatus(session, policy, now);
+  const status = sessionStatus(session, now);
   const statusReason = sessionRejection(status);
   if (statusReason !== null) {
     return failure(denial(capability, statusReason));
@@ -101,7 +108,7 @@ export function decideCapability(request: AuthorizationRequest): Result<Grant<Ca
 
   const spec = CAPABILITY_SPECS[capability];
   if (spec.secondFactor === 'step_up') {
-    const stepUp = stepUpSatisfied(session, policy, now);
+    const stepUp = stepUpSatisfied(session, now);
     if (!stepUp.ok) {
       return failure(denial(capability, stepUp.error));
     }
@@ -137,15 +144,19 @@ export function decideCapability(request: AuthorizationRequest): Result<Grant<Ca
  * рантайме. Сессия, поднятая из хранилища, имеет тип `Session` с ролью-объединением,
  * и для неё остаётся `decideCapability` с рантайм-проверкой — второй рубеж
  * нужен ровно потому, что типы не переживают границу процесса.
+ *
+ * `context` — обязательный четвёртый аргумент **без умолчания**. Умолчание здесь
+ * было тем же дефектом, что и необязательное поле запроса: короткий вызов
+ * `decide(session, 'approve_payout', now)` компилировался и утверждал выплату,
+ * ни с чем её не разведя.
  */
 export function decide<R extends RoleId, C extends CapabilityOf<R>>(
   session: RoleSession<R>,
   capability: C,
   now: Instant,
-  context: ActionContext = EMPTY_CONTEXT,
-  policy: SessionPolicy = policyForRole(session.roleId),
+  context: ActionContext,
 ): Result<Grant<C>, Denial> {
-  const decided = decideCapability({ session, capability, now, context, policy });
+  const decided = decideCapability({ session, capability, now, context });
   if (!decided.ok) return decided;
   return ok(decided.value as Grant<C>);
 }

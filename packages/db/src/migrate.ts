@@ -108,7 +108,15 @@ export async function migrate(pool: Pool, dir?: string): Promise<MigrateResult> 
       }
     }
   } finally {
-    await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY.toString()]);
+    // Разблокировка не имеет права подменить собой исходную ошибку. С тех пор
+    // как у пула есть таймауты (`pool.ts`), запрос выше может оборвать само
+    // соединение — тогда `unlock` бросит безымянное «connection error», и
+    // настоящая причина падения (например, `db.migration.checksum_mismatch`)
+    // потеряется. Блокировка при этом не зависает: она живёт до конца сессии, а
+    // непригодное соединение пул уничтожает.
+    await client
+      .query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY.toString()])
+      .catch(() => undefined);
     client.release();
   }
   return Object.freeze({ applied: Object.freeze(applied), skipped: Object.freeze(skipped) });
