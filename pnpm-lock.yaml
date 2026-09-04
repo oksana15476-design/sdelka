@@ -52,6 +52,27 @@ importers:
         specifier: 1.49.1
         version: 1.49.1
 
+  packages/app:
+    dependencies:
+      '@sdelka/audit':
+        specifier: workspace:*
+        version: link:../audit
+      '@sdelka/compliance':
+        specifier: workspace:*
+        version: link:../compliance
+      '@sdelka/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@sdelka/ledger':
+        specifier: workspace:*
+        version: link:../ledger
+      '@sdelka/money':
+        specifier: workspace:*
+        version: link:../money
+      '@sdelka/oracle':
+        specifier: workspace:*
+        version: link:../oracle
+
   packages/audit: {}
 
   packages/compliance:
@@ -96,6 +117,9 @@ importers:
 
   packages/e2e:
     dependencies:
+      '@sdelka/app':
+        specifier: workspace:*
+        version: link:../app
       '@sdelka/audit':
         specifier: workspace:*
         version: link:../audit
@@ -114,6 +138,9 @@ importers:
       '@sdelka/money':
         specifier: workspace:*
         version: link:../money
+      '@sdelka/oracle':
+        specifier: workspace:*
+        version: link:../oracle
 
   packages/intake:
     dependencies:
@@ -137,6 +164,9 @@ importers:
 
   packages/oracle:
     dependencies:
+      '@sdelka/audit':
+        specifier: workspace:*
+        version: link:../audit
       '@sdelka/domain':
         specifier: workspace:*
         version: link:../domain

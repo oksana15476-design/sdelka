@@ -129,6 +129,7 @@ function uncheckedEntry(input: Parameters<typeof createJournalEntry>[0]): Journa
     settles: input.settles ?? null,
     converts: input.converts ?? null,
     accrues: input.accrues ?? null,
+    funds: input.funds ?? null,
   });
 }
 
@@ -270,6 +271,44 @@ function scenarios(): readonly Scenario[] {
         accrual,
       ),
       receiveFee(at('t4', 15), deal, gel(2_000n)),
+    ]),
+  });
+
+  // Начислено и удерживать уже не из чего: расчёт прошёл, деньги транша ушли,
+  // требование осталось. Прямой случай — двойное начисление, но собрать его
+  // конструктором нельзя (`journalFeeAccruedTwice`), поэтому здесь тот же
+  // результат достигается расчётом **без удержания**: удержание — отдельный
+  // аргумент, и `null` в нём законен.
+  const strandedAccrual = accrueFee(at('sf1'), deal, gel(2_000n), 'tariff-v1');
+  list.push({
+    name: 'комиссия начислена, транш рассчитан без удержания',
+    violating: true,
+    expectCodes: ['ledger.invariant.fee_not_withheld'],
+    journal: appendEntries(emptyJournal, [
+      clientTopUp(at('t1'), buyer, gel(100_000n)),
+      lockForTranche(at('t2', 5), buyer, deal, gel(100_000n)),
+      strandedAccrual,
+      settleTrancheToClientAccount(
+        at('t3', 10),
+        trancheSettlement(deal, buyer, seller, attest(deal, buyer, seller)),
+        gel(100_000n),
+        null,
+      ),
+    ]),
+  });
+
+  // Начислено, транш ещё заперт — состояние законное, — но требование висит
+  // дольше окна. Окно у комиссии своё (`feeStaleAfterMs`), умолчание то же, что
+  // у транзита, и «прошло трое суток» выражается поздней записью.
+  list.push({
+    name: 'комиссия начислена и висит требованием третьи сутки',
+    violating: true,
+    expectCodes: ['ledger.invariant.fee_receivable_stale'],
+    journal: appendEntries(emptyJournal, [
+      clientTopUp(at('t1'), buyer, gel(100_000n)),
+      lockForTranche(at('t2', 5), buyer, deal, gel(100_000n)),
+      accrueFee(at('f1', 10), deal, gel(2_000n), 'tariff-v1'),
+      unrelatedLater('later'),
     ]),
   });
 

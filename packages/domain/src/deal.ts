@@ -65,6 +65,32 @@ export type DealEvent =
   | { readonly type: 'condition_failed' }
   | { readonly type: 'deadline_reached' }
   | { readonly type: 'revocation_requested' }
+  /**
+   * Откат утверждён людьми — выход из состояния, где автооткат запрещён.
+   *
+   * Введено этим батчем. Причина — красная линия №7 в состоянии `filed`:
+   * заявление подтверждено карточкой и не разрешено выпиской, реестр молчит.
+   * `deadline_reached` отвергает `g_no_open_filing` (Ф9), ребра
+   * `revocation_requested` из `filed` нет, а `condition_established` и
+   * `condition_failed` производит **реестр**, который и молчит. Выхода не
+   * оставалось ни одного: обязательство стояло бессрочно, и его нельзя было
+   * закрыть ни автоматически, ни волеизъявлением.
+   *
+   * Ф9 запрещает **автоматический** откат — то есть откат по течению времени.
+   * Разбор человеком автоматическим не является, и именно поэтому у этого
+   * события нет часов: его нельзя породить тиком (`schedule.ts` называет
+   * события только для транша, и `unwind_authorized` там невыразим).
+   *
+   * Утверждающих двое и они различны, как у разморозки и у списания: решение
+   * вернуть деньги при поданном заявлении стоит стороне всей сделки, и
+   * одиночная подпись здесь того же веса, что одиночная подпись под выплатой.
+   *
+   * ⚠ **[открыто] владельцу.** Это самый строгий из трёх разборов развилки
+   * (см. `STATE-MACHINES.md` §3.2): деньги не двигаются ни по времени, ни по
+   * воле одной стороны. Два других — право отзыва покупателя из `filed` и
+   * ограниченный срок действия запрета — описаны в отчёте с ценой каждого.
+   */
+  | { readonly type: 'unwind_authorized'; readonly userIds: readonly string[] }
   | { readonly type: 'tranches_settled' }
   | { readonly type: 'tranches_refunded' }
   /**
@@ -117,6 +143,20 @@ export const DEAL_GUARD_IDS = [
    * иначе сторона управляет нашим дедлайном одним сообщением (И3.2, критерий 1).
    */
   'g_no_open_filing',
+  /**
+   * Откат при открытом заявлении утверждён двумя разными людьми.
+   *
+   * Парный к `g_no_open_filing`, а не его смягчение: тот отвечает «время
+   * само вернуть деньги не может», этот — «люди могут, и вот кто именно».
+   * Разведены по имени по правилу §7 (каждое правило проверяется поимённо):
+   * «автооткат запрещён» и «разбор состоялся» — два разных утверждения, и
+   * склеенное невозможно проверить по частям.
+   *
+   * Форма та же, что у `g_unfreeze_approvers_distinct`: готовивший операцию не
+   * считается утверждающим, и повтор одного и того же имени двумя подписями
+   * не становится.
+   */
+  'g_unwind_approvers_distinct',
   'g_unfreeze_approvers_distinct',
 ] as const;
 
@@ -225,6 +265,20 @@ const DEAL_GUARDS: Readonly<
     facts.filings.every(
       (filing) => filing.source !== 'application_card' || resolvedByPaidExtract(filing, facts),
     ),
+  /**
+   * Откат утверждён двумя разными людьми, и ни один из них не готовил операцию.
+   *
+   * Утверждающие приходят **событием**, а не фактом сделки, — в отличие от
+   * `g_approvals_sufficient` у транша, где утверждения копятся по одному. Здесь
+   * копить нечего: это единственное решение, принимаемое разом, и хранить его
+   * между вызовами значило бы завести у сделки поле «откат кем-то утверждён»,
+   * которое переживёт причину своего появления.
+   */
+  g_unwind_approvers_distinct: (facts, event) => {
+    if (event.type !== 'unwind_authorized') return false;
+    const approvers = new Set(event.userIds.filter((userId) => userId !== facts.preparedBy));
+    return approvers.size >= 2;
+  },
   g_unfreeze_approvers_distinct: (facts, event) => {
     if (event.type !== 'unfreeze') return false;
     const approvers = new Set(event.userIds.filter((userId) => userId !== facts.preparedBy));
@@ -300,6 +354,36 @@ export const DEAL_TRANSITIONS: readonly DealTransition[] = Object.freeze([
    * наступило», а не течение времени, и держать деньги после него не на чем.
    */
   transition('filed', 'deadline_reached', 'unwinding', ['g_no_open_filing']),
+  /**
+   * Дверь человека в откат — красная линия №7, состояние по умолчанию при
+   * бездействии есть возврат покупателю.
+   *
+   * Проба, которую эти три ребра закрывают: сделка в `filed`, заявление
+   * подтверждено карточкой и не разрешено выпиской, реестр молчит.
+   * `deadline_reached` отвергает `g_no_open_filing`, ребра
+   * `revocation_requested` из `filed` нет, а `condition_established` и
+   * `condition_failed` производит тот самый реестр, который молчит. До этого
+   * батча из `filed` не выводило **ни одно** событие, доступное системе
+   * изнутри, — обход графа этого не видел, потому что рёбра в таблице есть, а
+   * guard'ы обход не читает (тест `red-line-7-filed.test.ts`).
+   *
+   * `funded` в списке по той же причине и с ещё меньшим прикрытием: оттуда до
+   * этого батча не вело вообще ничего, кроме подачи и заморозки, — ни отсечки,
+   * ни отзыва. Транши при этом в `reserved`, то есть деньги заперты.
+   *
+   * `funding` — ради симметрии двух автоматических дверей: `g_no_open_filing`
+   * стоит на обеих (`funding` и `filed`), значит и разбор человеком обязан
+   * стоять на обеих. Guard, снятый на одной двери, не открывает состояние.
+   *
+   * Ребра `settling → unwinding` здесь **нет намеренно**: после
+   * `condition_established` условие наступило, платёж считается исполненным в
+   * пользу продавца, и «разобрать» это утверждением двух наших сотрудников
+   * значило бы отдать себе право отменять состоявшийся расчёт (§1.4, граница
+   * отзыва; красная линия №6).
+   */
+  transition('funding', 'unwind_authorized', 'unwinding', ['g_unwind_approvers_distinct']),
+  transition('funded', 'unwind_authorized', 'unwinding', ['g_unwind_approvers_distinct']),
+  transition('filed', 'unwind_authorized', 'unwinding', ['g_unwind_approvers_distinct']),
   transition('settling', 'tranches_settled', 'settled', ['g_all_tranches_paid_out', 'g_no_live_tranche']),
   transition('unwinding', 'tranches_refunded', 'unwound', ['g_all_tranches_refunded', 'g_no_live_tranche']),
   ...NON_TERMINAL_DEAL_STATUSES.map((status) => transition(status, 'compliance_hold', 'frozen')),
@@ -388,6 +472,16 @@ export function reduceDeal(
       return failure(
         rejection(RejectionCode.releaseConditionRequiresConfirmation, [], {
           conditionType: event.conditionType,
+        }),
+      );
+    }
+    // Источника нет — отказ по имени, а не молчаливая невозможность собрать
+    // наблюдение (`release-condition.ts`, `calendar_date`).
+    if (!meta.sourceImplemented) {
+      return failure(
+        rejection(RejectionCode.releaseConditionSourceUnavailable, [], {
+          conditionType: event.conditionType,
+          sourceKey: meta.sourceKey,
         }),
       );
     }

@@ -1,6 +1,6 @@
 import type { DocumentNumberMatch, NameObservation, SanctionsProviderResponse, SanctionsScreeningPort, SanctionsScreeningRequest } from '@sdelka/compliance';
 import type { Instant, PayoutOutcome, ReconciliationOutcome, StatementFields } from '@sdelka/domain';
-import type { RawSourceRef } from '@sdelka/audit';
+import type { CapturedRawSource, RawSourceRef } from '@sdelka/audit';
 
 /**
  * Порты внешних источников — **единственное**, что подставляется фикстурами.
@@ -57,8 +57,16 @@ export interface RegistryExtract {
   readonly ownerNames: readonly NameObservation[];
   /** Кадастровый код объекта, о котором выписка. Сверяется с объектом сделки. */
   readonly cadastralCode: string;
-  /** Ссылка на сырой ответ источника: разобранные поля суд не убедят (Ф11). */
-  readonly rawSource: RawSourceRef;
+  /**
+   * **Подтверждённый** сырой ответ источника, а не ссылка на него.
+   *
+   * Ссылки было мало: отпечаток проверялся на форму, и наблюдение с
+   * отпечатком, за которым не стоит ни одного записанного ответа, доходило до
+   * выплаты. Байты есть у адаптера в момент разбора — значит подтверждение
+   * строится там, где оно возможно, а не откладывается на потребителя, у
+   * которого байтов уже нет (`CORE.md` Ф11, красная линия №5).
+   */
+  readonly rawSource: CapturedRawSource;
   readonly observedAt: Instant;
 }
 

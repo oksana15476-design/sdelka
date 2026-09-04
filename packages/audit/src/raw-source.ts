@@ -32,6 +32,16 @@ export const RAW_SOURCE_KINDS = [
   'condition_act',
   'payment_provider_response',
   'timestamp_response',
+  /**
+   * Карточка заявления реестра — бесплатный сигнал уровня L1 (`ORACLE.md` §2).
+   *
+   * Своим видом, а не `registry_extract`: восстановление истории через год
+   * показало бы карточку платной выпиской, то есть соврало бы об уровне
+   * доверия, на котором двигались деньги. Значение добавлено **в конец**:
+   * порядок меток перечня зеркалится в `sdelka.raw_source_kind`, а
+   * `ALTER TYPE ... ADD VALUE` умеет только дописывать в конец.
+   */
+  'application_card',
 ] as const;
 export type RawSourceKind = (typeof RAW_SOURCE_KINDS)[number];
 
@@ -87,4 +97,96 @@ export function rawSourceDigest(bytes: Uint8Array): Sha256Hex {
  */
 export function verifyRawSource(bytes: Uint8Array, ref: RawSourceRef): boolean {
   return bytes.length === ref.byteLength && digestOfBytes(bytes) === ref.digest;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Засвидетельствованный отпечаток                                           */
+/* ------------------------------------------------------------------------- */
+
+declare const attestedBrand: unique symbol;
+
+/**
+ * Отпечаток, за которым **предъявлены байты**.
+ *
+ * Красная линия №5 держалась на непустой строке: `rawSourceRef` принимал
+ * `digest` на слово, форму проверял `sha256Hex` (64 hex) — и наблюдение с
+ * отпечатком, которому не соответствует ни один полученный ответ, проходило
+ * все guard'ы. Проверка формы отвечает на вопрос «похоже ли это на отпечаток»,
+ * а вопрос стоит другой: «есть ли за ним ответ источника» (`CORE.md` Ф11:
+ * разобранные поля без исходника суд не убедит).
+ *
+ * Значение этого типа получить иначе, чем предъявив байты
+ * (`captureRawSource`/`attestRawSource`), нельзя: метка приватная, и подделать
+ * её можно только приведением типа, которое видно в ревью. Требование,
+ * выраженное типом, невозможно забыть; требование, выраженное вызовом
+ * `verifyRawSource` у вызывающего, забывается — и было забыто везде, кроме
+ * собственного unit-теста.
+ */
+export type AttestedDigest = Sha256Hex & { readonly [attestedBrand]: 'attested' };
+
+/**
+ * Ссылка, за которой стоят предъявленные байты.
+ *
+ * Подтип `RawSourceRef`: всё, что читает ссылку, читает и эту (запись журнала,
+ * пакет доказательств, восстановление истории). Разница только в том, что
+ * **построить** её без байтов нечем.
+ */
+export interface CapturedRawSource extends RawSourceRef {
+  readonly digest: AttestedDigest;
+}
+
+export interface RawSourceCapture {
+  readonly sourceKind: RawSourceKind;
+  readonly storageRef: string;
+  readonly mediaType: string;
+  readonly receivedAt: AuditInstant;
+  readonly provider: string;
+  /**
+   * Сами байты ответа. В значение они не попадают — из них выводятся длина и
+   * отпечаток, и потому ни то, ни другое нельзя объявить мимо ответа.
+   */
+  readonly bytes: Uint8Array;
+}
+
+/**
+ * Ответ источника получен: длина и отпечаток **выводятся из байтов**, а не
+ * принимаются полями. Это и есть точка, в которой «сырой ответ записан»
+ * перестаёт быть утверждением вызывающего.
+ *
+ * Байты после этого живут в модуле «Документы» по адресу `storageRef`
+ * (шифрование, журнал доступа — `FUNCTIONAL.md` §1); в цепочку идёт ссылка.
+ */
+export function captureRawSource(input: RawSourceCapture): CapturedRawSource {
+  const ref = rawSourceRef({
+    sourceKind: input.sourceKind,
+    storageRef: input.storageRef,
+    mediaType: input.mediaType,
+    byteLength: input.bytes.length,
+    digest: digestOfBytes(input.bytes),
+    receivedAt: input.receivedAt,
+    provider: input.provider,
+  });
+  return ref as CapturedRawSource;
+}
+
+/**
+ * Сведение уже записанной ссылки с предъявленными байтами.
+ *
+ * Нужно там, где ссылка пришла из базы (типы границу процесса не переживают),
+ * а байты — из хранилища документов: суду предъявляется файл, и связь «эта
+ * запись — про эти байты» обязана быть пересчитана, а не принята на веру.
+ * Отказ здесь — исключение, а не `false`: продолжать с ответом, который не
+ * сходится с записью, нельзя ни в одном сценарии.
+ */
+export function attestRawSource(bytes: Uint8Array, ref: RawSourceRef): CapturedRawSource {
+  if (bytes.length !== ref.byteLength) {
+    // Длина отдельной причиной: расхождение длины при совпавшем отпечатке —
+    // это подобранная коллизия, и в отчёте она обязана быть отличима от
+    // обычной подмены файла.
+    throw new AuditError(AuditErrorCode.rawSourceNotAttested, { reason: 'byte_length' });
+  }
+  if (!verifyRawSource(bytes, ref)) {
+    throw new AuditError(AuditErrorCode.rawSourceNotAttested, { reason: 'digest' });
+  }
+  return ref as CapturedRawSource;
 }

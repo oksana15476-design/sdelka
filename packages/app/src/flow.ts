@@ -100,10 +100,12 @@ import {
   initialObservationState,
   isTerminalObservationStatus,
   reduceObservation,
+  sourcedObservation,
 } from '@sdelka/oracle';
 import type { RegistryApplicationCard, RegistryExtract } from './ports';
 import {
   type DealRuntime,
+  type InvariantViolation,
   type Notification,
   type ObservationTask,
   type SuppressedEntry,
@@ -112,6 +114,7 @@ import {
   coverageOk,
   dealOf,
   payerOf,
+  recorded,
   sealed,
   trancheOf,
   withDeal,
@@ -471,12 +474,24 @@ export function receiveWriteOffTransit(world: World, amount: Money<CurrencyCode>
  * пришло меньше обещанного, разницу признаёт расходом платформа.
  *
  * Обязательство перед клиентом доводится до полной суммы **в момент
- * поступления**, а не потом. Отдельным шагом мира — и этот шаг сегодня один не
- * проходит: на номинальном счёте лежит только пришедшее, файл клиента
- * необеспечен, красная линия №3 сработала. Так и обещает документ: «до второй
- * записи транш не обеспечен, и это видно в системе как расхождение, а не как
- * норма». В сквозном мире «видно как расхождение» выражается единственным
- * способом, который у него есть, — шаг не запечатывается.
+ * поступления**, а не потом. Между этой записью и довнесением покрытие меньше
+ * единицы — и документ говорит об этом промежутке дословно: «до второй записи
+ * транш не обеспечен, и это видно в системе как расхождение, а не как норма».
+ *
+ * ⚠ Прежде шаг просто не запечатывался, и это было **неверно дважды**. Первое:
+ * исключение стирает состояние, поэтому расхождение оказывалось не видно, а
+ * признание — непроводимо; ровно ту же ошибку `0008_views.sql` называет
+ * причиной, по которой покрытие сделано представлением, а не `CHECK`. Второе:
+ * признание ломает покрытие **всегда** (деньги на номинальный счёт ещё не
+ * пришли ниоткуда), поэтому мира, в котором случай А исполним, не существовало
+ * вовсе — функция не могла вернуть значение ни при каких данных, а вместе с ней
+ * был недостижим и второй момент.
+ *
+ * Теперь шаг идёт через `recorded` с **поимённым** списком терпимого: покрытие
+ * и пофайловое обеспечение. Любое другое нарушение — по-прежнему исключение, а
+ * следующий шаг мира запечатывается обычным `sealed` и падает, пока
+ * расхождение живо: после признания в мире не может произойти ничего, кроме
+ * довнесения.
  */
 export interface ShortfallRecognition {
   readonly world: World;
@@ -486,6 +501,11 @@ export interface ShortfallRecognition {
    * собрать такое значение мимо `absorbShortfall` невозможно по типу.
    */
   readonly recognised: RecognisedShortfall;
+  /**
+   * Названное расхождение промежутка — значением, а не молчанием. Пусто оно
+   * не бывает: признание всегда оставляет покрытие меньше единицы.
+   */
+  readonly violations: readonly InvariantViolation[];
 }
 
 export function absorbIncomingShortfall(
@@ -496,15 +516,19 @@ export function absorbIncomingShortfall(
 ): ShortfallRecognition {
   const { meta, seq } = nextMeta(world, 'shortfall-absorbed');
   const recognised = absorbShortfall(meta, owner, received, shortfall);
-  return {
-    world: sealed({
+  const step = recorded(
+    {
       ...world,
       seq,
       journal: appendJournal(world, recognised),
       checks: world.checks,
-    }),
-    recognised,
-  };
+    },
+    // Ровно два и поимённо: недостаёт денег под обязательством, а не денег у
+    // клиента. `negative_client_balance` сюда не входит намеренно — это была бы
+    // другая ошибка, и терпеть её нельзя.
+    ['coverage_below_one', 'funds_source_uncovered'],
+  );
+  return { world: step.world, recognised, violations: step.violations };
 }
 
 /**
@@ -873,7 +897,18 @@ export function receivePaidExtract(
   if (observation === null) {
     throw new Error(`app.observation.missing_after_attach:${trancheId}`);
   }
-  return applyObservationEvent(attached, trancheId, { type: 'extract_received', observation }, options);
+  // **Красная линия №5 на боевом пути.** Наблюдение предъявляется автомату
+  // вместе с ответом, из которого разобрано, а не отдельно: `sourcedObservation`
+  // сверяет отпечаток с байтами и бросает при расхождении. Разобранные поля без
+  // исходника суд не убедит (`CORE.md` Ф11), и раньше сюда проходило наблюдение
+  // с отпечатком, за которым не стояло ни одного записанного ответа.
+  const sourced = sourcedObservation(observation, extract.rawSource);
+  return applyObservationEvent(
+    attached,
+    trancheId,
+    { type: 'extract_received', observation: sourced },
+    options,
+  );
 }
 
 export interface ObservationStepResult {

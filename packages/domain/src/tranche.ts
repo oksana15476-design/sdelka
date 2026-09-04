@@ -28,6 +28,7 @@ import {
 } from './instant';
 import type { Intent, LedgerTemplate } from './intents';
 import { RELEASE_CONDITIONS } from './release-condition';
+import { DEFAULT_FEE_CEILING_POLICY, maxWithholding } from './tariff';
 import {
   type Rejection,
   type Result,
@@ -802,6 +803,16 @@ function entryIntents(
           payerClientKey: payerAccountKey(context),
           recipientClientKey: act.recipient.accountKey,
           amount,
+          /**
+           * Потолок удержания едет вместе с суммой (`tariff.ts`, эпик E16).
+           * Считается здесь и от политики транша, а не на той стороне и не от
+           * сегодняшней настройки: `CORE.md` Ф11 — решение хранит политику,
+           * действовавшую в момент принятия.
+           */
+          maxWithholding: maxWithholding(
+            amount,
+            context.facts.feeCeilingPolicy ?? DEFAULT_FEE_CEILING_POLICY,
+          ),
           attestation: trancheSettlementAttestation(context, act, evidenceRef),
         },
         { type: 'notify', audience: 'both', messageKey: 'tranche.paid_out.both' },
@@ -900,6 +911,25 @@ export function reduceTranche(
       return failure(
         rejection(RejectionCode.releaseConditionRequiresConfirmation, [], {
           conditionType: event.conditionType,
+        }),
+      );
+    }
+    /**
+     * Владелец тип подтвердил, но наблюдения требуемого уровня от его источника
+     * не производит никто (`release-condition.ts`, `calendar_date`).
+     *
+     * Отказ **здесь**, а не в guard'ах ниже, и в этом весь смысл правки: до
+     * этого батча такое событие уходило в `g_observation_sufficient` и
+     * `g_fields_match` и выглядело как «доказательств не хватило» — притом что
+     * их не могло хватить никогда. Разница между «сегодня не сошлось» и
+     * «сойтись не может» — это разница между «подождём выписку» и «этого
+     * продукта нет».
+     */
+    if (!meta.sourceImplemented) {
+      return failure(
+        rejection(RejectionCode.releaseConditionSourceUnavailable, [], {
+          conditionType: event.conditionType,
+          sourceKey: meta.sourceKey,
         }),
       );
     }

@@ -18,6 +18,15 @@ export const RejectionCode = {
   terminalState: 'domain.state.terminal',
   releaseConditionRequiresConfirmation: 'domain.release_condition.requires_confirmation',
   releaseConditionUnknown: 'domain.release_condition.unknown',
+  /**
+   * Тип условия подтверждён владельцем, но наблюдения требуемого уровня от его
+   * источника не производит никто (`release-condition.ts`, `calendar_date`).
+   *
+   * Отдельный код, а не `releaseConditionRequiresConfirmation`: там ждут
+   * решения владельца, здесь — кода. Один отказ на две причины оставил бы
+   * оператора без ответа на вопрос «чего ждать».
+   */
+  releaseConditionSourceUnavailable: 'domain.release_condition.source_unavailable',
   /** Акт получателя об условии подменён у транша, где деньги уже приняты (Ф13). */
   conditionActSubstituted: 'domain.condition_act.substituted',
   /** Нетерминальное состояние после `pending` собрано без акта (Ф13). */
@@ -48,6 +57,14 @@ export const RejectionCode = {
    * между ошибкой вызывающего и решением, которое оператору надо переиграть.
    */
   unfreezeTargetNotAllowed: 'domain.unfreeze.target_not_allowed',
+  /**
+   * Удержание превышает потолок ставки (`tariff.ts`, эпик E16). Отдельный код,
+   * а не «сумма неверна»: «удержали больше, чем сумма» ловит `@sdelka/money`, а
+   * здесь величина арифметически законна и всё равно недопустима.
+   */
+  feeExceedsCeiling: 'domain.fee.exceeds_ceiling',
+  /** Сам потолок задан величиной, которой не существует: отрицательной или больше единицы. */
+  feeCeilingInvalid: 'domain.fee_ceiling.invalid',
   invalidInstant: 'domain.instant.invalid',
   invalidUuid: 'domain.uuid.invalid',
 } as const;

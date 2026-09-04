@@ -35,6 +35,7 @@ import {
   debit,
 } from './entry';
 import { LedgerError, LedgerErrorCode } from './errors';
+import { type Journal, appendEntry } from './journal';
 
 /**
  * Словарь записей — FUNCTIONAL.md §3.1.
@@ -440,7 +441,7 @@ export function writeOffTransitArrived(
  *
  * ```
  * Кт bank:nominal:{исходная}    сумма   файл клиента
- * Дт fx:settlement:{k}          сумма   файл клиента
+ * Дт fx:settlement:{c}:{k}      сумма   файл клиента
  * ```
  *
  * **Исправленный дефект, доставшийся от прошлого батча.** Разделение
@@ -470,7 +471,7 @@ export function writeOffTransitArrived(
  * валюте, не поставив денег, больше нельзя.
  *
  * Чего это не закрывает, честно: после M2 и до M3 позиция в целевой валюте
- * лежит на `fx:settlement:{k}` — клиентском активе, — поэтому портфельное
+ * лежит на `fx:settlement:{c}:{k}` — клиентском активе, — поэтому портфельное
  * покрытие в этот промежуток по-прежнему сходится в единицу. Это состояние
  * «встречная валюта не поставлена», и ловит его только инвариант
  * `fxPositionOpen` по возрасту позиции (`invariants.ts`), потому что ни
@@ -494,7 +495,7 @@ export function sendForConversion(
     converts: execution,
     postings: [
       credit(custodyOf(source), source, ref),
-      debit(fxSettlement(execution.conversionId), source, ref),
+      debit(fxSettlement(owner, execution.conversionId), source, ref),
     ],
   });
 }
@@ -505,8 +506,8 @@ export function sendForConversion(
  *
  * ```
  * Дт client:{c}:free      80 000 USD   файл клиента   (старое обязательство закрыто)
- *     Кт fx:settlement:{k}    80 000 USD   файл клиента   (требование в исходной закрыто)
- * Дт fx:settlement:{k}   213 495 GEL   файл клиента   (требование во встречной)
+ *     Кт fx:settlement:{c}:{k} 80 000 USD   файл клиента   (требование в исходной закрыто)
+ * Дт fx:settlement:{c}:{k} 213 495 GEL   файл клиента   (требование во встречной)
  *     Кт client:{c}:free     213 495 GEL   файл клиента   (новое обязательство)
  * ```
  *
@@ -523,7 +524,7 @@ export function sendForConversion(
  * До M3 обмен разворачивается у контрагента, а дефолт контрагента — это
  * недостача платформы (§3.1, случай А), а не убыток клиента.
  *
- * M2 без M1 уводит `fx:settlement:{k}` в минус по исходной валюте —
+ * M2 без M1 уводит `fx:settlement:{c}:{k}` в минус по исходной валюте —
  * отрицательный остаток клиентского счёта, инвариант и стоп-кран.
  */
 export function executeConversion(
@@ -534,7 +535,7 @@ export function executeConversion(
   const ref = clientRef(owner);
   const source = execution.converted.source;
   const target = execution.converted.target;
-  const account = fxSettlement(execution.conversionId);
+  const account = fxSettlement(owner, execution.conversionId);
   return createJournalEntry({
     ...meta,
     kind: 'settlement',
@@ -554,7 +555,7 @@ export function executeConversion(
  *
  * ```
  * Дт bank:nominal:gel    213 495 GEL   файл клиента
- *     Кт fx:settlement:{k}   213 495 GEL   файл клиента   (требование закрыто)
+ *     Кт fx:settlement:{c}:{k} 213 495 GEL   файл клиента   (требование закрыто)
  * Дт bank:operating:gel    1 505 GEL                     (наш спред)
  *     Кт fx:income             1 505 GEL
  * ```
@@ -570,7 +571,7 @@ export function executeConversion(
  * `assertPlatformIncomeSweptToOperating`). На номинальном счёте наш спред не
  * оседает ни на минуту.
  *
- * M3 без M2 уводит `fx:settlement:{k}` в минус по встречной валюте: закрытие
+ * M3 без M2 уводит `fx:settlement:{c}:{k}` в минус по встречной валюте: закрытие
  * несуществующего требования — отрицательный остаток клиентского счёта,
  * инвариант и стоп-кран.
  */
@@ -603,7 +604,7 @@ export function receiveConversion(
     converts: execution,
     postings: [
       debit(custodyOf(target), target, ref),
-      credit(fxSettlement(execution.conversionId), target, ref),
+      credit(fxSettlement(owner, execution.conversionId), target, ref),
       ...(earned === null
         ? []
         : [
@@ -750,6 +751,17 @@ export function fundShortfall(meta: EntryMeta, recognised: RecognisedShortfall):
     ...meta,
     kind: 'settlement',
     memoKey: 'ledger.entry.shortfall_funded',
+    // Третий контур, и он закрывает то, чего не закрывали первые два. Токен —
+    // защита словаря, инвариант — сложение постфактум; ни тот ни другой не
+    // мешал довнести **одно и то же** признание дважды и не требовал, чтобы
+    // признание вообще лежало в журнале. Ссылка делает довнесение адресным:
+    // `appendEntry` находит признание, сверяет владельца, валюту и сумму и
+    // отказывает во втором довнесении по нему.
+    funds: {
+      recognisedEntryId: recognised.id,
+      owner,
+      amount,
+    },
     postings: [
       debit(custodyOf(amount), amount, ref),
       credit(bankOperating(amount.currency), amount),
@@ -825,6 +837,99 @@ export function accrueFee(
     accruedFor: tranche,
     tariffVersionId,
   }) as unknown as FeeAccrual;
+}
+
+/**
+ * Начисление по траншу, уже лежащее в журнале, — или `null`, если его там нет.
+ *
+ * Токен воссоздаётся из записи, а не выдаётся конструктором, и это не
+ * послабление, а усиление: конструктор выдаёт токен на запись, которую в журнал
+ * ещё никто не положил, а здесь основание — запись, **лежащая в журнале** и
+ * прошедшая `assertFeeAccrualDeclared`, то есть признавшая ровно эту сумму по
+ * ровно этому траншу.
+ *
+ * Снятое исправлением начисление не возвращается: §4.4 сняло его как раз
+ * потому, что комиссия за расчёт не начисляется, и удержание по снятому
+ * начислению увело бы `fee:receivable` в минус.
+ *
+ * Начисление без объявления (собранное низкоуровневой дверью) сюда не попадает:
+ * восстановить из проводок версию тарифного плана нельзя, а токен без неё —
+ * половина токена. Второе начисление по такому траншу всё равно не пройдёт:
+ * `appendEntry` считает начисления по проводкам, а не по объявлению.
+ */
+export function feeAccrualFor(journal: Journal, deal: TrancheRef): FeeAccrual | null {
+  const reversed = new Set<string>();
+  for (const entry of journal.entries) {
+    if (entry.kind === 'correction' && entry.correctsEntryId !== null) {
+      reversed.add(entry.correctsEntryId);
+    }
+  }
+  for (const entry of journal.entries) {
+    const accrues = entry.accrues;
+    if (accrues === null || entry.kind !== 'settlement') continue;
+    if (accrues.deal.dealId !== deal.dealId || accrues.deal.trancheId !== deal.trancheId) continue;
+    if (reversed.has(entry.id)) continue;
+    return withToken(entry, {
+      accruedFee: accrues.fee,
+      accruedFor: accrues.deal,
+      tariffVersionId: accrues.tariffVersionId,
+    }) as unknown as FeeAccrual;
+  }
+  return null;
+}
+
+/**
+ * Начислить комиссию **один раз**: повтор возвращает то же начисление и не
+ * добавляет в журнал ничего.
+ *
+ * Это и есть идемпотентность, которой у начисления не было. `accrueFee` —
+ * чистый конструктор, журнала он не видит и видеть не должен, поэтому «уже
+ * начисляли?» отвечается там, где журнал есть. Пока такой формы не было, любой
+ * повторный вход в `release_pending`, любой ретрай обработчика и любая
+ * перезапись события давали **второе** начисление: `fee:receivable` вдвое,
+ * доход признан дважды, и ни один инвариант этого не видел.
+ *
+ * Повтор с другой суммой или другой версией плана — не повтор, а расхождение:
+ * §4.2 запрещает пересчёт задним числом, и молча вернуть старое начисление
+ * значило бы скрыть, что тариф разошёлся. Такой вызов отвергается.
+ *
+ * Журнал возвращается вместе с начислением намеренно: у идемпотентной операции
+ * два исхода — «добавили запись» и «записи не добавили», — и оба обязаны быть
+ * видны вызывающему одним значением, иначе он попытается положить возвращённое
+ * начисление в журнал сам и получит отказ по совпадению идентификаторов.
+ */
+export interface FeeAccrualOutcome {
+  readonly journal: Journal;
+  readonly accrual: FeeAccrual;
+  /** `false` — начисление уже было, второй записи не появилось. */
+  readonly appended: boolean;
+}
+
+export function accrueFeeOnce(
+  journal: Journal,
+  meta: EntryMeta,
+  deal: TrancheRef,
+  fee: Money<CurrencyCode>,
+  tariffVersionId: string,
+): FeeAccrualOutcome {
+  const existing = feeAccrualFor(journal, deal);
+  if (existing !== null) {
+    if (
+      existing.accruedFee.currency !== fee.currency ||
+      existing.accruedFee.minor !== fee.minor ||
+      existing.tariffVersionId !== tariffVersionId
+    ) {
+      throw new LedgerError(LedgerErrorCode.entryFeeAccrualMismatch, {
+        dealId: deal.dealId,
+        trancheId: deal.trancheId,
+        accrued: `${existing.accruedFee.currency} ${existing.accruedFee.minor} ${existing.tariffVersionId}`,
+        requested: `${fee.currency} ${fee.minor} ${tariffVersionId}`,
+      });
+    }
+    return { journal, accrual: existing, appended: false };
+  }
+  const accrual = accrueFee(meta, deal, fee, tariffVersionId);
+  return { journal: appendEntry(journal, accrual), accrual, appended: true };
 }
 
 /**

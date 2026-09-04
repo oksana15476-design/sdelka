@@ -227,3 +227,102 @@ describe('недостача, покрытая платформой (§3.1, сл
     ).toEqual([[payer, 'GEL', 7_000n]]);
   });
 });
+
+/**
+ * Третий контур довнесения: **ссылка на признание**.
+ *
+ * Токен закрыл словарь, инвариант закрыл сложение постфактум, и между ними
+ * оставалась щель, которую не видел ни один: токен — значение, его никто не
+ * гасит, и признание могло вообще не попасть в журнал. `absorbShortfall`
+ * возвращает запись, положить её в журнал — отдельное действие, и никто не
+ * обязывал его сделать.
+ */
+describe('довнесение закрывает конкретное признание', () => {
+  it('refuses a top-up whose recognition never reached the journal', () => {
+    // Признание построено и **не** добавлено: на номинальном счёте деньги
+    // платформы, признанного расхода за ними нет.
+    const recognised = absorbShortfall(at('s1'), payer, received, shortfall);
+    expectCode(
+      () => appendEntry(operatingFundedBy(50_000n), fundShortfall(at('s2', 10), recognised)),
+      LedgerErrorCode.journalShortfallRecognitionMissing,
+    );
+  });
+
+  it('refuses to fund one recognition twice', () => {
+    let journal = operatingFundedBy(50_000n);
+    const recognised = absorbShortfall(at('s1', 5), payer, received, shortfall);
+    journal = appendEntries(journal, [recognised, fundShortfall(at('s2', 10), recognised)]);
+    expect(checkLedgerInvariants(journal)).toEqual([]);
+
+    // Тот же токен, другой идентификатор записи: по идентификатору такое
+    // довнесение не отличить от первого, и до ссылки его ловил только
+    // `shortfallOverfunded` — сложением за всю историю, постфактум.
+    expectCode(
+      () => appendEntry(journal, fundShortfall(at('s3', 15), recognised)),
+      LedgerErrorCode.journalShortfallFundedTwice,
+    );
+  });
+
+  it('refuses a declaration that points at an entry recognising nothing for this client', () => {
+    let journal = operatingFundedBy(50_000n);
+    const recognised = absorbShortfall(at('s1', 5), payer, received, shortfall);
+    journal = appendEntry(journal, recognised);
+    // Ссылка есть, признание есть — но признано оно по другому клиенту.
+    expectCode(
+      () =>
+        appendEntry(
+          journal,
+          createJournalEntry({
+            ...at('s2', 10),
+            kind: 'settlement',
+            memoKey: 'ledger.entry.shortfall_funded',
+            funds: { recognisedEntryId: 's1', owner: buyer, amount: shortfall },
+            postings: [
+              debit(bankNominal('GEL'), shortfall, { clientKey: buyer }),
+              credit(bankOperating('GEL'), shortfall),
+            ],
+          }),
+        ),
+      LedgerErrorCode.journalShortfallRecognitionMissing,
+    );
+  });
+
+  /**
+   * Объявление не украшение: запись обязана делать ровно то, что объявила.
+   * Довнесение, попутно поднимающее чужой файл, довнесением не является — и до
+   * объявления такая форма была неотличима от честной.
+   */
+  it('refuses a top-up that raises a file other than the declared one', () => {
+    expectCode(
+      () =>
+        createJournalEntry({
+          ...at('s2', 10),
+          kind: 'settlement',
+          memoKey: 'ledger.entry.shortfall_funded',
+          funds: { recognisedEntryId: 's1', owner: payer, amount: shortfall },
+          postings: [
+            debit(bankNominal('GEL'), shortfall, { clientKey: buyer }),
+            credit(bankOperating('GEL'), shortfall),
+          ],
+        }),
+      LedgerErrorCode.entryShortfallFundingMismatch,
+    );
+  });
+
+  it('refuses a top-up for more than it declares', () => {
+    expectCode(
+      () =>
+        createJournalEntry({
+          ...at('s2', 10),
+          kind: 'settlement',
+          memoKey: 'ledger.entry.shortfall_funded',
+          funds: { recognisedEntryId: 's1', owner: payer, amount: shortfall },
+          postings: [
+            debit(bankNominal('GEL'), money('GEL', 20_000n), { clientKey: payer }),
+            credit(bankOperating('GEL'), money('GEL', 20_000n)),
+          ],
+        }),
+      LedgerErrorCode.entryShortfallFundingMismatch,
+    );
+  });
+});

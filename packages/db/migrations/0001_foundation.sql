@@ -334,7 +334,11 @@ INSERT INTO sdelka.account_kind
   ('shortfall_expense',     'expense',   'platform', 'result',     NULL,             NULL,       false, false, false, false),
   ('unclaimed_liability',   'liability', 'client',   NULL,         'pooled',         'terminal', false, false, false, false),
   ('transit_writeoff',      'asset',     'client',   NULL,         'pooled',         'terminal', false, false, false, false),
-  ('fx_settlement',         'asset',     'client',   NULL,         'in_attribution', NULL,       false, false, false, true),
+  -- Позиция обмена ключуется владельцем И ключом конверсии: без клиента в
+  -- коде счёта позиции разных клиентов сливались бы под одним ключом, а
+  -- открытая позиция — единственное, чем ловится «встречная валюта не
+  -- поставлена». Отсюда file_scope owner_in_code и needs_client.
+  ('fx_settlement',         'asset',     'client',   NULL,         'owner_in_code',  NULL,       false, true,  false, true),
   ('fee_receivable',        'asset',     'platform', 'receivable', NULL,             NULL,       false, false, false, false),
   ('transit_fee',           'asset',     'platform', 'transit',    NULL,             NULL,       false, false, false, false),
   ('fx_accounting_diff',    'expense',   'platform', 'result',     NULL,             NULL,       false, false, false, false);

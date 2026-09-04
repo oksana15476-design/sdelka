@@ -17,6 +17,7 @@ import {
   observationSatisfies,
 } from './observation';
 import { type PartyRef, isSameParty } from './party';
+import type { FeeCeilingPolicy } from './tariff';
 import type { TrancheEvent } from './tranche-events';
 
 /**
@@ -325,6 +326,19 @@ export interface TrancheFacts {
    * утверждения не набираются: отказ закрытый, а не подстановка ближайшего.
    */
   readonly officialRateAtCreation: OfficialRateAtCreation | null;
+  /**
+   * Потолок удержания, действующий для этого транша (`tariff.ts`, эпик E16).
+   * Лежит в фактах рядом с `approvalPolicy` и `observationPolicy` и по той же
+   * причине: `CORE.md` Ф11 — решение хранит версию политики, действовавшую в
+   * момент принятия.
+   *
+   * ⚠ Поле **необязательное**, и это безопасно ровно потому, что умолчание —
+   * самое строгое известное значение (`DEFAULT_FEE_CEILING_POLICY`, два
+   * процента). Пропуск поля не может ослабить правило, а только ужесточить
+   * его до умолчания; необязательным оно сделано, чтобы не ломать сборку
+   * фактов в `packages/app` и `apps/web`, куда этот батч не заходит.
+   */
+  readonly feeCeilingPolicy?: FeeCeilingPolicy;
   readonly activePayouts: number;
   /** Результат проверки покрытия из учёта: считает ledger, домен только читает. */
   readonly coverageOk: boolean;

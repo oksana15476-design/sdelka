@@ -113,10 +113,22 @@ export function coverage(journal: Journal): readonly CoverageByCurrency[] {
     // по траншам и `unclaimed:liability` не видит вовсе. Нужна вторая
     // проверка». Вторая проверка — `unclaimedCoverage` ниже.
     //
-    // Условие — по объявленной природе счёта, а не по имени: клиентский актив,
-    // чей файл приносит отнесение (номинальный счёт), против клиентских
-    // обязательств, кроме терминального пула.
-    if (isClientCustodyAccount(account) && clientFundsFile(account) === 'in_attribution') {
+    // Условие — по объявленной природе счёта, а не по имени: клиентский актив
+    // против клиентского обязательства, и с обеих сторон вычитается
+    // терминальный пул.
+    //
+    // **[исправляет предыдущее]** Прежде актив отбирался по `in_attribution`, и
+    // это работало ровно потому, что из трёх клиентских активов файл приносило
+    // отнесение у двух: номинального счёта и счёта расчётов с валютным
+    // контрагентом. Как только у счёта обмена появился владелец в коде (см.
+    // `accounts.ts`), деньги у контрагента выпали из числителя, и покрытие
+    // между моментами 2 и 3 обмена проваливалось ниже единицы — при том, что
+    // §3.3 прямо описывает этот промежуток как **покрытый**: деньги клиента,
+    // просто не на нашем счёте. Происхождение файла к вопросу «чьи это деньги
+    // и лежат ли они где-то» отношения не имеет вовсе; терминальный пул
+    // исключается симметрично обеим сторонам, потому что его считает
+    // `unclaimedCoverage`.
+    if (isClientCustodyAccount(account) && poolDirection(account) !== 'terminal') {
       custody.set(currency, (custody.get(currency) ?? 0n) + naturalSign(account, posting));
     } else if (isClientObligationAccount(account) && poolDirection(account) !== 'terminal') {
       obligations.set(
@@ -686,8 +698,112 @@ export function feePositions(journal: Journal): readonly FeePosition[] {
 }
 
 /**
+ * Незакрытая дебиторка по комиссии: сколько по траншу **начислено и до сих пор
+ * не удержано**, с какого момента и ушли ли уже деньги транша.
+ *
+ * §4.6 называет «начислено, не удержано» законным состоянием — но законно оно
+ * ровно до расчёта: удерживать комиссию не из чего, когда запертая часть транша
+ * пуста. Пока такого отчёта не было, состояние «начислено и никогда не
+ * удержано» не выражалось ничем: `feePositions` показывает остаток требования,
+ * но остаток без возраста и без ответа «а деньги-то ещё есть?» — не расхождение,
+ * а просто число, на которое никто не смотрит.
+ *
+ * Прямой случай, ради которого отчёт появился: **двойное начисление**. Два
+ * `accrueFee` по одному траншу удваивают `fee:receivable` и признают доход
+ * дважды; расчёт удерживает одно начисление, второе остаётся требованием
+ * навсегда. Ни покрытие, ни отрицательный остаток, ни `transitStale` этого не
+ * видят — транзит там как раз в порядке.
+ *
+ * `trancheDrained` — деньги транша ушли: запертая часть по этому траншу в этой
+ * валюте **была** и обнулилась (расчёт, отвязка, списание). Оба условия важны:
+ * без «была» под правило попал бы транш, под который ещё ничего не запирали, —
+ * а это обычное окно между начислением на входе в `release_pending` и расчётом.
+ */
+export interface FeeReceivablePosition {
+  readonly deal: TrancheRef;
+  readonly currency: CurrencyCode;
+  readonly outstanding: Money<CurrencyCode>;
+  readonly openedAt: string;
+  readonly lastMovedAt: string;
+  readonly trancheDrained: boolean;
+}
+
+export function openFeeReceivables(journal: Journal): readonly FeeReceivablePosition[] {
+  interface Open {
+    deal: TrancheRef;
+    openedAt: string;
+    lastMovedAt: string;
+    total: bigint;
+  }
+  const open = new Map<string, Open>();
+  const lockedTotal = new Map<string, bigint>();
+  const lockedTouched = new Set<string>();
+  const key = (deal: TrancheRef, currency: CurrencyCode): string =>
+    `${deal.dealId} ${deal.trancheId}|${currency}`;
+
+  for (const entry of journal.entries) {
+    const touched = new Set<string>();
+    for (const posting of entry.postings) {
+      const account = posting.account;
+      const currency = posting.amount.currency;
+      if (account.kind === 'client_locked') {
+        const lockedKey = key(account, currency);
+        lockedTouched.add(lockedKey);
+        lockedTotal.set(
+          lockedKey,
+          (lockedTotal.get(lockedKey) ?? 0n) + naturalSign(account, posting),
+        );
+        continue;
+      }
+      if (account.kind !== 'fee_receivable') continue;
+      const attribution = posting.attribution;
+      // Отнесение к траншу — единственный способ связать требование со сделкой:
+      // счёт требования не клиентский, файла в его коде нет и быть не может.
+      // Требование без отнесения в этот отчёт не попадает — и это видно в
+      // `feePositions` тем же способом, а не молча.
+      if (attribution === null || isClientRef(attribution)) continue;
+      const deal: TrancheRef = {
+        dealId: attribution.dealId,
+        trancheId: attribution.trancheId,
+      };
+      const feeKey = key(deal, currency);
+      touched.add(feeKey);
+      const state = open.get(feeKey) ?? {
+        deal,
+        openedAt: entry.occurredAt,
+        lastMovedAt: entry.occurredAt,
+        total: 0n,
+      };
+      state.total += naturalSign(account, posting);
+      state.lastMovedAt = entry.occurredAt;
+      open.set(feeKey, state);
+    }
+    // Плоскость — по записи целиком, как у позиции обмена: расчёт гасит
+    // требование и в той же записи ничего нового не начисляет, но реверс
+    // начисления двигает счёт в обе стороны внутри одной записи.
+    for (const feeKey of touched) {
+      if (open.get(feeKey)?.total === 0n) open.delete(feeKey);
+    }
+  }
+
+  return [...open.entries()]
+    .sort((left, right) => (left[0] < right[0] ? -1 : 1))
+    .map(([feeKey, state]) => {
+      const currency = feeKey.slice(feeKey.lastIndexOf('|') + 1) as CurrencyCode;
+      return Object.freeze({
+        deal: state.deal,
+        currency,
+        outstanding: money(currency, state.total),
+        openedAt: state.openedAt,
+        lastMovedAt: state.lastMovedAt,
+        trancheDrained: lockedTouched.has(feeKey) && (lockedTotal.get(feeKey) ?? 0n) === 0n,
+      });
+    });
+}
+
+/**
  * Открытая позиция по обмену: сколько по этой конверсии числится за валютным
- * контрагентом в каждой валюте и с какого момента.
+ * контрагентом в каждой валюте, **у какого клиента** и с какого момента.
  *
  * Позиция **плоская**, когда все её остатки нули: исходная валюта отдана,
  * встречная поставлена, требований нет. Ненулевая позиция сама по себе не
@@ -697,9 +813,21 @@ export function feePositions(journal: Journal): readonly FeePosition[] {
  * `openedAt` — момент, с которого позиция перестала быть плоской. Считается
  * по порядку записей в журнале, а не по сортировке `occurredAt`: журнал только
  * дополняется, и его порядок — это порядок, в котором факты стали известны.
+ *
+ * **Ключ позиции — код счёта, а не ключ конверсии.** Прежде позиция ключевалась
+ * одним лишь `conversionId`, и обмены двух клиентов, названные одинаково,
+ * складывались в одну позицию: незакрытая нога одного гасилась встречной ногой
+ * другого, и «нам не поставили встречную валюту» переставало быть величиной.
+ * Владелец теперь стоит в коде счёта (`accounts.ts`), поэтому слияние невозможно
+ * по построению; но отчёт читает **журнал, пришедший из базы**, в том числе
+ * записанный до этой правки, — и ключ по коду счёта разводит такие позиции
+ * даже там, где их свёл бы старый счёт.
  */
 export interface FxPosition {
+  /** Клиент, за чей счёт открыта позиция. `null` — счёт без владельца в коде. */
+  readonly owner: ClientKey | null;
   readonly conversionId: string;
+  readonly accountCode: string;
   readonly openedAt: string;
   readonly lastMovedAt: string;
   /** Только ненулевые остатки: плоская позиция в выдачу не попадает вовсе. */
@@ -708,6 +836,8 @@ export interface FxPosition {
 
 export function openFxPositions(journal: Journal): readonly FxPosition[] {
   interface Open {
+    owner: ClientKey | null;
+    conversionId: string;
     openedAt: string;
     lastMovedAt: string;
     balances: Map<CurrencyCode, bigint>;
@@ -719,8 +849,11 @@ export function openFxPositions(journal: Journal): readonly FxPosition[] {
     for (const posting of entry.postings) {
       const conversionId = conversionOfAccount(posting.account);
       if (conversionId === null) continue;
-      touched.add(conversionId);
-      const state = open.get(conversionId) ?? {
+      const key = accountCode(posting.account);
+      touched.add(key);
+      const state = open.get(key) ?? {
+        owner: clientAccountOwner(posting.account),
+        conversionId,
         openedAt: entry.occurredAt,
         lastMovedAt: entry.occurredAt,
         balances: new Map<CurrencyCode, bigint>(),
@@ -731,27 +864,29 @@ export function openFxPositions(journal: Journal): readonly FxPosition[] {
         (state.balances.get(currency) ?? 0n) + naturalSign(posting.account, posting),
       );
       state.lastMovedAt = entry.occurredAt;
-      open.set(conversionId, state);
+      open.set(key, state);
     }
     // Плоскость проверяется **по записи целиком**, а не после каждой проводки.
     // Момент 2 сначала гасит ногу исходной валюты и лишь потом открывает ногу
     // встречной: если смотреть по проводкам, позиция на миг обнуляется, и
     // возраст обмена начинал бы отсчёт заново с каждой записи. Возраст обмена —
     // это возраст обмена, а не последнего движения по нему.
-    for (const conversionId of touched) {
-      const state = open.get(conversionId);
+    for (const key of touched) {
+      const state = open.get(key);
       if (state === undefined) continue;
       if ([...state.balances.values()].every((value) => value === 0n)) {
-        open.delete(conversionId);
+        open.delete(key);
       }
     }
   }
 
   return [...open.entries()]
     .sort((left, right) => (left[0] < right[0] ? -1 : 1))
-    .map(([conversionId, state]) =>
+    .map(([key, state]) =>
       Object.freeze({
-        conversionId,
+        owner: state.owner,
+        conversionId: state.conversionId,
+        accountCode: key,
         openedAt: state.openedAt,
         lastMovedAt: state.lastMovedAt,
         balances: Object.freeze(

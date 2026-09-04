@@ -6,15 +6,81 @@ import { type Pool, type PoolClient, createPool } from '../../../src/pool.ts';
 /**
  * Каркас интеграционных тестов.
  *
- * **Пропуск обязан быть громким.** Молчаливый пропуск читается как «прошло»:
- * набор зелёный, база не проверена, и узнаётся об этом на проде. Поэтому
- * причина печатается при загрузке модуля и повторяется в имени пропущенного
- * набора.
+ * **Пропуск обязан быть громким и узким.** Молчаливый пропуск читается как
+ * «прошло»: набор зелёный, база не проверена, и узнаётся об этом на проде.
+ *
+ * Прежняя редакция ловила `catch (error)` вокруг соединения **и** миграций
+ * разом и на любую ошибку объявляла базу недоступной. Проба заведомо неверной
+ * строкой подключения дала «79 пропущено, код выхода 0»: упавшая миграция и
+ * отсутствующая база были неразличимы, и обе зелёные. То есть каркас, стоящий
+ * ради проверки инвариантов базы, умел молча не проверить ни одного.
+ *
+ * Граница проведена **по стадии**, а не по тексту ошибки:
+ *
+ * - базы нет — соединиться не удалось: **пропуск с причиной**. Это законное
+ *   состояние машины без поднятого кластера;
+ * - база есть, миграция упала — **падение**. Это дефект схемы, и он обязан
+ *   быть виден там же, где случился.
+ *
+ * Разбирать сообщение драйвера вместо стадии было бы гаданием: тексты ошибок
+ * не наш контракт и меняются с версией `pg`.
  */
 export interface Environment {
   readonly available: boolean;
   readonly reason: string;
   readonly pool: Pool | null;
+}
+
+/**
+ * Зависимости каркаса — параметром, чтобы обе ветки проверялись **без базы**.
+ * Каркас, который сам себя не проверяет, ровно один раз и превращает всё в
+ * «пропущено».
+ */
+export interface EnvironmentDeps {
+  readonly connect: (url: string) => Pool;
+  readonly migrate: (pool: Pool) => Promise<unknown>;
+}
+
+export const DEFAULT_ENVIRONMENT_DEPS: EnvironmentDeps = Object.freeze({
+  connect: createPool,
+  migrate,
+});
+
+/** Пропуск: базы нет. Причина печатается при загрузке модуля, а не копится молча. */
+function unavailable(reason: string): Environment {
+  console.warn(`[@sdelka/db] интеграционные тесты пропущены: ${reason}`);
+  return { available: false, reason, pool: null };
+}
+
+/**
+ * Разрешение окружения. Бросает, если база доступна, а миграции не применились:
+ * возвращать «недоступно» в этом случае — и есть та самая ложь.
+ */
+export async function resolveEnvironment(
+  url: string | null,
+  deps: EnvironmentDeps = DEFAULT_ENVIRONMENT_DEPS,
+): Promise<Environment> {
+  if (url === null) {
+    return unavailable(`${DATABASE_URL_ENV} not set`);
+  }
+  const pool = deps.connect(url);
+  try {
+    await pool.query('SELECT 1');
+  } catch (error) {
+    // Не соединились: кластер не поднят, базы нет, доступа нет. Пропуск.
+    await pool.end().catch(() => undefined);
+    return unavailable(error instanceof Error ? error.message : String(error));
+  }
+  try {
+    await deps.migrate(pool);
+  } catch (error) {
+    // Соединение есть. Дальше любая ошибка — дефект схемы, и молчать о нём
+    // нельзя: пул закрываем, чтобы прогон не завис на открытом сокете, а
+    // ошибку отдаём наверх как есть.
+    await pool.end().catch(() => undefined);
+    throw error;
+  }
+  return { available: true, reason: '', pool };
 }
 
 const url = databaseUrl();
@@ -23,23 +89,7 @@ let cached: Environment | null = null;
 
 export async function environment(): Promise<Environment> {
   if (cached !== null) return cached;
-  if (url === null) {
-    const reason = `${DATABASE_URL_ENV} not set`;
-    console.warn(`[@sdelka/db] интеграционные тесты пропущены: ${reason}`);
-    cached = { available: false, reason, pool: null };
-    return cached;
-  }
-  const pool = createPool(url);
-  try {
-    await pool.query('SELECT 1');
-    await migrate(pool);
-    cached = { available: true, reason: '', pool };
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    console.warn(`[@sdelka/db] интеграционные тесты пропущены: ${reason}`);
-    await pool.end().catch(() => undefined);
-    cached = { available: false, reason, pool: null };
-  }
+  cached = await resolveEnvironment(url);
   return cached;
 }
 

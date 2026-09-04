@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { AuditError, rawSourceDigest, rawSourceRef, verifyRawSource } from '../src/index';
+import {
+  AuditError,
+  AuditErrorCode,
+  type CapturedRawSource,
+  attestRawSource,
+  captureRawSource,
+  rawSourceDigest,
+  rawSourceRef,
+  verifyRawSource,
+} from '../src/index';
 import { at } from './support/fixtures';
 
 const BYTES = new TextEncoder().encode('{"registered":true,"cadastral":"aa-bb"}');
@@ -57,5 +66,85 @@ describe('сырой ответ источника', () => {
         provider: 'cabinet',
       }),
     ).toThrow(AuditError);
+  });
+});
+
+describe('засвидетельствованный отпечаток', () => {
+  function captured(bytes: Uint8Array): CapturedRawSource {
+    return captureRawSource({
+      sourceKind: 'registry_extract',
+      storageRef: 'documents/2026/09/03/0001',
+      mediaType: 'application/json',
+      receivedAt: at(1),
+      provider: 'registry',
+      bytes,
+    });
+  }
+
+  it('длина и отпечаток выводятся из байтов, а не принимаются полями', () => {
+    const ref = captured(BYTES);
+    expect(ref.byteLength).toBe(BYTES.length);
+    expect(ref.digest).toBe(rawSourceDigest(BYTES));
+    expect(verifyRawSource(BYTES, ref)).toBe(true);
+  });
+
+  it('байты в ссылку по-прежнему не попадают', () => {
+    expect(JSON.stringify(captured(BYTES))).not.toContain('cadastral');
+  });
+
+  it('записанная ссылка сводится с теми же байтами', () => {
+    const ref = refFor(BYTES);
+    expect(attestRawSource(BYTES, ref).digest).toBe(ref.digest);
+  });
+
+  it('подменённый байт: отказ исключением, а не false', () => {
+    const ref = refFor(BYTES);
+    const tampered = Uint8Array.from(BYTES);
+    const first = tampered[0];
+    if (first === undefined) {
+      expect.unreachable();
+      return;
+    }
+    tampered[0] = first ^ 0x01;
+    try {
+      attestRawSource(tampered, ref);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(AuditError);
+      expect((error as AuditError).code).toBe(AuditErrorCode.rawSourceNotAttested);
+      // Подмена содержимого и подобранная коллизия различимы в отчёте.
+      expect((error as AuditError).details['reason']).toBe('digest');
+    }
+  });
+
+  it('другая длина названа своей причиной', () => {
+    const ref = refFor(BYTES);
+    try {
+      attestRawSource(BYTES.slice(0, BYTES.length - 1), ref);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as AuditError).details['reason']).toBe('byte_length');
+    }
+  });
+
+  it('в деталях отказа нет ни байтов, ни отпечатка', () => {
+    // Значение в детали не кладём никогда: сработавшая проверка — это ровно тот
+    // момент, когда в деталях оказался бы чужой документ.
+    try {
+      attestRawSource(new TextEncoder().encode('other'), refFor(BYTES));
+      expect.unreachable();
+    } catch (error) {
+      expect(Object.keys((error as AuditError).details)).toEqual(['reason']);
+    }
+  });
+
+  it('ссылка, принятая на слово, засвидетельствованной не считается — проверка типом', () => {
+    const claimed = refFor(BYTES);
+    // Значение то же самое, но `AttestedDigest` получить иначе, чем предъявив
+    // байты, нельзя. Проверка компилятором, а не рантаймом: пропустить её
+    // можно только приведением типа, и оно будет видно в ревью.
+    // @ts-expect-error ссылка без предъявленных байтов не является CapturedRawSource
+    const forged: CapturedRawSource = claimed;
+    expect(forged.digest).toBe(claimed.digest);
   });
 });

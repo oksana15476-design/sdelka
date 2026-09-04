@@ -53,7 +53,14 @@ export const ACCOUNT_KIND_SAMPLES = {
   shortfall_expense: { kind: 'shortfall_expense' },
   unclaimed_liability: { kind: 'unclaimed_liability' },
   transit_writeoff: { kind: 'transit_writeoff' },
-  fx_settlement: { kind: 'fx_settlement', conversionId: SAMPLE_CONVERSION },
+  // Позиция обмена ключуется владельцем И ключом конверсии: без клиента в коде
+  // счёта позиции разных клиентов сливались бы под одним ключом, а открытая
+  // позиция — единственное, чем ловится «встречная валюта не поставлена».
+  fx_settlement: {
+    kind: 'fx_settlement',
+    clientKey: SAMPLE_CLIENT,
+    conversionId: SAMPLE_CONVERSION,
+  },
   fee_receivable: { kind: 'fee_receivable' },
   transit_fee: { kind: 'transit_fee' },
   fx_accounting_diff: { kind: 'fx_accounting_diff' },

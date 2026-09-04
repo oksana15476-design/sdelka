@@ -1,6 +1,6 @@
+import { type CapturedRawSource, AuditError, auditInstant, captureRawSource } from '@sdelka/audit';
 import {
   type ObservationLevel,
-  type ReleaseObservation,
   type ReleaseObservationInput,
   DEFAULT_OBSERVATION_POLICY,
   RELEASE_CONDITIONS,
@@ -18,6 +18,7 @@ import {
   type ObservationState,
   type ObservationStatus,
   type ObservationTransitionResult,
+  type SourcedObservation,
   OBSERVATION_CONDITION_IDS,
   OBSERVATION_STATUSES,
   OBSERVATION_TRANSITIONS,
@@ -26,6 +27,7 @@ import {
   initialObservationState,
   isTerminalObservationStatus,
   reduceObservation,
+  sourcedObservation,
 } from '../src/index';
 
 const NOW = instant(Date.UTC(2026, 8, 4, 10, 0, 0));
@@ -47,18 +49,45 @@ const MATCHING_FIELDS = {
   noUnexpectedEncumbrances: true,
 } as const;
 
-function observation(overrides: Partial<ReleaseObservationInput> = {}): ReleaseObservation {
-  return releaseObservation({
-    level: 'L3',
-    conditionType: 'registration_transfer',
-    sourceKey: RELEASE_CONDITIONS.registration_transfer.sourceKey,
-    cadastralCode: CADASTRAL_CODE,
-    fields: MATCHING_FIELDS,
-    ownerCheck: 'established',
-    observedAt: NOW,
-    rawSourceDigest: 'b'.repeat(64),
-    ...overrides,
+/**
+ * Ответ реестра — **настоящие байты**, а не строка из 64 знаков.
+ *
+ * Прежняя фикстура клала `'b'.repeat(64)`: наблюдение выглядело подтверждённым
+ * документом, которого не существует. Ровно эту дыру и закрывает
+ * `CapturedRawSource` — отпечаток теперь выводится из ответа, и подменить его
+ * строкой нечем.
+ */
+const RESPONSE_BYTES = new TextEncoder().encode(
+  '{"cadastral":"01.10.14.005.041","registered":true}',
+);
+
+function rawSource(bytes: Uint8Array = RESPONSE_BYTES): CapturedRawSource {
+  return captureRawSource({
+    sourceKind: 'registry_extract',
+    storageRef: 'documents/2026/09/04/0001',
+    mediaType: 'application/json',
+    receivedAt: auditInstant(NOW),
+    provider: 'registry',
+    bytes,
   });
+}
+
+function observation(overrides: Partial<ReleaseObservationInput> = {}): SourcedObservation {
+  const source = rawSource();
+  return sourcedObservation(
+    releaseObservation({
+      level: 'L3',
+      conditionType: 'registration_transfer',
+      sourceKey: RELEASE_CONDITIONS.registration_transfer.sourceKey,
+      cadastralCode: CADASTRAL_CODE,
+      fields: MATCHING_FIELDS,
+      ownerCheck: 'established',
+      observedAt: NOW,
+      rawSourceDigest: source.digest,
+      ...overrides,
+    }),
+    source,
+  );
 }
 
 function stateAt(status: ObservationStatus): ObservationState {
@@ -373,5 +402,61 @@ describe('машина наблюдения: тупиков нет и лишни
     // Стартовое состояние не переоткрывается (§5): наблюдение, которое уже
     // началось, не может снова называться неначатым.
     expect([...reachableFrom(edges, 'not_started')]).not.toContain('not_started');
+  });
+});
+
+describe('наблюдение без записанного ответа источника непостроимо', () => {
+  it('событие «выписка получена» с голым наблюдением не компилируется', () => {
+    // Красная линия №5 и `CORE.md` Ф11 держатся типом. Проверка здесь — не
+    // рантаймовая: наблюдение с правдоподобным отпечатком, за которым нет
+    // ответа, обязано не собираться вовсе, а не отвергаться редьюсером.
+    const bare = releaseObservation({
+      level: 'L3',
+      conditionType: 'registration_transfer',
+      sourceKey: RELEASE_CONDITIONS.registration_transfer.sourceKey,
+      cadastralCode: CADASTRAL_CODE,
+      fields: MATCHING_FIELDS,
+      ownerCheck: 'established',
+      observedAt: NOW,
+      // Форма правильная, ответа за ней нет — ровно то, что делала базовая
+      // фикстура домена и что проходило все guard'ы.
+      rawSourceDigest: 'b'.repeat(64),
+    });
+    // @ts-expect-error наблюдение без записанного сырого ответа сюда не годится
+    const event: ObservationEvent = { type: 'extract_received', observation: bare };
+    expect(event.type).toBe('extract_received');
+  });
+
+  it('наблюдение, разобранное из другого ответа, не сводится', () => {
+    const other = rawSource(new TextEncoder().encode('{"cadastral":"other"}'));
+    const parsed = releaseObservation({
+      level: 'L3',
+      conditionType: 'registration_transfer',
+      sourceKey: RELEASE_CONDITIONS.registration_transfer.sourceKey,
+      cadastralCode: CADASTRAL_CODE,
+      fields: MATCHING_FIELDS,
+      ownerCheck: 'established',
+      observedAt: NOW,
+      rawSourceDigest: rawSource().digest,
+    });
+    expect(() => sourcedObservation(parsed, other)).toThrow(AuditError);
+  });
+
+  it('ответ источника доезжает до состояния и до намерения к траншу', () => {
+    // Иначе исполнитель намерения собирал бы пакет доказательств заново: то же
+    // самое «просто выплатить», только на шаг дальше.
+    const observed = observation();
+    const step = accept(stateAt('extract_ordered'), {
+      type: 'extract_received',
+      observation: observed,
+    });
+    expect(step.state.observation?.rawSource.digest).toBe(observed.rawSource.digest);
+    const intent = step.intents.find((item) => item.type === 'emit_tranche_event');
+    expect(intent).toBeDefined();
+    if (intent?.type === 'emit_tranche_event' && intent.event === 'condition_established') {
+      expect(intent.observation.rawSource.byteLength).toBe(RESPONSE_BYTES.length);
+    } else {
+      expect.unreachable();
+    }
   });
 });

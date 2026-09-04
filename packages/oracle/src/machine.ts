@@ -11,6 +11,7 @@ import {
   ok,
 } from '@sdelka/domain';
 import type { CurrencyCode, Money } from '@sdelka/money';
+import type { SourcedObservation } from './sourced-observation';
 
 /**
  * Машина наблюдения оракула — `STATE-MACHINES.md` §10, `ORACLE.md` §8.
@@ -135,7 +136,13 @@ export type ObservationEvent =
     }
   | { readonly type: 'statutory_term_elapsed' }
   | { readonly type: 'extract_ordered'; readonly cost: Money<CurrencyCode> }
-  | { readonly type: 'extract_received'; readonly observation: ReleaseObservation }
+  /**
+   * Выписка получена. Наблюдение приходит **вместе с записанным ответом**
+   * источника (`SourcedObservation`): построить это событие, не предъявив
+   * байты ответа, нечем. Красная линия №5 и `CORE.md` Ф11 держатся здесь
+   * типом, а не проверкой у вызывающего.
+   */
+  | { readonly type: 'extract_received'; readonly observation: SourcedObservation }
   | { readonly type: 'registry_unavailable'; readonly reasonKey: string }
   | { readonly type: 'registry_recovered' }
   | { readonly type: 'observation_abandoned'; readonly reasonKey: string };
@@ -179,8 +186,12 @@ export type ObservationIntent =
       readonly type: 'emit_tranche_event';
       readonly event: 'condition_established';
       readonly conditionType: ReleaseConditionType;
-      /** Наблюдение, которым условие установлено: транш проверит его сам. */
-      readonly observation: ReleaseObservation;
+      /**
+       * Наблюдение, которым условие установлено: транш проверит его сам.
+       * Ответ источника едет вместе с ним — иначе исполнитель намерения
+       * собирал бы пакет доказательств заново и по памяти.
+       */
+      readonly observation: SourcedObservation;
     }
   | {
       readonly type: 'emit_tranche_event';
@@ -296,8 +307,8 @@ export interface ObservationState {
    * человеком, и ни один переход его не использует (Ф7).
    */
   readonly applicationStatus: string | null;
-  /** Полученное наблюдение. `null` — выписки ещё нет. */
-  readonly observation: ReleaseObservation | null;
+  /** Полученное наблюдение вместе с ответом. `null` — выписки ещё нет. */
+  readonly observation: SourcedObservation | null;
 }
 
 export const initialObservationState: ObservationState = Object.freeze({

@@ -37,7 +37,10 @@ export default async function LocaleLayout({
   const l = { dict: dictionaryOf(locale), locale };
   const path = (await headers()).get('x-sdelka-path') ?? `/${locale}`;
   const console = path.includes('/ops');
-  const unread = console ? 0 : unreadCount(await getNotifications());
+  // Кабинет владельца — своё рабочее место со своей навигацией: разделов
+  // консоли в нём нет, и счётчика клиентских уведомлений тоже (E16-1).
+  const owner = path.includes('/owner');
+  const unread = console || owner ? 0 : unreadCount(await getNotifications());
   return (
     <html lang={locale} dir={LOCALE_DIRECTION[locale]}>
       <body>
@@ -45,7 +48,7 @@ export default async function LocaleLayout({
           l={l}
           path={path}
           viewer={viewerCard()}
-          variant={console ? 'console' : 'client'}
+          variant={console ? 'console' : owner ? 'owner' : 'client'}
           unread={unread}
         >
           {children}

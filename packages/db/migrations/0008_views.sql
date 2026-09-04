@@ -90,9 +90,20 @@ SELECT b.account_code, b.currency, b.balance_minor
 -- Отношение покрытия — **двумя целыми**, никогда одним дробным числом и тем
 -- более не `float` (красная линия №4). Делить здесь нечего: сравнение
 -- `custody >= obligations` целочисленное, а отношение нужно только для отчёта.
+--
+-- **[исправляет предыдущее]** Актив прежде отбирался по `in_attribution`, и это
+-- работало ровно потому, что из трёх клиентских активов файл приносило
+-- отнесение у двух. Как только у счёта расчётов с валютным контрагентом
+-- появился владелец в коде, деньги у контрагента выпали из числителя, и
+-- покрытие между моментами 2 и 3 обмена проваливалось ниже единицы — при том,
+-- что §3.3 описывает этот промежуток как **покрытый**: деньги клиента, просто
+-- не на нашем счёте. Происхождение файла к вопросу «чьи это деньги и лежат ли
+-- они где-то» отношения не имеет; терминальный пул исключается симметрично
+-- обеим сторонам, потому что его считает `v_coverage_unclaimed`.
 CREATE VIEW sdelka.v_coverage AS
 SELECT currency,
-       sum(CASE WHEN funds = 'client' AND acct_type = 'asset' AND file_scope = 'in_attribution'
+       sum(CASE WHEN funds = 'client' AND acct_type = 'asset'
+                     AND pool_direction IS DISTINCT FROM 'terminal'
                 THEN natural_minor ELSE 0 END) AS custody_minor,
        sum(CASE WHEN funds = 'client' AND acct_type = 'liability'
                      AND pool_direction IS DISTINCT FROM 'terminal'
@@ -207,53 +218,59 @@ SELECT COALESCE(p.account_deal_id, p.attribution_deal_id) AS deal_id,
 -- момент 2 сначала гасит ногу исходной валюты и лишь потом открывает ногу
 -- встречной, и по проводкам позиция на миг обнуляется. Возраст обмена — это
 -- возраст обмена, а не последнего движения по нему.
+-- ⚠ Ключ позиции — **код счёта**, а не ключ конверсии. Ключи конверсии двух
+-- клиентов совпадают запросто, и при группировке по ним незакрытая нога одного
+-- гасилась встречной ногой другого: «нам не поставили встречную валюту»
+-- переставало быть величиной. Зеркало `openFxPositions` ключуется кодом счёта,
+-- и подлежащим нарушения там стоит он же.
 CREATE VIEW sdelka.v_fx_position AS
 WITH by_entry AS (
-  SELECT conversion_id, entry_seq, occurred_at, currency,
+  SELECT account_code, conversion_id, entry_seq, occurred_at, currency,
          sum(natural_minor) AS delta
     FROM sdelka.v_posting
    WHERE conversion_id IS NOT NULL
-   GROUP BY 1, 2, 3, 4
+   GROUP BY 1, 2, 3, 4, 5
 ), running AS (
-  SELECT conversion_id, entry_seq, occurred_at, currency,
-         sum(delta) OVER (PARTITION BY conversion_id, currency
+  SELECT account_code, conversion_id, entry_seq, occurred_at, currency,
+         sum(delta) OVER (PARTITION BY account_code, currency
                           ORDER BY entry_seq
                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS balance
     FROM by_entry
 ), entry_state AS (
-  -- Остаток по каждой валюте на конец каждой записи, тронувшей обмен. Валюта,
+  -- Остаток по каждой валюте на конец каждой записи, тронувшей счёт. Валюта,
   -- не тронутая этой записью, свой прежний остаток сохраняет, поэтому берётся
   -- последнее известное значение.
-  SELECT e.conversion_id, e.entry_seq, e.occurred_at,
+  SELECT e.account_code, e.entry_seq, e.occurred_at,
          bool_and(COALESCE(r.balance, 0) = 0) AS flat
-    FROM (SELECT DISTINCT conversion_id, entry_seq, occurred_at FROM by_entry) e
+    FROM (SELECT DISTINCT account_code, entry_seq, occurred_at FROM by_entry) e
     LEFT JOIN LATERAL (
       SELECT DISTINCT ON (c.currency) c.currency, c.balance
         FROM running c
-       WHERE c.conversion_id = e.conversion_id AND c.entry_seq <= e.entry_seq
+       WHERE c.account_code = e.account_code AND c.entry_seq <= e.entry_seq
        ORDER BY c.currency, c.entry_seq DESC
     ) r ON true
    GROUP BY 1, 2, 3
 ), opened AS (
-  SELECT conversion_id,
-         max(occurred_at) FILTER (WHERE flat) AS last_flat_at,
+  SELECT account_code,
          max(entry_seq) FILTER (WHERE flat) AS last_flat_seq
     FROM entry_state
-   GROUP BY conversion_id
+   GROUP BY account_code
 ), current_balance AS (
-  SELECT DISTINCT ON (conversion_id, currency) conversion_id, currency, balance
+  SELECT DISTINCT ON (account_code, currency)
+         account_code, conversion_id, currency, balance
     FROM running
-   ORDER BY conversion_id, currency, entry_seq DESC
+   ORDER BY account_code, currency, entry_seq DESC
 )
-SELECT c.conversion_id,
+SELECT c.account_code,
+       c.conversion_id,
        c.currency,
        c.balance AS amount_minor,
        (SELECT min(s.occurred_at)
           FROM entry_state s
-         WHERE s.conversion_id = c.conversion_id
+         WHERE s.account_code = c.account_code
            AND s.entry_seq > COALESCE(o.last_flat_seq, -1)) AS opened_at
   FROM current_balance c
-  LEFT JOIN opened o ON o.conversion_id = c.conversion_id
+  LEFT JOIN opened o ON o.account_code = c.account_code
  WHERE c.balance <> 0;
 
 -- Транзит: `transit:writeoff` и `transit:fee`. §3.1 обещает про первый дословно
@@ -292,6 +309,75 @@ SELECT c.account_code,
            AND r.entry_seq > COALESCE(f.seq, -1)) AS opened_at
   FROM current_balance c
   LEFT JOIN last_flat f ON f.account_code = c.account_code AND f.currency = c.currency
+ WHERE c.balance <> 0;
+
+-- ---------------------------------------------------------------------------
+-- Незакрытая дебиторка по комиссии
+-- ---------------------------------------------------------------------------
+--
+-- Зеркало `openFeeReceivables`. Требование связывается со сделкой **только**
+-- отнесением: счёт комиссии не клиентский, файла в его коде нет и быть не
+-- может, поэтому требование без отнесения сюда не попадает — ровно как в коде.
+--
+-- Плоскость — по записи целиком, как у позиции обмена: расчёт гасит требование
+-- и ничего нового в той же записи не начисляет, но реверс начисления двигает
+-- счёт в обе стороны внутри одной записи.
+--
+-- `tranche_drained` — деньги транша ушли: запертая часть по этому траншу в этой
+-- валюте **была** и обнулилась. Оба условия важны: без «была» под правило попал
+-- бы транш, под который ещё ничего не запирали, — а это обычное окно между
+-- начислением на входе в `release_pending` и расчётом.
+CREATE VIEW sdelka.v_fee_receivable_open AS
+WITH by_entry AS (
+  SELECT attribution_deal_id AS deal_id, attribution_tranche_id AS tranche_id,
+         currency, entry_seq, occurred_at, sum(natural_minor) AS delta
+    FROM sdelka.v_posting
+   WHERE account_kind = 'fee_receivable'
+     AND attribution_deal_id IS NOT NULL
+     AND attribution_tranche_id IS NOT NULL
+   GROUP BY 1, 2, 3, 4, 5
+), running AS (
+  SELECT deal_id, tranche_id, currency, entry_seq, occurred_at,
+         sum(delta) OVER (PARTITION BY deal_id, tranche_id, currency
+                          ORDER BY entry_seq
+                          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS balance
+    FROM by_entry
+), last_flat AS (
+  SELECT deal_id, tranche_id, currency, max(entry_seq) AS seq
+    FROM running
+   WHERE balance = 0
+   GROUP BY 1, 2, 3
+), current_balance AS (
+  SELECT DISTINCT ON (deal_id, tranche_id, currency)
+         deal_id, tranche_id, currency, balance
+    FROM running
+   ORDER BY deal_id, tranche_id, currency, entry_seq DESC
+), locked AS (
+  -- Запертая часть транша читается из **кода счёта**: у `client_locked`
+  -- владелец в коде, отнесение на нём ничего не добавляет.
+  SELECT account_deal_id AS deal_id, account_tranche_id AS tranche_id,
+         currency, sum(natural_minor) AS balance
+    FROM sdelka.v_posting
+   WHERE account_kind = 'client_locked'
+     AND account_tranche_id IS NOT NULL
+   GROUP BY 1, 2, 3
+)
+SELECT c.deal_id,
+       c.tranche_id,
+       c.currency,
+       c.balance AS outstanding_minor,
+       (SELECT min(r.occurred_at)
+          FROM running r
+         WHERE r.deal_id = c.deal_id
+           AND r.tranche_id = c.tranche_id
+           AND r.currency = c.currency
+           AND r.entry_seq > COALESCE(f.seq, -1)) AS opened_at,
+       (l.deal_id IS NOT NULL AND l.balance = 0) AS tranche_drained
+  FROM current_balance c
+  LEFT JOIN last_flat f
+    ON f.deal_id = c.deal_id AND f.tranche_id = c.tranche_id AND f.currency = c.currency
+  LEFT JOIN locked l
+    ON l.deal_id = c.deal_id AND l.tranche_id = c.tranche_id AND l.currency = c.currency
  WHERE c.balance <> 0;
 
 -- ---------------------------------------------------------------------------
@@ -345,7 +431,12 @@ SELECT f.client_key,
 -- календарных, потому что банковского календаря в учёте нет и быть не должно.
 CREATE FUNCTION sdelka.ledger_invariant_violation(
   as_of timestamptz DEFAULT NULL,
-  stale_after_ms bigint DEFAULT 172800000
+  stale_after_ms bigint DEFAULT 172800000,
+  -- Окно требования по комиссии — отдельным аргументом и по умолчанию тем же,
+  -- что у транзита (`InvariantOptions.feeStaleAfterMs`): ожидание расчёта
+  -- законно длиннее межбанковского перевода, но настоящее окно — решение
+  -- владельца, а не умолчание.
+  fee_stale_after_ms bigint DEFAULT NULL
 )
 RETURNS TABLE (
   code text,
@@ -393,7 +484,7 @@ LANGUAGE sql STABLE AS $$
     FROM sdelka.v_negative_platform_asset v
 
   UNION ALL
-  SELECT 'ledger.invariant.fx_position_open', v.currency, v.conversion_id, v.amount_minor
+  SELECT 'ledger.invariant.fx_position_open', v.currency, v.account_code, v.amount_minor
     FROM sdelka.v_fx_position v, moment m
    WHERE m.at IS NOT NULL
      AND extract(epoch FROM (m.at - v.opened_at)) * 1000 > stale_after_ms
@@ -403,6 +494,25 @@ LANGUAGE sql STABLE AS $$
     FROM sdelka.v_transit_position v, moment m
    WHERE m.at IS NOT NULL
      AND extract(epoch FROM (m.at - v.opened_at)) * 1000 > stale_after_ms
+
+  UNION ALL
+  -- Начислено и удерживать уже не из чего: деньги транша ушли. Возраст здесь ни
+  -- при чём — расхождение немедленное и постоянное.
+  SELECT 'ledger.invariant.fee_not_withheld', v.currency,
+         v.deal_id || ':' || v.tranche_id, v.outstanding_minor
+    FROM sdelka.v_fee_receivable_open v
+   WHERE v.outstanding_minor > 0 AND v.tranche_drained
+
+  UNION ALL
+  -- Начислено, не удержано и ждёт дольше окна. Отрицательный остаток требования
+  -- сюда не попадает: это удержание без начисления, и у него свой код.
+  SELECT 'ledger.invariant.fee_receivable_stale', v.currency,
+         v.deal_id || ':' || v.tranche_id, v.outstanding_minor
+    FROM sdelka.v_fee_receivable_open v, moment m
+   WHERE v.outstanding_minor > 0 AND NOT v.tranche_drained
+     AND m.at IS NOT NULL
+     AND extract(epoch FROM (m.at - v.opened_at)) * 1000
+         > COALESCE(fee_stale_after_ms, stale_after_ms)
 
   UNION ALL
   SELECT 'ledger.invariant.shortfall_overfunded', v.currency, v.client_key, v.excess_minor

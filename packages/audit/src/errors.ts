@@ -21,6 +21,8 @@ export const AuditErrorCode = {
   correctionSelfReference: 'audit.correction.self_reference',
   timestampTargetMissing: 'audit.timestamp.target_missing',
   rawSourceByteLengthInvalid: 'audit.raw_source.byte_length_invalid',
+  /** Предъявленные байты не сходятся с записанной ссылкой: длиной или отпечатком. */
+  rawSourceNotAttested: 'audit.raw_source.not_attested',
 } as const;
 
 export type AuditErrorCode = (typeof AuditErrorCode)[keyof typeof AuditErrorCode];

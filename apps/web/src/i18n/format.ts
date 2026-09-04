@@ -166,3 +166,29 @@ export function formatRatio(locale: Locale, value: number): string {
 export function formatNumber(locale: Locale, value: number): string {
   return new Intl.NumberFormat(LOCALE_TAG[locale]).format(value);
 }
+
+/**
+ * Доля, пришедшая базисными пунктами, — два знака после запятой.
+ *
+ * Ставка и наценка приходят целыми базисными пунктами именно потому, что доля с
+ * плавающей точкой в денежном домене запрещена (красная линия №4). Деление на
+ * десять тысяч здесь — **последний шаг перед экраном**: полученное число ни во
+ * что не возвращается и ни на что не умножается. Округление до одного знака не
+ * годится: 0,69 % и 0,74 % — разные решения владельца, а печатались бы одинаково.
+ */
+export function formatBasisPoints(locale: Locale, bp: number): string {
+  return new Intl.NumberFormat(LOCALE_TAG[locale], {
+    style: 'percent',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(bp / 10_000);
+}
+
+/** Месяц периода — названием, как его печатает локаль, а не номером. */
+export function formatMonth(locale: Locale, at: number): string {
+  return new Intl.DateTimeFormat(LOCALE_TAG[locale], {
+    year: 'numeric',
+    month: 'long',
+    timeZone: 'UTC',
+  }).format(at);
+}

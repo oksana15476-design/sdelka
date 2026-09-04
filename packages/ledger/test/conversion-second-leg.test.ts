@@ -134,7 +134,7 @@ describe('вторая нога конвертации: встречная ва�
 
     const stale = checkLedgerInvariants(journal, { asOf: '2026-09-06T10:00:00Z' });
     expect(stale.map((item) => [item.code, item.subject, item.currency, item.amountMinor])).toEqual(
-      [[InvariantCode.fxPositionOpen, 'x1', 'GEL', 21_349_500n]],
+      [[InvariantCode.fxPositionOpen, 'fx:settlement:c1:x1', 'GEL', 21_349_500n]],
     );
     // Приём новых сделок этим не останавливается: покрытие не нарушено
     // (см. `InvariantCode.fxPositionOpen`).
@@ -148,7 +148,7 @@ describe('вторая нога конвертации: встречная ва�
     ]);
     const stale = checkLedgerInvariants(journal, { asOf: '2026-09-06T10:00:00Z' });
     expect(stale.map((item) => [item.code, item.subject, item.currency, item.amountMinor])).toEqual(
-      [[InvariantCode.fxPositionOpen, 'x1', 'USD', 8_000_000n]],
+      [[InvariantCode.fxPositionOpen, 'fx:settlement:c1:x1', 'USD', 8_000_000n]],
     );
   });
 

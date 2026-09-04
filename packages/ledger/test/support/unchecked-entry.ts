@@ -24,5 +24,6 @@ export function uncheckedEntry(input: JournalEntryInput): JournalEntry {
     settles: input.settles ?? null,
     converts: input.converts ?? null,
     accrues: input.accrues ?? null,
+    funds: input.funds ?? null,
   });
 }

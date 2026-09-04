@@ -338,7 +338,11 @@ INSERT INTO sdelka.account_kind
   ('shortfall_expense',     'expense',   'platform', 'result',     NULL,             NULL,       false, false, false, false),
   ('unclaimed_liability',   'liability', 'client',   NULL,         'pooled',         'terminal', false, false, false, false),
   ('transit_writeoff',      'asset',     'client',   NULL,         'pooled',         'terminal', false, false, false, false),
-  ('fx_settlement',         'asset',     'client',   NULL,         'in_attribution', NULL,       false, false, false, true),
+  -- Позиция обмена ключуется владельцем И ключом конверсии: без клиента в
+  -- коде счёта позиции разных клиентов сливались бы под одним ключом, а
+  -- открытая позиция — единственное, чем ловится «встречная валюта не
+  -- поставлена». Отсюда file_scope owner_in_code и needs_client.
+  ('fx_settlement',         'asset',     'client',   NULL,         'owner_in_code',  NULL,       false, true,  false, true),
   ('fee_receivable',        'asset',     'platform', 'receivable', NULL,             NULL,       false, false, false, false),
   ('transit_fee',           'asset',     'platform', 'transit',    NULL,             NULL,       false, false, false, false),
   ('fx_accounting_diff',    'expense',   'platform', 'result',     NULL,             NULL,       false, false, false, false);
@@ -485,7 +489,10 @@ CREATE TABLE sdelka.ledger_posting (
       WHEN 'shortfall_expense' THEN 'shortfall:expense'
       WHEN 'unclaimed_liability' THEN 'unclaimed:liability'
       WHEN 'transit_writeoff' THEN 'transit:writeoff'
-      WHEN 'fx_settlement' THEN 'fx:settlement:' || conversion_id
+      -- Владелец в коде счёта: позиции разных клиентов не сливаются под одним
+      -- ключом конверсии. Формат совпадает с accountCode() в @sdelka/ledger,
+      -- и тест дрейфа сверяет их посимвольно.
+      WHEN 'fx_settlement' THEN 'fx:settlement:' || client_key || ':' || conversion_id
       WHEN 'fee_receivable' THEN 'fee:receivable'
       WHEN 'transit_fee' THEN 'transit:fee'
       WHEN 'fx_accounting_diff' THEN 'fx:accounting:diff'
@@ -1508,9 +1515,20 @@ SELECT b.account_code, b.currency, b.balance_minor
 -- Отношение покрытия — **двумя целыми**, никогда одним дробным числом и тем
 -- более не `float` (красная линия №4). Делить здесь нечего: сравнение
 -- `custody >= obligations` целочисленное, а отношение нужно только для отчёта.
+--
+-- **[исправляет предыдущее]** Актив прежде отбирался по `in_attribution`, и это
+-- работало ровно потому, что из трёх клиентских активов файл приносило
+-- отнесение у двух. Как только у счёта расчётов с валютным контрагентом
+-- появился владелец в коде, деньги у контрагента выпали из числителя, и
+-- покрытие между моментами 2 и 3 обмена проваливалось ниже единицы — при том,
+-- что §3.3 описывает этот промежуток как **покрытый**: деньги клиента, просто
+-- не на нашем счёте. Происхождение файла к вопросу «чьи это деньги и лежат ли
+-- они где-то» отношения не имеет; терминальный пул исключается симметрично
+-- обеим сторонам, потому что его считает `v_coverage_unclaimed`.
 CREATE VIEW sdelka.v_coverage AS
 SELECT currency,
-       sum(CASE WHEN funds = 'client' AND acct_type = 'asset' AND file_scope = 'in_attribution'
+       sum(CASE WHEN funds = 'client' AND acct_type = 'asset'
+                     AND pool_direction IS DISTINCT FROM 'terminal'
                 THEN natural_minor ELSE 0 END) AS custody_minor,
        sum(CASE WHEN funds = 'client' AND acct_type = 'liability'
                      AND pool_direction IS DISTINCT FROM 'terminal'
@@ -1625,53 +1643,59 @@ SELECT COALESCE(p.account_deal_id, p.attribution_deal_id) AS deal_id,
 -- момент 2 сначала гасит ногу исходной валюты и лишь потом открывает ногу
 -- встречной, и по проводкам позиция на миг обнуляется. Возраст обмена — это
 -- возраст обмена, а не последнего движения по нему.
+-- ⚠ Ключ позиции — **код счёта**, а не ключ конверсии. Ключи конверсии двух
+-- клиентов совпадают запросто, и при группировке по ним незакрытая нога одного
+-- гасилась встречной ногой другого: «нам не поставили встречную валюту»
+-- переставало быть величиной. Зеркало `openFxPositions` ключуется кодом счёта,
+-- и подлежащим нарушения там стоит он же.
 CREATE VIEW sdelka.v_fx_position AS
 WITH by_entry AS (
-  SELECT conversion_id, entry_seq, occurred_at, currency,
+  SELECT account_code, conversion_id, entry_seq, occurred_at, currency,
          sum(natural_minor) AS delta
     FROM sdelka.v_posting
    WHERE conversion_id IS NOT NULL
-   GROUP BY 1, 2, 3, 4
+   GROUP BY 1, 2, 3, 4, 5
 ), running AS (
-  SELECT conversion_id, entry_seq, occurred_at, currency,
-         sum(delta) OVER (PARTITION BY conversion_id, currency
+  SELECT account_code, conversion_id, entry_seq, occurred_at, currency,
+         sum(delta) OVER (PARTITION BY account_code, currency
                           ORDER BY entry_seq
                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS balance
     FROM by_entry
 ), entry_state AS (
-  -- Остаток по каждой валюте на конец каждой записи, тронувшей обмен. Валюта,
+  -- Остаток по каждой валюте на конец каждой записи, тронувшей счёт. Валюта,
   -- не тронутая этой записью, свой прежний остаток сохраняет, поэтому берётся
   -- последнее известное значение.
-  SELECT e.conversion_id, e.entry_seq, e.occurred_at,
+  SELECT e.account_code, e.entry_seq, e.occurred_at,
          bool_and(COALESCE(r.balance, 0) = 0) AS flat
-    FROM (SELECT DISTINCT conversion_id, entry_seq, occurred_at FROM by_entry) e
+    FROM (SELECT DISTINCT account_code, entry_seq, occurred_at FROM by_entry) e
     LEFT JOIN LATERAL (
       SELECT DISTINCT ON (c.currency) c.currency, c.balance
         FROM running c
-       WHERE c.conversion_id = e.conversion_id AND c.entry_seq <= e.entry_seq
+       WHERE c.account_code = e.account_code AND c.entry_seq <= e.entry_seq
        ORDER BY c.currency, c.entry_seq DESC
     ) r ON true
    GROUP BY 1, 2, 3
 ), opened AS (
-  SELECT conversion_id,
-         max(occurred_at) FILTER (WHERE flat) AS last_flat_at,
+  SELECT account_code,
          max(entry_seq) FILTER (WHERE flat) AS last_flat_seq
     FROM entry_state
-   GROUP BY conversion_id
+   GROUP BY account_code
 ), current_balance AS (
-  SELECT DISTINCT ON (conversion_id, currency) conversion_id, currency, balance
+  SELECT DISTINCT ON (account_code, currency)
+         account_code, conversion_id, currency, balance
     FROM running
-   ORDER BY conversion_id, currency, entry_seq DESC
+   ORDER BY account_code, currency, entry_seq DESC
 )
-SELECT c.conversion_id,
+SELECT c.account_code,
+       c.conversion_id,
        c.currency,
        c.balance AS amount_minor,
        (SELECT min(s.occurred_at)
           FROM entry_state s
-         WHERE s.conversion_id = c.conversion_id
+         WHERE s.account_code = c.account_code
            AND s.entry_seq > COALESCE(o.last_flat_seq, -1)) AS opened_at
   FROM current_balance c
-  LEFT JOIN opened o ON o.conversion_id = c.conversion_id
+  LEFT JOIN opened o ON o.account_code = c.account_code
  WHERE c.balance <> 0;
 
 -- Транзит: `transit:writeoff` и `transit:fee`. §3.1 обещает про первый дословно
@@ -1710,6 +1734,75 @@ SELECT c.account_code,
            AND r.entry_seq > COALESCE(f.seq, -1)) AS opened_at
   FROM current_balance c
   LEFT JOIN last_flat f ON f.account_code = c.account_code AND f.currency = c.currency
+ WHERE c.balance <> 0;
+
+-- ---------------------------------------------------------------------------
+-- Незакрытая дебиторка по комиссии
+-- ---------------------------------------------------------------------------
+--
+-- Зеркало `openFeeReceivables`. Требование связывается со сделкой **только**
+-- отнесением: счёт комиссии не клиентский, файла в его коде нет и быть не
+-- может, поэтому требование без отнесения сюда не попадает — ровно как в коде.
+--
+-- Плоскость — по записи целиком, как у позиции обмена: расчёт гасит требование
+-- и ничего нового в той же записи не начисляет, но реверс начисления двигает
+-- счёт в обе стороны внутри одной записи.
+--
+-- `tranche_drained` — деньги транша ушли: запертая часть по этому траншу в этой
+-- валюте **была** и обнулилась. Оба условия важны: без «была» под правило попал
+-- бы транш, под который ещё ничего не запирали, — а это обычное окно между
+-- начислением на входе в `release_pending` и расчётом.
+CREATE VIEW sdelka.v_fee_receivable_open AS
+WITH by_entry AS (
+  SELECT attribution_deal_id AS deal_id, attribution_tranche_id AS tranche_id,
+         currency, entry_seq, occurred_at, sum(natural_minor) AS delta
+    FROM sdelka.v_posting
+   WHERE account_kind = 'fee_receivable'
+     AND attribution_deal_id IS NOT NULL
+     AND attribution_tranche_id IS NOT NULL
+   GROUP BY 1, 2, 3, 4, 5
+), running AS (
+  SELECT deal_id, tranche_id, currency, entry_seq, occurred_at,
+         sum(delta) OVER (PARTITION BY deal_id, tranche_id, currency
+                          ORDER BY entry_seq
+                          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS balance
+    FROM by_entry
+), last_flat AS (
+  SELECT deal_id, tranche_id, currency, max(entry_seq) AS seq
+    FROM running
+   WHERE balance = 0
+   GROUP BY 1, 2, 3
+), current_balance AS (
+  SELECT DISTINCT ON (deal_id, tranche_id, currency)
+         deal_id, tranche_id, currency, balance
+    FROM running
+   ORDER BY deal_id, tranche_id, currency, entry_seq DESC
+), locked AS (
+  -- Запертая часть транша читается из **кода счёта**: у `client_locked`
+  -- владелец в коде, отнесение на нём ничего не добавляет.
+  SELECT account_deal_id AS deal_id, account_tranche_id AS tranche_id,
+         currency, sum(natural_minor) AS balance
+    FROM sdelka.v_posting
+   WHERE account_kind = 'client_locked'
+     AND account_tranche_id IS NOT NULL
+   GROUP BY 1, 2, 3
+)
+SELECT c.deal_id,
+       c.tranche_id,
+       c.currency,
+       c.balance AS outstanding_minor,
+       (SELECT min(r.occurred_at)
+          FROM running r
+         WHERE r.deal_id = c.deal_id
+           AND r.tranche_id = c.tranche_id
+           AND r.currency = c.currency
+           AND r.entry_seq > COALESCE(f.seq, -1)) AS opened_at,
+       (l.deal_id IS NOT NULL AND l.balance = 0) AS tranche_drained
+  FROM current_balance c
+  LEFT JOIN last_flat f
+    ON f.deal_id = c.deal_id AND f.tranche_id = c.tranche_id AND f.currency = c.currency
+  LEFT JOIN locked l
+    ON l.deal_id = c.deal_id AND l.tranche_id = c.tranche_id AND l.currency = c.currency
  WHERE c.balance <> 0;
 
 -- ---------------------------------------------------------------------------
@@ -1763,7 +1856,12 @@ SELECT f.client_key,
 -- календарных, потому что банковского календаря в учёте нет и быть не должно.
 CREATE FUNCTION sdelka.ledger_invariant_violation(
   as_of timestamptz DEFAULT NULL,
-  stale_after_ms bigint DEFAULT 172800000
+  stale_after_ms bigint DEFAULT 172800000,
+  -- Окно требования по комиссии — отдельным аргументом и по умолчанию тем же,
+  -- что у транзита (`InvariantOptions.feeStaleAfterMs`): ожидание расчёта
+  -- законно длиннее межбанковского перевода, но настоящее окно — решение
+  -- владельца, а не умолчание.
+  fee_stale_after_ms bigint DEFAULT NULL
 )
 RETURNS TABLE (
   code text,
@@ -1811,7 +1909,7 @@ LANGUAGE sql STABLE AS $$
     FROM sdelka.v_negative_platform_asset v
 
   UNION ALL
-  SELECT 'ledger.invariant.fx_position_open', v.currency, v.conversion_id, v.amount_minor
+  SELECT 'ledger.invariant.fx_position_open', v.currency, v.account_code, v.amount_minor
     FROM sdelka.v_fx_position v, moment m
    WHERE m.at IS NOT NULL
      AND extract(epoch FROM (m.at - v.opened_at)) * 1000 > stale_after_ms
@@ -1821,6 +1919,25 @@ LANGUAGE sql STABLE AS $$
     FROM sdelka.v_transit_position v, moment m
    WHERE m.at IS NOT NULL
      AND extract(epoch FROM (m.at - v.opened_at)) * 1000 > stale_after_ms
+
+  UNION ALL
+  -- Начислено и удерживать уже не из чего: деньги транша ушли. Возраст здесь ни
+  -- при чём — расхождение немедленное и постоянное.
+  SELECT 'ledger.invariant.fee_not_withheld', v.currency,
+         v.deal_id || ':' || v.tranche_id, v.outstanding_minor
+    FROM sdelka.v_fee_receivable_open v
+   WHERE v.outstanding_minor > 0 AND v.tranche_drained
+
+  UNION ALL
+  -- Начислено, не удержано и ждёт дольше окна. Отрицательный остаток требования
+  -- сюда не попадает: это удержание без начисления, и у него свой код.
+  SELECT 'ledger.invariant.fee_receivable_stale', v.currency,
+         v.deal_id || ':' || v.tranche_id, v.outstanding_minor
+    FROM sdelka.v_fee_receivable_open v, moment m
+   WHERE v.outstanding_minor > 0 AND NOT v.tranche_drained
+     AND m.at IS NOT NULL
+     AND extract(epoch FROM (m.at - v.opened_at)) * 1000
+         > COALESCE(fee_stale_after_ms, stale_after_ms)
 
   UNION ALL
   SELECT 'ledger.invariant.shortfall_overfunded', v.currency, v.client_key, v.excess_minor
@@ -1865,3 +1982,100 @@ SELECT EXISTS (
 GRANT SELECT ON ALL TABLES IN SCHEMA sdelka TO sdelka_app;
 REVOKE UPDATE, DELETE, TRUNCATE ON sdelka.ledger_entry, sdelka.ledger_posting FROM sdelka_app;
 REVOKE UPDATE, DELETE, TRUNCATE ON sdelka.audit_record FROM sdelka_app;
+
+-- ===== 0009_raw_source.sql =====
+-- 0009 — записанные сырые ответы источников.
+--
+-- `CORE.md` Ф11: «разобранные поля без исходника суд не убедит». До этой
+-- миграции требование держалось на форме строки: `registry_observation`
+-- обязывала `raw_source_digest` быть шестнадцатеричным SHA-256 — и только.
+-- Наблюдение с отпечатком, за которым не стоит ни одного полученного ответа,
+-- вставлялось без единого возражения; ровно это и делала базовая фикстура
+-- домена.
+--
+-- Здесь появляется вторая половина требования: **ссылка обязана на что-то
+-- ссылаться**. Таблица `raw_source` — реестр полученных ответов; наблюдение и
+-- карточка заявления ссылаются на него внешним ключом. `CLAUDE.md`,
+-- «Инварианты, проверяемые базой, а не кодом»: проверка формы отвечает на
+-- вопрос «похоже ли это на отпечаток», внешний ключ — на вопрос «есть ли за ним
+-- ответ».
+--
+-- **Байтов здесь нет.** Они живут в модуле «Документы» по адресу `storage_ref`
+-- (шифрование, журнал доступа — `FUNCTIONAL.md` §1), откуда их можно выдать
+-- суду и, при законном требовании, удалить. Байты в вечной таблице дали бы
+-- обратное: удалить нельзя, а доказательная сила та же.
+
+SET LOCAL ROLE sdelka_owner;
+
+-- Карточка заявления — бесплатный сигнал уровня L1 (`ORACLE.md` §2). Своим
+-- видом, а не `registry_extract`: восстановление истории через год показало бы
+-- карточку платной выпиской, то есть соврало бы об уровне доверия, на котором
+-- двигались деньги. Дописывается в конец — `ALTER TYPE ... ADD VALUE` иначе не
+-- умеет, и порядок меток обязан совпасть с `RAW_SOURCE_KINDS`.
+--
+-- Внутри транзакции это допустимо начиная с Postgres 12; новая метка в той же
+-- транзакции не используется, поэтому «unsafe use of new value» здесь не
+-- возникает.
+ALTER TYPE sdelka.raw_source_kind ADD VALUE 'application_card';
+
+-- ---------------------------------------------------------------------------
+-- Реестр полученных ответов
+-- ---------------------------------------------------------------------------
+--
+-- Ключ — сам отпечаток, а не суррогат. Два разных адреса хранения с одним
+-- отпечатком — это один и тот же ответ, и различать их значило бы разрешить
+-- второй записи ссылаться на «другой такой же» документ.
+--
+-- Формы `storage_ref`, `media_type` и `provider` — зеркало `AUDIT_TOKEN`
+-- (`audit/src/values.ts`): пробелов нет, `@` нет, то есть ни свободного текста,
+-- ни адреса почты, ни имени сюда физически не входит.
+CREATE TABLE sdelka.raw_source (
+  digest text PRIMARY KEY CHECK (digest ~ '^[0-9a-f]{64}$'),
+  source_kind sdelka.raw_source_kind NOT NULL,
+
+  -- Адрес в хранилище документов. Не сам ответ.
+  storage_ref text NOT NULL CHECK (storage_ref ~ '^[A-Za-z0-9][A-Za-z0-9_.:/+=~-]*$' AND length(storage_ref) <= 512),
+  media_type text NOT NULL CHECK (media_type ~ '^[A-Za-z0-9][A-Za-z0-9_.:/+=~-]*$' AND length(media_type) <= 512),
+
+  -- Длина хранится рядом с отпечатком: расхождение длины при совпавшем
+  -- отпечатке — это подобранная коллизия, и такой случай обязан быть отличим
+  -- от обычной подмены файла (`attestRawSource` в `@sdelka/audit`).
+  byte_length bigint NOT NULL CHECK (byte_length >= 0),
+
+  received_at timestamptz NOT NULL,
+
+  -- Кто ответил: реестр, банк, провайдер выплат. Технический ключ, не название.
+  provider text NOT NULL CHECK (provider ~ '^[A-Za-z0-9][A-Za-z0-9_.:/+=~-]*$' AND length(provider) <= 512)
+);
+
+CREATE INDEX raw_source_received_at ON sdelka.raw_source (received_at);
+
+-- ---------------------------------------------------------------------------
+-- Ссылки, которые обязаны ссылаться
+-- ---------------------------------------------------------------------------
+--
+-- Красная линия №5: «выплата невозможна без ссылки на пакет доказательств».
+-- Ссылка на несуществующий ответ ссылкой не является — ровно так же, как
+-- запись-исправление со ссылкой на запись, которой нет в цепочке (`0007`).
+ALTER TABLE sdelka.registry_observation
+  ADD CONSTRAINT registry_observation_raw_source
+  FOREIGN KEY (raw_source_digest) REFERENCES sdelka.raw_source (digest);
+
+-- У заявления отпечаток есть только у карточки: названный стороной номер
+-- документом не подтверждён и подтверждён быть не может (`0006`,
+-- `registry_filing_card_has_source`). `NULL` внешний ключ не проверяет, поэтому
+-- обе формы остаются выразимыми, а карточка без ответа — нет.
+ALTER TABLE sdelka.registry_filing
+  ADD CONSTRAINT registry_filing_raw_source
+  FOREIGN KEY (raw_source_digest) REFERENCES sdelka.raw_source (digest);
+
+-- ---------------------------------------------------------------------------
+-- Гранты
+-- ---------------------------------------------------------------------------
+--
+-- Полученный ответ — факт, а не строка состояния: правка его задним числом
+-- рвала бы связь с наблюдениями, которые на него ссылаются. Поэтому роль
+-- приложения получает только чтение и вставку, как с журналом аудита (`0007`).
+GRANT SELECT, INSERT ON sdelka.raw_source TO sdelka_app;
+REVOKE UPDATE, DELETE, TRUNCATE ON sdelka.raw_source FROM sdelka_app;
+REVOKE ALL ON sdelka.raw_source FROM PUBLIC;

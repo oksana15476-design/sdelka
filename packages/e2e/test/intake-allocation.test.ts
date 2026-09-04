@@ -15,7 +15,7 @@ import {
   routeByMatch,
   routeByPayer,
 } from '@sdelka/intake';
-import { absorbShortfall, accountBalance, bankNominal, clientFreeAccount, clientLockedAccount, coverage } from '@sdelka/ledger';
+import { accountBalance, bankNominal, clientFreeAccount, clientLockedAccount, coverage } from '@sdelka/ledger';
 import { money } from '@sdelka/money';
 import {
   AppInvariantError,
@@ -206,47 +206,46 @@ describe('приём средств', () => {
     // ради чего стояло: недостача признаётся расходом **в момент поступления**,
     // обязательство перед клиентом доводится до полной суммы, — и на этом
     // первый момент кончается.
-    let uncovered: unknown = null;
-    try {
-      absorbIncomingShortfall(world, opened.buyerKey, short, plan.shortfall);
-    } catch (error) {
-      uncovered = error;
-    }
-    // Ровно то, что обещает §3.1: «до второй записи транш не обеспечен, и это
-    // видно в системе как расхождение, а не как норма». В сквозном мире
-    // «видно» выражается единственным способом, который у него есть: шаг не
-    // запечатывается, приём остановлен, и расхождение названо поимённо.
-    expect(uncovered).toBeInstanceOf(AppInvariantError);
-    const uncoveredNames = (uncovered as AppInvariantError).violations.map((item) => item.invariant);
+    //
+    // ⚠ Прежде этот шаг ловился как исключение, и сценарий был неправдой:
+    // признание ломает покрытие **всегда** (деньги платформы на номинальный
+    // счёт ещё не пришли), поэтому мира, в котором первый момент состоялся, не
+    // существовало вовсе — а вместе с ним был недостижим и второй. Теперь шаг
+    // проходит через `recorded` и отдаёт мир, в котором расхождение **видно**,
+    // как и обещает §3.1.
+    const absorbed = absorbIncomingShortfall(world, opened.buyerKey, short, plan.shortfall);
+    const uncoveredNames = absorbed.violations.map((item) => item.invariant);
     expect(uncoveredNames).toContain('funds_source_uncovered');
     expect(uncoveredNames).toContain('coverage_below_one');
     // И это **не** отрицательный остаток клиента: обязательство доведено до
     // полной суммы честно, не хватает денег под ним, а не денег у клиента.
     expect(uncoveredNames).not.toContain('negative_client_balance');
+    // Расхождение — величина, а не настроение: недостаёт ровно признанного.
+    const gap = coverage(absorbed.world.journal).find((item) => item.currency === GEL);
+    expect(gap?.difference.minor).toBe(-plan.shortfall.minor);
+
+    // Пока расхождение живо, в мире не может произойти ничего постороннего:
+    // следующий шаг запечатывается обычным `sealed` и падает. Это и есть
+    // «остановлен приём», выраженное структурой, а не дисциплиной.
+    let blocked: unknown = null;
+    try {
+      receiveExternalPayment(absorbed.world, opened.buyerKey, money(GEL, 1_000n));
+    } catch (error) {
+      blocked = error;
+    }
+    expect(blocked).toBeInstanceOf(AppInvariantError);
 
     // Второй момент — довнесение с операционного счёта, межбанковский перевод.
     // В этом мире операционный счёт пуст: платформа никогда ничего не
     // зарабатывала, и закрыть дыру ей нечем. Довнесение с пустого счёта
     // восстанавливает пофайловое обеспечение — и ловится отрицательным
     // остатком банковского счёта, то есть обещанием, за которым ничего нет.
-    // Клиента и суммы у довнесения в аргументах больше нет: и то и другое
-    // приходит **из записи признания**, и довнести кому угодно сколько угодно
-    // теперь нечем — `fundShortfall` принимает запись, а не сумму.
-    //
-    // ⚠ Запись признания здесь строится конструктором словаря напрямую, а не
-    // шагом мира, и это не обход правила, а его следствие: шаг мира с
-    // признанием не запечатывается (см. `uncovered` выше), поэтому получить из
-    // него значение невозможно **по построению**. То есть красная линия №3
-    // держится даже против теста, которому запись нужна.
-    const recognised = absorbShortfall(
-      { id: 'entry-recognition', occurredAt: new Date(NOW).toISOString() },
-      opened.buyerKey,
-      short,
-      plan.shortfall,
-    );
+    // Клиента и суммы у довнесения в аргументах нет: и то и другое приходит
+    // **из записи признания**, а сама запись обязана лежать в журнале — довнести
+    // по признанию, которого никто не проводил, `fundShortfall` не даёт.
     let promised: unknown = null;
     try {
-      fundIncomingShortfall(world, recognised);
+      fundIncomingShortfall(absorbed.world, absorbed.recognised);
     } catch (error) {
       promised = error;
     }
@@ -258,10 +257,10 @@ describe('приём средств', () => {
     // Что из этого следует и кому. Недостачу закрывают **наши** деньги, а
     // единственный способ их появления в сквозном мире — заработанная
     // комиссия: операционного остатка платформы этот мир не заводит вовсе, и
-    // взяться ему неоткуда. Пока это так, случай А исполним только в мире, где
-    // хотя бы одна сделка уже расчитана. Владельцу: источник операционных
-    // средств (взнос капитала) в плане счетов §3.1 не назван — а без него
-    // «платформа доплачивает» держится на пустом счёте.
+    // взяться ему неоткуда. Пока это так, случай А доходит до второго момента
+    // только в мире, где хотя бы одна сделка уже расчитана. Владельцу: источник
+    // операционных средств (взнос капитала) в плане счетов §3.1 не назван — а
+    // без него «платформа доплачивает» держится на пустом счёте.
   });
 
   it('накапливает дробные платежи и применяет допуск один раз к итогу', async () => {

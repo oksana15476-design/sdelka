@@ -15,5 +15,6 @@ export * from './reachability';
 export * from './release-condition';
 export * from './result';
 export * from './schedule';
+export * from './tariff';
 export * from './tranche';
 export * from './tranche-events';

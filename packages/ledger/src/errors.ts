@@ -31,6 +31,10 @@ export const LedgerErrorCode = {
   // Комиссия удерживается из платежа, не будучи начисленной, либо начисление
   // относится к другому траншу или другой сумме.
   entryFeeAccrualMismatch: 'ledger.entry.fee_accrual_mismatch',
+  // Довнесение недостачи не совпадает с собственным объявлением: прирост в
+  // чужом файле, в чужой валюте, не на объявленную сумму или не из денег
+  // платформы.
+  entryShortfallFundingMismatch: 'ledger.entry.shortfall_funding_mismatch',
   entryCorrectionWithoutReference: 'ledger.entry.correction_without_reference',
   entrySettlementWithReference: 'ledger.entry.settlement_with_reference',
   postingNonPositiveAmount: 'ledger.posting.non_positive_amount',
@@ -39,6 +43,17 @@ export const LedgerErrorCode = {
   postingClientAttributionMismatch: 'ledger.posting.client_attribution_mismatch',
   journalDuplicateEntryId: 'ledger.journal.duplicate_entry_id',
   journalCorrectionTargetMissing: 'ledger.journal.correction_target_missing',
+  // Второе начисление комиссии по тому же траншу. Идемпотентность начисления
+  // (§4.6, Ф16): «начислено» — величина транша, а не счётчик вызовов.
+  journalFeeAccruedTwice: 'ledger.journal.fee_accrued_twice',
+  // Ключ конверсии переиспользован под другой обмен: тот же счёт расчётов, но
+  // другие объявленные ноги. Позиции двух обменов сложились бы в одну.
+  journalConversionKeyReused: 'ledger.journal.conversion_key_reused',
+  // Довнесение ссылается на признание, которого в журнале нет или которое
+  // признало не то (другой клиент, другая валюта, другая сумма).
+  journalShortfallRecognitionMissing: 'ledger.journal.shortfall_recognition_missing',
+  // Одно признание недостачи довносится второй раз.
+  journalShortfallFundedTwice: 'ledger.journal.shortfall_funded_twice',
 } as const;
 
 export type LedgerErrorCode = (typeof LedgerErrorCode)[keyof typeof LedgerErrorCode];

@@ -23,7 +23,7 @@ import {
   receiveFee,
 } from '@sdelka/ledger';
 import { type Rational, split } from '@sdelka/money';
-import type { Intent } from '../../src/index';
+import { type Intent, assertWithholdingWithinCeiling } from '../../src/index';
 
 /**
  * Проекция намерений транша в проводки. Живёт в тестах намеренно: домен не
@@ -85,6 +85,17 @@ export function projectIntents(
       // у получателя, поэтому она берётся вычитанием, а не умножением.
       const parts = split(intent.amount, [{ key: 'fee:income', rate: options.feeRate }]);
       const feeAmount = parts.deductions[0]?.amount ?? null;
+      // Потолок удержания приезжает в намерении и проверяется здесь — там, где
+      // применяется ставка (`tariff.ts`, эпик E16). `split` отвергает только
+      // «удержано больше суммы»: на полностью обеспеченном транше удержание в
+      // 19 999 999 из 20 000 000 проходило целиком, и учёт сходился.
+      //
+      // ⚠ Это проекция домена. Боевая проекция расчёта живёт в
+      // `packages/app` (`projectSettlementIntent`) и той же сверки пока не
+      // делает — названо в отчёте.
+      if (feeAmount !== null) {
+        assertWithholdingWithinCeiling(intent.amount, feeAmount);
+      }
       // Удержание принимает НАЧИСЛЕНИЕ, а не сумму: Ф16 требует двух встречных
       // фактов, и запись расчёта ссылается на то начисление, из которого
       // удерживает. Сумма без начисления — «уменьшенный платёж», то есть ровно

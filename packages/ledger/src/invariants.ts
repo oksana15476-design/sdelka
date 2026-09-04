@@ -7,6 +7,7 @@ import {
   negativeBankBalances,
   negativeClientBalances,
   negativePlatformAssetBalances,
+  openFeeReceivables,
   openFxPositions,
   openTransitPositions,
   unclaimedCoverage,
@@ -110,6 +111,43 @@ export const InvariantCode = {
    */
   transitStale: 'ledger.invariant.transit_stale',
   /**
+   * Комиссия по траншу начислена и **не удержана, хотя удерживать уже не из
+   * чего**: запертая часть транша была и обнулилась — расчёт прошёл, деньги
+   * ушли, требование осталось.
+   *
+   * До появления этой проверки состояние «начислено и никогда не удержано» не
+   * выражалось ничем. Прямой случай — двойное начисление: два `accrueFee` по
+   * одному траншу давали `fee:receivable` вдвое и признавали доход дважды, а
+   * расчёт удерживал ровно одно начисление. Покрытие цело, отрицательных
+   * остатков нет, транзит в порядке — `checkLedgerInvariants` возвращала пустой
+   * список.
+   *
+   * Второй случай, который сюда же попадает и попадать обязан: уход в
+   * возвратную ветвь без реверса начисления (§4.4). Комиссия за расчёт, который
+   * не состоялся, — это `service:income` и другой режим НДС (§4.6, помечено
+   * **[открыто]**), а не молчаливый остаток на требовании.
+   *
+   * Приём новых сделок этим не останавливается: клиентские деньги здесь не
+   * затронуты, красная линия №3 не нарушена. Это расхождение для дежурного и
+   * для сверки комиссии.
+   */
+  feeNotWithheld: 'ledger.invariant.fee_not_withheld',
+  /**
+   * Требование по начисленной комиссии висит дольше окна.
+   *
+   * §4.6 называет «начислено, не удержано» законным состоянием — оно и есть
+   * законное, пока транш ждёт расчёта. Законным навсегда оно не бывает:
+   * начисление, о котором забыли, — это признанный доход без встречного
+   * удержания, то есть налоговая база из воздуха.
+   *
+   * ⚠ Окно здесь **не то же самое**, что у транзита. Транзит — межбанковский
+   * перевод, два банковских дня; ожидание расчёта — это утверждения,
+   * `release_blocked` и «неизвестно» у выплаты, и оно законно длиннее.
+   * Умолчание взято равным транзитному (самое строгое из осмысленных);
+   * настоящее окно — решение владельца, см. отчёт по батчу.
+   */
+  feeReceivableStale: 'ledger.invariant.fee_receivable_stale',
+  /**
    * В файл клиента внесено денег платформы больше, чем по нему признано
    * недостачи (FUNCTIONAL.md §3.1, случай А).
    *
@@ -152,6 +190,12 @@ export interface InvariantViolation {
 export interface InvariantOptions {
   readonly asOf?: string;
   readonly staleAfterMs?: number;
+  /**
+   * Окно для требования по начисленной комиссии. Отдельно от `staleAfterMs`:
+   * см. `feeReceivableStale` — ожидание расчёта законно длиннее межбанковского
+   * перевода. Умолчание — то же, что у транзита.
+   */
+  readonly feeStaleAfterMs?: number;
 }
 
 const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
@@ -185,6 +229,7 @@ export function checkLedgerInvariants(
   const violations: InvariantViolation[] = [];
   const asOf = options.asOf ?? latestOccurredAt(journal);
   const staleAfterMs = options.staleAfterMs ?? TWO_DAYS_MS;
+  const feeStaleAfterMs = options.feeStaleAfterMs ?? staleAfterMs;
 
   for (const entry of journal.entries) {
     for (const [currency, total] of balanceByCurrency(entry.postings)) {
@@ -265,9 +310,12 @@ export function checkLedgerInvariants(
       if (age === null || age <= staleAfterMs) continue;
       for (const balance of position.balances) {
         violations.push({
+          // Подлежащее — код счёта, а не ключ конверсии: у двух клиентов
+          // ключи совпадают запросто, и «висит обмен x1» без имени клиента
+          // дежурному сказать нечего.
           code: InvariantCode.fxPositionOpen,
           currency: balance.currency,
-          subject: position.conversionId,
+          subject: position.accountCode,
           amountMinor: balance.amount.minor,
         });
       }
@@ -283,6 +331,33 @@ export function checkLedgerInvariants(
         amountMinor: position.amount.minor,
       });
     }
+  }
+
+  for (const position of openFeeReceivables(journal)) {
+    // Отрицательный остаток требования — удержание без начисления, и у него
+    // свой код (`platformAssetNegative`). Сюда попадает только неудержанное.
+    if (position.outstanding.minor <= 0n) continue;
+    const subject = `${position.deal.dealId}:${position.deal.trancheId}`;
+    // Возраст здесь ни при чём: деньги транша ушли, удерживать не из чего, и
+    // ждать нечего — расхождение немедленное и постоянное.
+    if (position.trancheDrained) {
+      violations.push({
+        code: InvariantCode.feeNotWithheld,
+        currency: position.currency,
+        subject,
+        amountMinor: position.outstanding.minor,
+      });
+      continue;
+    }
+    if (asOf === null) continue;
+    const age = ageMs(position.openedAt, asOf);
+    if (age === null || age <= feeStaleAfterMs) continue;
+    violations.push({
+      code: InvariantCode.feeReceivableStale,
+      currency: position.currency,
+      subject,
+      amountMinor: position.outstanding.minor,
+    });
   }
 
   for (const item of overfundedShortfalls(journal)) {

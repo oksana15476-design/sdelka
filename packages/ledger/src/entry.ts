@@ -287,9 +287,12 @@ export function fxExecution(
  * 1. **Нет проводки — нет объявления, и наоборот.** Объявление на записи, где
  *    обмена нет, — это курс, приписанный чужой операции; проводка без
  *    объявления — движение валюты неизвестно по какому курсу.
- * 2. **Ключ конверсии один.** Запись, трогающая две конверсии сразу, снова
+ * 2. **Счёт обмена один.** Запись, трогающая две конверсии сразу, снова
  *    сложила бы их позиции в одну — ровно то, ради чего ключ появился в коде
- *    счёта.
+ *    счёта. Сверяется именно **код счёта**, а не ключ конверсии: с владельцем
+ *    в коде один и тот же ключ у двух клиентов — это два разных счёта, и
+ *    проверка по одному ключу пропустила бы запись, гасящую позицию клиента A
+ *    ногой клиента B.
  * 3. **Сумма — одна из двух объявленных ног.** Иначе можно объявить обмен на
  *    сто лари, а двинуть сто тысяч.
  */
@@ -314,8 +317,11 @@ function assertConversionDeclared(
     });
   }
   const { source, target } = converts.converted;
+  let account: string | null = null;
   for (const posting of legs) {
-    if (conversionOfAccount(posting.account) !== converts.conversionId) {
+    const code = accountCode(posting.account);
+    account ??= code;
+    if (conversionOfAccount(posting.account) !== converts.conversionId || code !== account) {
       throw new LedgerError(LedgerErrorCode.entryConversionUndeclared, {
         account: accountCode(posting.account),
         conversionId: converts.conversionId,
@@ -400,6 +406,91 @@ function assertFeeAccrualDeclared(
   }
 }
 
+/**
+ * Объявление довнесения недостачи: **какое именно признание** закрывается этим
+ * переводом с операционного счёта на номинальный (FUNCTIONAL.md §3.1, случай А,
+ * момент 2).
+ *
+ * Зачем ссылка, если сумма и владелец и так берутся из токена признания. Токен
+ * — защита конструктора словаря: он делает форму «доложить кому угодно сколько
+ * угодно» невыразимой в `entries.ts`. Но записанной в журнал остаётся обычная
+ * пара проводок «Дт bank:nominal (файл клиента) / Кт bank:operating», в которой
+ * **не написано, что она закрывает**. Из-за этого:
+ *
+ * - одно признание можно довнести дважды: токен — значение, его никто не гасит;
+ * - признание вообще может не попасть в журнал: `absorbShortfall` возвращает
+ *   запись, а положить её в журнал — отдельное действие.
+ *
+ * Оба случая ловил только инвариант `shortfallOverfunded` и только постфактум,
+ * сложением по клиенту за всю историю. Со ссылкой их ловит `appendEntry`: она
+ * видит журнал и требует, чтобы признание в нём было, совпадало по владельцу,
+ * валюте и сумме и не было закрыто раньше.
+ */
+export interface ShortfallFunding {
+  /** Идентификатор записи признания (`absorbShortfall`). */
+  readonly recognisedEntryId: string;
+  readonly owner: ClientKey;
+  readonly amount: Money<CurrencyCode>;
+}
+
+/**
+ * Довнесение делает ровно одно и ровно столько, сколько объявлено.
+ *
+ * Прирост обеспечения в записи обязан быть **один**, в файле объявленного
+ * клиента, в объявленной валюте и на объявленную сумму; и ровно столько же
+ * обязано уйти с банковского счёта платформы. `assertNoUnfundedClientFileGain`
+ * проверяет неравенство (прирост не больше финансирования) — здесь равенство в
+ * обе стороны: довнесение, попутно двигающее чужой файл или уводящее с
+ * операционного счёта больше объявленного, довнесением не является.
+ */
+function assertShortfallFundingDeclared(
+  kind: JournalEntryKind,
+  postings: readonly Posting[],
+  funds: ShortfallFunding | undefined,
+): void {
+  if (funds === undefined) return;
+  const fail = (details: Readonly<Record<string, string>>): never => {
+    throw new LedgerError(LedgerErrorCode.entryShortfallFundingMismatch, {
+      recognisedEntryId: funds.recognisedEntryId,
+      owner: funds.owner,
+      ...details,
+    });
+  };
+  // Исправление довнесения — обратная проводка со ссылкой на исправляемую
+  // запись, а не второе довнесение по тому же признанию. Объявление на
+  // исправлении означало бы, что признание закрыто ещё раз.
+  if (kind !== 'settlement') {
+    fail({ kind });
+  }
+  let gained = 0n;
+  for (const gain of clientFileGains(postings)) {
+    if (gain.minor === 0n) continue;
+    const source = gain.source;
+    const belongsToOwner =
+      source !== null && isClientRef(source) && source.clientKey === funds.owner;
+    if (!belongsToOwner || gain.currency !== funds.amount.currency) {
+      fail({
+        file:
+          source === null
+            ? ''
+            : isClientRef(source)
+              ? source.clientKey
+              : `${source.dealId}:${source.trancheId}`,
+        currency: gain.currency,
+        minor: gain.minor.toString(),
+      });
+    }
+    gained += gain.minor;
+  }
+  if (gained !== funds.amount.minor) {
+    fail({ declared: funds.amount.minor.toString(), gained: gained.toString() });
+  }
+  const funded = platformFunding(kind, postings).get(funds.amount.currency) ?? 0n;
+  if (funded !== funds.amount.minor) {
+    fail({ declared: funds.amount.minor.toString(), funded: funded.toString() });
+  }
+}
+
 export interface JournalEntryInput {
   readonly id: string;
   readonly occurredAt: string;
@@ -423,6 +514,12 @@ export interface JournalEntryInput {
    * Необязательно; объявленное обязано соответствовать проводкам.
    */
   readonly accrues?: FeeAccrualDeclaration;
+  /**
+   * Объявление довнесения недостачи со ссылкой на признание. Обязательно там,
+   * где деньги платформы кладутся в файл клиента: без ссылки признание нечем
+   * погасить, и одно признание довносится сколько угодно раз.
+   */
+  readonly funds?: ShortfallFunding;
 }
 
 export interface JournalEntry {
@@ -435,6 +532,7 @@ export interface JournalEntry {
   readonly settles: TrancheSettlement | null;
   readonly converts: FxExecution | null;
   readonly accrues: FeeAccrualDeclaration | null;
+  readonly funds: ShortfallFunding | null;
 }
 
 function signedMinor(posting: Posting): bigint {
@@ -1158,6 +1256,7 @@ export function createJournalEntry(input: JournalEntryInput): JournalEntry {
   assertNoUnfundedClientFileGain(input.kind, input.postings);
   assertConversionDeclared(input.postings, input.converts);
   assertFeeAccrualDeclared(input.kind, input.postings, input.accrues);
+  assertShortfallFundingDeclared(input.kind, input.postings, input.funds);
   if (input.kind === 'correction' && input.correctsEntryId === undefined) {
     throw new LedgerError(LedgerErrorCode.entryCorrectionWithoutReference, { id: input.id });
   }
@@ -1181,6 +1280,10 @@ export function createJournalEntry(input: JournalEntryInput): JournalEntry {
     // Версия тарифного плана остаётся в журнале: §4.2, «иначе через год нельзя
     // воспроизвести, почему списали именно столько».
     accrues: input.accrues ?? null,
+    // Ссылка на признание остаётся в журнале: без неё «это довнесение по вот
+    // этой недостаче» — утверждение, которое негде проверить, и повторное
+    // довнесение по тому же признанию неотличимо от первого.
+    funds: input.funds ?? null,
   });
 }
 

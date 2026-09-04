@@ -5,7 +5,9 @@ import {
   DEFAULT_DEADLINE_POLICY,
   RejectionCode,
   RELEASE_CONDITIONS,
+  RELEASE_CONDITION_TYPES,
   initialTrancheState,
+  isUsableReleaseCondition,
   isTerminalTrancheStatus,
   payoutIdempotencyKey,
   reduceTranche,
@@ -300,7 +302,12 @@ describe('транш: тип условия релиза', () => {
    * получатель (ст. 27(2), Ф13), и подменить его тип событием нельзя.
    */
   it('accepts each usable condition type against its own act, and refuses a substituted one', () => {
-    for (const conditionType of ['registration_transfer', 'calendar_date'] as const) {
+    // Годные типы берутся из перечня, а не перечисляются здесь: список,
+    // переписанный в тест руками, разойдётся с правилом молча. Сегодня годен
+    // ровно один — см. следующий тест про `calendar_date`.
+    const usable = RELEASE_CONDITION_TYPES.filter(isUsableReleaseCondition);
+    expect(usable).toEqual(['registration_transfer']);
+    for (const conditionType of usable) {
       const act = { ...CONDITION_ACT, conditionType };
       const ctx = context({
         conditionAct: act,
@@ -319,14 +326,56 @@ describe('транш: тип условия релиза', () => {
     }
   });
 
-  it('refuses a condition type that is not the one in the act', () => {
-    // Транш ждёт регистрацию перехода права, а событие объявляет наступившей
-    // календарную дату. Отказ, а не переход: иначе условие расчёта
-    // переопределяется мимо получателя (красная линия №6).
+  /**
+   * `calendar_date` — тип, который стоял в перечне и работать не мог.
+   *
+   * Требование к наблюдению у него то же, что у регистрации: `L3` от
+   * `time.independent_timestamp` (`OBSERVATION_REQUIREMENTS`). Такого
+   * наблюдения не собирает ни одна строка кода; сверх того `g_fields_match`
+   * ждёт пяти сошедшихся полей **выписки**, а `g_observation_sufficient` —
+   * непустого кадастрового кода, которых у календарной даты нет вовсе.
+   *
+   * Этот тест раньше проходил в паре с регистрацией — и проходил только
+   * потому, что фикстура собирала наблюдение, которого в природе не бывает:
+   * пять `true` без единого документа за ними. Теперь отказ называет причину.
+   */
+  it('refuses calendar_date by name: its source is not produced by anything', () => {
+    const act = { ...CONDITION_ACT, conditionType: 'calendar_date' } as const;
     const error = reject(
-      stateAt('reserved'),
+      stateAt('reserved', NOW, act),
       { type: 'condition_established', evidenceBundleId: 'evidence-1', conditionType: 'calendar_date' },
-      context(),
+      context({ conditionAct: act }),
+    );
+    expect(error.code).toBe(RejectionCode.releaseConditionSourceUnavailable);
+    expect(error.details.sourceKey).toBe('time.independent_timestamp');
+    // И приём средств по такому акту не открывается вовсе: акт невалиден, а
+    // `g_condition_agreed` стоит на входе в `collecting`.
+    const closed = reject(
+      stateAt('pending', NOW, null),
+      { type: 'instructions_issued' },
+      context({ conditionAct: act }),
+    );
+    expect([...closed.failedGuards]).toContain('g_condition_agreed');
+  });
+
+  it('refuses a condition type that is not the one in the act', () => {
+    // Направление пробы развёрнуто вместе с `calendar_date`: раньше акт ждал
+    // регистрацию, а событие объявляло календарную дату. Теперь календарная
+    // дата отвергается раньше — по недостающему источнику, — и подмена типа
+    // проверяется обратной парой: акт транша говорит о календарной дате, а
+    // событие объявляет наступившей регистрацию.
+    //
+    // Проверяемое правило то же и стоит там же: условие определяет получатель
+    // (ст. 27(2), Ф13), подменить его тип событием нельзя (красная линия №6).
+    const act = { ...CONDITION_ACT, conditionType: 'calendar_date' } as const;
+    const error = reject(
+      stateAt('reserved', NOW, act),
+      {
+        type: 'condition_established',
+        evidenceBundleId: 'evidence-1',
+        conditionType: 'registration_transfer',
+      },
+      context({ conditionAct: act }),
     );
     expect(error.code).toBe(RejectionCode.conditionTypeSubstituted);
   });

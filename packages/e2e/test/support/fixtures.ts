@@ -1,7 +1,8 @@
 import {
   type RawSourceRef,
   auditInstant,
-  rawSourceRef,
+  type CapturedRawSource,
+  captureRawSource,
 } from '@sdelka/audit';
 import {
   type BeneficiaryRequisites,
@@ -167,15 +168,19 @@ export function rawSource(
   seed: number,
   sourceKind: RawSourceRef['sourceKind'],
   provider: string,
-): RawSourceRef {
-  return rawSourceRef({
+): CapturedRawSource {
+  // Байты настоящие, пусть и синтетические: отпечаток считается из них, а не
+  // выдумывается. Фикстура, подставляющая отпечаток мимо байтов, проверяла бы
+  // форму строки, а не доказуемость источника.
+  const bytes = new Uint8Array(1024 + seed);
+  bytes.fill(seed % 256);
+  return captureRawSource({
     sourceKind,
     storageRef: `documents/${sourceKind}/${seed}`,
     mediaType: 'application/json',
-    byteLength: 1024 + seed,
-    digest: fp(1000 + seed),
     receivedAt: auditInstant(NOW),
     provider,
+    bytes,
   });
 }
 

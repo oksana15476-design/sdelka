@@ -137,7 +137,10 @@ CREATE TABLE sdelka.ledger_posting (
       WHEN 'shortfall_expense' THEN 'shortfall:expense'
       WHEN 'unclaimed_liability' THEN 'unclaimed:liability'
       WHEN 'transit_writeoff' THEN 'transit:writeoff'
-      WHEN 'fx_settlement' THEN 'fx:settlement:' || conversion_id
+      -- Владелец в коде счёта: позиции разных клиентов не сливаются под одним
+      -- ключом конверсии. Формат совпадает с accountCode() в @sdelka/ledger,
+      -- и тест дрейфа сверяет их посимвольно.
+      WHEN 'fx_settlement' THEN 'fx:settlement:' || client_key || ':' || conversion_id
       WHEN 'fee_receivable' THEN 'fee:receivable'
       WHEN 'transit_fee' THEN 'transit:fee'
       WHEN 'fx_accounting_diff' THEN 'fx:accounting:diff'

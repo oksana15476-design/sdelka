@@ -42,6 +42,19 @@ const CONSOLE_SECTIONS = [
   { key: 'nav.unfreeze', href: '/ops/unfreeze' },
 ] as const;
 
+/**
+ * Кабинет владельца — третье рабочее место, и оно **не пересекается** с
+ * консолью ни одним разделом (E16-1). Ссылки на очередь здесь нет намеренно:
+ * владелец не утверждает выплату, а «расширенные права» — это ровно тот способ,
+ * которым разделение ролей теряется. Обратной ссылки из консоли сюда тоже нет:
+ * операционная роль не видит деньги компании.
+ */
+const OWNER_SECTIONS = [
+  { key: 'nav.owner.summary', href: '/owner' },
+  { key: 'nav.owner.deals', href: '/owner/deals' },
+  { key: 'nav.owner.tariff', href: '/owner/tariff' },
+] as const;
+
 function isCurrent(path: string, locale: string, href: string): boolean {
   const own = `/${locale}${href}`;
   if (href === '') return path === `/${locale}` || path === `/${locale}/`;
@@ -74,13 +87,15 @@ export function AppShell({
   readonly l: L10n;
   readonly path: string;
   readonly viewer: ViewerCard;
-  readonly variant?: 'client' | 'console';
+  readonly variant?: 'client' | 'console' | 'owner';
   readonly unread?: number;
   readonly children: ReactNode;
 }): ReactNode {
   const console = variant === 'console';
-  const home = console ? `/${l.locale}/ops` : `/${l.locale}`;
-  const sections = console ? CONSOLE_SECTIONS : SECTIONS;
+  const owner = variant === 'owner';
+  const home = console ? `/${l.locale}/ops` : owner ? `/${l.locale}/owner` : `/${l.locale}`;
+  const sections = console ? CONSOLE_SECTIONS : owner ? OWNER_SECTIONS : SECTIONS;
+  const wide = console || owner;
   return (
     <div className="frame">
       <div className="shell">
@@ -89,7 +104,7 @@ export function AppShell({
             <Mark />
             <span>
               {t(l.dict, 'app.brand')}
-              <small>{t(l.dict, console ? 'app.console' : 'app.tagline')}</small>
+              <small>{t(l.dict, console ? 'app.console' : owner ? 'app.owner' : 'app.tagline')}</small>
             </span>
           </a>
 
@@ -126,7 +141,7 @@ export function AppShell({
                 </a>
               ))}
             </div>
-            {console ? (
+            {console || owner ? (
               <a className="nav__link" href={`/${l.locale}`}>
                 <span>{t(l.dict, 'nav.deals')}</span>
               </a>
@@ -143,6 +158,12 @@ export function AppShell({
                 </a>
                 <a className="nav__link" href={`/${l.locale}/ops`}>
                   <span>{t(l.dict, 'nav.console')}</span>
+                </a>
+                {/* Пока сессий нет, оба рабочих места достижимы по адресу —
+                    ссылка это только признаёт. Правом она не является: право
+                    проверяет сервер, которого ещё нет (`owner-role.ts`). */}
+                <a className="nav__link" href={`/${l.locale}/owner`}>
+                  <span>{t(l.dict, 'nav.owner')}</span>
                 </a>
               </>
             )}
@@ -168,7 +189,7 @@ export function AppShell({
             </a>
           </header>
           <main className="main" id="content">
-            <div className={console ? 'sheet sheet--wide' : 'sheet'}>{children}</div>
+            <div className={wide ? 'sheet sheet--wide' : 'sheet'}>{children}</div>
           </main>
         </div>
       </div>

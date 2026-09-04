@@ -22,7 +22,15 @@ export function stripComments(sql: string): string {
 
 export const CODE_SQL = stripComments(ALL_SQL);
 
-/** Перечни: `CREATE TYPE sdelka.<имя> AS ENUM (...)` → значения по порядку. */
+/**
+ * Перечни: `CREATE TYPE sdelka.<имя> AS ENUM (...)` плюс последующие
+ * `ALTER TYPE sdelka.<имя> ADD VALUE '<метка>'` — значения по порядку.
+ *
+ * Дописанные метки обязаны учитываться здесь, иначе тест дрейфа читает только
+ * первую редакцию перечня: значение добавлено в TS и в миграцию, а сверка
+ * видит старый список и падает на верном коде. Ошибка в сторону ложной тревоги
+ * тоже ошибка — на второй раз такой тест начинают «чинить» ослаблением.
+ */
 export function parseEnums(sql: string): ReadonlyMap<string, readonly string[]> {
   const result = new Map<string, readonly string[]>();
   const pattern = /CREATE TYPE sdelka\.([a-z_]+) AS ENUM \(([^)]*)\)/gu;
@@ -35,6 +43,24 @@ export function parseEnums(sql: string): ReadonlyMap<string, readonly string[]> 
       result.set(name, Object.freeze(values));
     }
     match = pattern.exec(sql);
+  }
+  const added = /ALTER TYPE sdelka\.([a-z_]+) ADD VALUE ([^;]*);/gu;
+  let alter = added.exec(sql);
+  while (alter !== null) {
+    const name = alter[1] ?? '';
+    const tail = alter[2] ?? '';
+    if (/\b(BEFORE|AFTER)\b/u.test(tail)) {
+      // Вставку метки в середину перечня разборщик не моделирует. Молча вернуть
+      // неверный порядок хуже, чем упасть: порядок меток виден в `ORDER BY`, и
+      // разошедшаяся сортировка отчёта дежурному ничем себя не выдаёт.
+      throw new Error(`db.enum.position_not_modelled:${name}`);
+    }
+    const label = /'([^']*)'/u.exec(tail)?.[1];
+    const previous = result.get(name);
+    if (label !== undefined && previous !== undefined) {
+      result.set(name, Object.freeze([...previous, label]));
+    }
+    alter = added.exec(sql);
   }
   return result;
 }

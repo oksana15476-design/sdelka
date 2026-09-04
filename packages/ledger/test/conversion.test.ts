@@ -66,7 +66,7 @@ const eightyThousandUsd: Money = money('USD', 8_000_000n);
 const converted = convert(eightyThousandUsd, rates, asOf, 'trunc');
 const spread = platformSpread(converted, 'trunc');
 const exchange = fxExecution('x1', converted);
-const settlementAccount = fxSettlement('x1');
+const settlementAccount = fxSettlement(owner, 'x1');
 
 /** Все три момента обмена подряд — обычный путь. */
 function convertedJournal() {
@@ -165,7 +165,7 @@ describe('конвертация — операция с внешним конт
       violations
         .filter((item) => item.code === InvariantCode.negativeClientBalance)
         .map((item) => [item.subject, item.amountMinor]),
-    ).toEqual([['fx:settlement:x1', -21_349_500n]]);
+    ).toEqual([['fx:settlement:c1:x1', -21_349_500n]]);
     expect(shouldStopAcceptingDeals(journal)).toBe(true);
   });
 
@@ -181,7 +181,7 @@ describe('конвертация — операция с внешним конт
       violations
         .filter((item) => item.code === InvariantCode.negativeClientBalance)
         .map((item) => [item.subject, item.amountMinor]),
-    ).toEqual([['fx:settlement:x1', -8_000_000n]]);
+    ).toEqual([['fx:settlement:c1:x1', -8_000_000n]]);
     expect(shouldStopAcceptingDeals(journal)).toBe(true);
   });
 
@@ -337,7 +337,7 @@ describe('объявление обмена — курс становится ф
           memoKey: 'ledger.entry.fx_sent_for_conversion',
           converts: exchange,
           postings: [
-            credit(fxSettlement('x9'), eightyThousandUsd, { clientKey: owner }),
+            credit(fxSettlement(owner, 'x9'), eightyThousandUsd, { clientKey: owner }),
             debit(settlementAccount, eightyThousandUsd, { clientKey: owner }),
           ],
         }),
