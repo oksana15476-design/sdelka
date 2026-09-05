@@ -252,6 +252,67 @@ function checkLiterals() {
   if (failures.length === before) pass('ни одной строки текста в компонентах: только ключи');
 }
 
+/* --------------------------------------- 2b. шрифты не приходят из сети */
+
+/**
+ * Гарнитура, которую тянут с чужого домена, — это гарнитура, которой иногда
+ * нет: сеть в проде не гарантирована, а не приехавший шрифт выглядит ровно
+ * так же, как его отсутствие до этого захода, только ещё и с миганием. Файлы
+ * лежат в `public/fonts` (`scripts/fetch-fonts.mjs`), и адрес чужого домена в
+ * стилях или разметке роняет прогон.
+ */
+const EXTERNAL_FONT_HOSTS = [/fonts\.googleapis\.com/u, /fonts\.gstatic\.com/u, /use\.typekit/u, /cdn\.jsdelivr/u];
+
+/**
+ * Файлы гарнитур на месте и те самые.
+ *
+ * Отпечаток сверяется с `public/fonts/MANIFEST.json`: подмножество, потерянное
+ * при обновлении, не роняет ни сборку, ни страницу — оно роняет **язык**.
+ * Пропавший `cyrillic` виден только на русском тексте, пропавший `latin-ext` —
+ * только на знаке лари, и ни то, ни другое не выглядит ошибкой.
+ */
+function checkFontFiles() {
+  const dir = join(APP_ROOT, 'public', 'fonts');
+  const manifestPath = join(dir, 'MANIFEST.json');
+  if (!existsSync(manifestPath)) {
+    fail('шрифт', 'public/fonts/MANIFEST.json не найден — шрифты не скачаны (scripts/fetch-fonts.mjs)');
+    return;
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  for (const item of manifest.files) {
+    const file = join(dir, item.file);
+    if (!existsSync(file)) {
+      fail('шрифт', `нет файла ${item.file}`);
+      continue;
+    }
+    const digest = createHash('sha256').update(readFileSync(file)).digest('hex');
+    if (digest !== item.sha256) fail('шрифт', `отпечаток разошёлся с манифестом: ${item.file}`);
+  }
+  const known = new Set(manifest.files.map((item) => item.file));
+  for (const entry of readdirSync(dir)) {
+    if (entry.endsWith('.woff2') && !known.has(entry)) {
+      fail('шрифт', `файл вне манифеста: ${entry}`);
+    }
+  }
+}
+
+function checkFontSources() {
+  process.stdout.write('Шрифты только свои\n');
+  const before = failures.length;
+  for (const file of SOURCE_FILES) {
+    const text = readFileSync(file, 'utf8');
+    for (const pattern of EXTERNAL_FONT_HOSTS) {
+      if (pattern.test(text)) {
+        fail('шрифт', `${relative(APP_ROOT, file)}: адрес чужого домена — ${pattern.source}`);
+      }
+    }
+  }
+  checkFontFiles();
+  if (failures.length === before) {
+    pass('внешних адресов шрифтов в исходниках нет, файлы совпадают с манифестом');
+  }
+}
+
 /* ------------------------------------------------- 3. словари трёх языков */
 
 function checkDictionaries() {
@@ -362,6 +423,44 @@ function checkForbiddenLexicon(dicts) {
   }
 }
 
+/* ------------------------------- 3b. что ещё не прошло приёмку человеком */
+
+/**
+ * Два перечня, которые обязаны быть видны числом на каждом прогоне:
+ *
+ * · **⚖-слоты** (`ui/primitives.tsx`) — строки с юридическим весом, которые не
+ *   публикуются вовсе, пока их не напишет юрист;
+ * · **черновики микрокопи** (`ui/copy.ts`) — строки, которые публикуются, но
+ *   ещё не прошли связку копирайтер → главред. У органа управления другого
+ *   выхода нет: кнопка без надписи — это не «пока молчим», а сломанный экран.
+ *
+ * Перечни читаются из исходников регулярным выражением, а не переписываются
+ * сюда: список в двух местах разъезжается на первой же правке. Прогон это не
+ * роняет — оно и не должно: работа названа, а не спрятана.
+ */
+function readNamedList(file, name) {
+  const source = readFileSync(join(SRC, file), 'utf8');
+  const block = source.match(new RegExp(`${name}[^=]*=\\s*Object.freeze\\(\\[([\\s\\S]*?)\\]\\)`, 'u'));
+  if (block === null) return null;
+  return [...block[1].matchAll(/'([\w.$-]+)'/gu)].map((match) => match[1]);
+}
+
+function reportPending() {
+  process.stdout.write('Ждёт человека\n');
+  const legal = readNamedList('ui/primitives.tsx', 'PENDING_LEGAL_SLOTS');
+  const copy = readNamedList('ui/copy.ts', 'PENDING_COPY_KEYS');
+  const legalReview = readNamedList('ui/copy.ts', 'PENDING_LEGAL_REVIEW_KEYS');
+  if (legal === null || copy === null || legalReview === null) {
+    fail('перечень', 'не найден один из перечней ожидающих строк (PENDING_*) — счёт работы потерян');
+    return;
+  }
+  process.stdout.write(`  ? ⚖-слотов без формулировки юриста: ${legal.length} — на экране не показываются\n`);
+  for (const key of legal) process.stdout.write(`      ${key}\n`);
+  process.stdout.write(`  ? черновиков микрокопи: ${copy.length} — ждут копирайтера и главреда\n`);
+  process.stdout.write(`    из них у юриста, а не у главреда: ${legalReview.length}\n`);
+  for (const key of legalReview) process.stdout.write(`      ${key}\n`);
+}
+
 /* --------------------------------------------------------- 4. что обходим */
 
 const MONEY_STATES = [
@@ -399,6 +498,30 @@ const RECEIVING = [
 const LONG_AMOUNT_DEAL = 'm20';
 
 const PERIMETER = ['P-01', 'P-03', 'P-04', 'P-06', 'P-07', 'P-09', 'P-10'];
+
+/**
+ * Состояния заявки на вывод — из домена, а не списком здесь.
+ *
+ * Причина та же, что у видов задач консоли (`declaredTaskTypes`): перечень,
+ * переписанный в скрипт руками, разъезжается с кодом молча, и новое состояние
+ * машины просто не попадает в обход. Здесь это дороже обычного — состояния
+ * вывода описывают дорогу денег со счёта клиента наружу.
+ */
+function declaredWithdrawalStatuses() {
+  const file = resolve(DOMAIN_SRC, 'client-account.ts');
+  if (!existsSync(file)) {
+    fail('вывод', 'packages/domain/src/client-account.ts не найден — состояния вывода в обход не попали');
+    return [];
+  }
+  const block = readFileSync(file, 'utf8').match(
+    /export const WITHDRAWAL_STATUSES = \[([\s\S]*?)\] as const;/u,
+  );
+  if (block === null) {
+    fail('вывод', 'перечень WITHDRAWAL_STATUSES не найден — состояния вывода в обход не попали');
+    return [];
+  }
+  return [...block[1].matchAll(/'(\w+)'/gu)].map((match) => match[1]);
+}
 
 const DESKTOP = { width: 1280, height: 900 };
 const MOBILE = { width: 360, height: 780 };
@@ -486,7 +609,41 @@ function routes() {
    * маршрутов.
    */
   add('topup', `/topup/${MONEY_STATES[0][0]}`, { desktop: DESKTOP, mobile: MOBILE });
+  /**
+   * Вывод — не один маршрут, а форма с состояниями.
+   *
+   * До этого захода экран был один и показывал заявку, которую нечем создать;
+   * в обходе он тоже был один. Теперь снимаются: пустая форма, форма с
+   * подставленным «всё свободное», четыре отказа ввода, сверка, созданная
+   * заявка, все шесть состояний машины, две ступени подписей и два положения
+   * счёта-источника. Состояние формы, которого нет в обходе, не проверяется
+   * ничем — а это единственный экран кабинета, где клиент называет сумму.
+   *
+   * Русский на проектной ширине берётся там, где на экране деньги: `Intl` в
+   * русской локали печатает `GEL` вместо `₾`, и самая широкая запись суммы
+   * существует только в нём.
+   */
   add('withdraw', '/withdraw', { desktop: DESKTOP, mobile: MOBILE });
+  add('withdraw-filled', '/withdraw?fill=max', { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
+  add('withdraw-filled', '/withdraw?fill=max', { desktop: DESKTOP }, ['ru']);
+  add('withdraw-error-empty', '/withdraw?step=review', { desktop: DESKTOP }, ['ka']);
+  add('withdraw-error-above-free', '/withdraw?amount=99999999&step=review', { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
+  add('withdraw-error-above-free', '/withdraw?amount=99999999&step=review', { desktop: DESKTOP }, ['ru']);
+  add('withdraw-error-format', '/withdraw?amount=10.005&step=review', { desktop: DESKTOP }, ['ka']);
+  add('withdraw-error-zero', '/withdraw?amount=0&step=review', { desktop: DESKTOP }, ['ka']);
+  add('withdraw-review', '/withdraw?amount=1000&currency=GEL&step=review', { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
+  add('withdraw-review', '/withdraw?amount=1000&currency=GEL&step=review', { desktop: DESKTOP }, ['ru']);
+  add('withdraw-submitted', '/withdraw?amount=1000&currency=GEL&step=submitted', { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
+  add('withdraw-submitted', '/withdraw?amount=1000&currency=GEL&step=submitted', { desktop: DESKTOP }, ['ru']);
+  for (const state of declaredWithdrawalStatuses()) {
+    add(`withdraw-state-${state}`, `/withdraw?state=${state}`, { desktop: DESKTOP }, ['ka']);
+  }
+  /* Одна подпись из двух: ступень набрана наполовину, и это положение не
+     совпадает ни с «нет подписей», ни с «утверждено». */
+  add('withdraw-approvals-one', '/withdraw?state=requested&approvals=1', { desktop: DESKTOP }, ['ka']);
+  add('withdraw-no-source', '/withdraw?source=unknown', { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
+  add('withdraw-other-holder', '/withdraw?source=otherHolder', { desktop: DESKTOP }, ['ka']);
+  add('withdraw-empty', '/withdraw?free=none', { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
   add('documents', '/documents', { desktop: DESKTOP, mobile: MOBILE });
   add('notifications', '/notifications', { desktop: DESKTOP, mobile: MOBILE });
   add('profile', '/profile', { desktop: DESKTOP, mobile: MOBILE });
@@ -921,6 +1078,84 @@ async function checkKeyboard(page, shotPath) {
   return problems;
 }
 
+/* ------------------------------------- 5b. чем это набрано на самом деле */
+
+/**
+ * Какой гарнитурой браузер **действительно** нарисовал текст.
+ *
+ * Это единственная проверка, которая ловит положение из §1.6 разбора: в токенах
+ * стояло `--font-sans: 'Manrope', …`, а `@font-face` не было ни одного, и весь
+ * обход снимался системным шрифтом. Ни один снимок, ни один бюджет и ни одна
+ * проверка вёрстки этого не видели — потому что все они меряли то, что нарисовано,
+ * не спрашивая, чем.
+ *
+ * Спрашивается это через протокол отладки (`CSS.getPlatformFontsForNode`): он
+ * отвечает именем гарнитуры, которой набран **каждый** отрезок текста узла, уже
+ * после подбора по `unicode-range` и после фолбэка. `document.fonts.check()`
+ * здесь недостаточно: он говорит, что шрифт загружен, а не что им что-то
+ * набрано, — грузинский заголовок, ушедший в системный шрифт, он бы пропустил.
+ *
+ * Имя приходит с начертанием (`Manrope ExtraLight`, `IBM Plex Mono SemiBold`),
+ * поэтому сверяется вхождение семейства, а не равенство.
+ */
+const FONT_EXPECTATIONS = [
+  // Грузинский заголовок обязан быть набран грузинской гарнитурой, а не
+  // подставлен системой: «настоящее начертание» — это про это.
+  { path: '/ka/account', selector: 'h1', family: 'Noto Sans Georgian' },
+  { path: '/ru/account', selector: 'h1', family: 'Manrope' },
+  { path: '/en/account', selector: 'h1', family: 'Manrope' },
+  // Сумма — моноширинным, иначе колонка цифр перестаёт быть колонкой.
+  { path: '/ka/account', selector: '.amount', family: 'IBM Plex Mono' },
+  // Знак лари: глифа нет ни в Manrope, ни в IBM Plex Mono, и до этого захода он
+  // приходил из системного фолбэка со своей метрикой (`app.css`, `.lari`).
+  { path: '/ka/account', selector: '.lari', family: 'Noto Sans Georgian' },
+];
+
+async function checkRenderedFonts(browser) {
+  process.stdout.write('Чем набран текст\n');
+  const before = failures.length;
+  const context = await browser.newContext({ viewport: DESKTOP, deviceScaleFactor: 1 });
+  const page = await context.newPage();
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('DOM.enable');
+  await cdp.send('CSS.enable');
+  for (const item of FONT_EXPECTATIONS) {
+    const response = await page.goto(`${BASE}${item.path}`, { waitUntil: 'networkidle' });
+    if (response === null || !response.ok()) {
+      fail('шрифт', `${item.path} ответил ${response === null ? 'ничем' : response.status()}`);
+      continue;
+    }
+    await page.evaluate(() => document.fonts.ready);
+    const { root } = await cdp.send('DOM.getDocument', { depth: -1 });
+    const { nodeId } = await cdp.send('DOM.querySelector', {
+      nodeId: root.nodeId,
+      selector: item.selector,
+    });
+    if (nodeId === 0) {
+      fail('шрифт', `${item.path}: узла ${item.selector} нет — проверять нечего`);
+      continue;
+    }
+    const { fonts } = await cdp.send('CSS.getPlatformFontsForNode', { nodeId });
+    const names = fonts.map((font) => font.familyName);
+    if (!names.some((name) => name.includes(item.family))) {
+      fail(
+        'шрифт',
+        `${item.path} ${item.selector}: набрано «${names.join(', ') || 'ничем'}», ожидалось ${item.family}`,
+      );
+    }
+  }
+  /* Знак лари обязан помещаться в свой слот: слот, поставленный ради ровного
+     края колонки, при узкой ячейке сам становится обрезкой. */
+  await page.goto(`${BASE}/ka/account`, { waitUntil: 'networkidle' });
+  await page.evaluate(() => document.fonts.ready);
+  const clipped = await page.$$eval('.lari', (nodes) =>
+    nodes.filter((node) => node.scrollWidth > node.clientWidth + 1).length,
+  );
+  if (clipped > 0) fail('шрифт', `знак лари не помещается в слот: ${clipped} мест`);
+  await context.close();
+  if (failures.length === before) pass('текст набран своими гарнитурами на всех трёх языках');
+}
+
 /* -------------------------------------------------------------- 6. запуск */
 
 async function waitForServer(timeoutMs) {
@@ -1050,7 +1285,9 @@ async function main() {
   process.stdout.write('Проверка интерфейса «Сделка»\n\n');
   checkVocabulary();
   checkLiterals();
+  checkFontSources();
   const keyCount = checkDictionaries();
+  reportPending();
   process.stdout.write('\n');
 
   if (failures.length > 0) {
@@ -1101,6 +1338,7 @@ async function main() {
   mkdirSync(SHOTS, { recursive: true });
 
   const browser = await chromium.launch({ executablePath: BROWSER_PATH });
+  await checkRenderedFonts(browser);
   /* Карточки задач добавляются после подъёма сервера: их адреса читаются из
      самой очереди, а не собираются здесь из идентификаторов фикстуры. */
   /**

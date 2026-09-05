@@ -1,4 +1,6 @@
 @import './tokens.css';
+/* Объявления гарнитур собраны скриптом из манифеста — `styles/fonts.css`. */
+@import './fonts.css';
 
 /*
  * Вёрстка. Три правила держат три языка и два рабочих места:
@@ -548,6 +550,20 @@ a:hover {
   color: var(--c-ink-faint);
 }
 
+/*
+ * Грузинскому надзаголовку прописных не бывает.
+ *
+ * `text-transform: uppercase` на системном шрифте не давал эффекта вовсе, и
+ * правило выглядело безобидным. С настоящим Noto Sans Georgian оно переодевает
+ * мхедрули в мтаврули — обособленное начертание, которое в грузинском несёт
+ * смысл заголовка или крика, а не «подписи блока помельче». Разрядка
+ * `0.16em` для мтаврули тоже великовата, поэтому здесь она мягче.
+ */
+:lang(ka) .eyebrow {
+  text-transform: none;
+  letter-spacing: 0.08em;
+}
+
 .rule {
   block-size: 1px;
   background: var(--c-line);
@@ -1002,14 +1018,32 @@ a:hover {
 }
 
 /*
- * Знак лари в слоте фиксированной ширины (§2.4 дизайн-системы): глифа ₾ нет ни
- * в Manrope, ни в IBM Plex Mono, он приходит из фолбэка со своей метрикой — и
- * без слота правый край колонки сумм плывёт.
+ * Знак лари: своя гарнитура **и** слот фиксированной ширины (§2.4
+ * дизайн-системы).
+ *
+ * Глифа `₾` нет ни в Manrope, ни в IBM Plex Mono. Прежде здесь чинилась только
+ * ширина слота, а сам знак приходил из системного фолбэка — то есть из
+ * гарнитуры, о которой мы не знаем ничего: ни веса, ни метрики, ни того, есть
+ * ли она у клиента вообще. Теперь знак берётся из Noto Sans Georgian, который
+ * лежит в `public/fonts`, а вес наследуется от суммы — иначе `₾` рядом с
+ * крупной суммой набран нормальным начертанием, а число полужирным.
+ *
+ * Слот при этом остаётся: у грузинской гарнитуры своя ширина знака, и без
+ * фиксированной ячейки правый край колонки сумм всё равно гуляет между
+ * строками с лари и строками с `GEL` или `$`.
+ *
+ * Ширина слота — замер, а не круглое число: в Noto Sans Georgian знак `₾`
+ * занимает 0.771em на весе 400 и 0.782em на 600. Прежние `0.62em` были подобраны
+ * под ширину цифры IBM Plex Mono (0.60em) и настоящий глиф обрезали бы краем —
+ * то есть слот, поставленный ради ровного края, сам стал бы дефектом. `0.8em`
+ * покрывает знак на всех весах и остаётся постоянным.
  */
 .lari {
   display: inline-block;
-  inline-size: 0.62em;
+  inline-size: 0.8em;
   text-align: center;
+  font-family: var(--font-georgian);
+  font-weight: inherit;
 }
 
 .amount-label {
@@ -1043,6 +1077,29 @@ a:hover {
   /* Текстовая ячейка уступает место сумме, а не наоборот. */
   min-inline-size: 0;
   flex: 1 1 12ch;
+}
+
+/*
+ * Подпись перестаёт быть «шириной в 12 знаков», как только строка встала в
+ * колонку.
+ *
+ * На узкой раскладке `.row` переключается в колонку (см. блок
+ * `@container (max-width: 479px)` выше), и `flex-basis: 12ch` начинает
+ * относиться к **блочной** оси: те же двенадцать знаков превращаются в сотню
+ * пикселей высоты, подпись повисает в пустом столбце, а значение оказывается
+ * ближе к чужой подписи, чем к своей. На экране пар «подпись — значение» это
+ * читается как сумма не от того поля (`CABINETS-REDESIGN.md` §3.3).
+ *
+ * ⚠ Правило стоит **здесь, а не в общем узком блоке**, и это не оплошность
+ * раскладки файла: у обоих селекторов одинаковая специфичность, и побеждает тот,
+ * что объявлен позже. Помещённое в блок на строке 494 — то есть выше — правило
+ * не применяется вовсе и выглядит рабочим: снимок не меняется, проверка молчит,
+ * подпись по-прежнему висит в пустоте.
+ */
+@container (max-width: 479px) {
+  .row__key {
+    flex: 0 0 auto;
+  }
 }
 
 /*
@@ -1766,6 +1823,235 @@ a:hover {
   padding-inline-start: var(--s-3);
   border-inline-start: 1px solid var(--c-line);
   white-space: nowrap;
+}
+
+/* ------------------------------------------------- органы формы (заявка) */
+
+/*
+ * Первые настоящие поля и кнопки в приложении (`ui/form.tsx`).
+ *
+ * Три правила, которые здесь держатся стилем, а не вниманием:
+ *
+ * 1) кольцо фокуса рисуется на **самом** органе — глобальное `:focus-visible`
+ *    достаёт и поле, и радиокнопку, и кнопку; на обёртке его нет ни у одного,
+ *    иначе оно невидимо для проверки и незаметно глазом;
+ * 2) ни у одного органа нет фиксированной ширины в пикселях: грузинская подпись
+ *    длиннее русской примерно в полтора раза, и всё измеряется в `ch` и
+ *    процентах;
+ * 3) сенсорная цель не меньше `--tap` у всего, что нажимается, включая строки
+ *    сводки ошибок: ссылка в 20 px высотой на телефоне — промах пальцем в
+ *    экране, где речь о деньгах.
+ */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  /* Форма отделяется от текста над ней: подпись первого поля, прижатая к
+     абзацу, читается его продолжением, а не началом органа. */
+  margin-block-start: var(--s-4);
+}
+
+.errors + .form {
+  margin-block-start: var(--s-4);
+}
+
+.card__title + .errors,
+p + .errors {
+  margin-block-start: var(--s-4);
+}
+
+.formfield {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-inline-size: 0;
+}
+
+/* `fieldset` приходит с собственными полями и рамкой браузера — снимаем. */
+.formfield--group {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.formfield__label {
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--c-ink);
+  padding: 0;
+}
+
+.formfield__control {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  min-inline-size: 0;
+}
+
+.formfield__hint {
+  font-size: var(--t-xs);
+  line-height: 1.5;
+  color: var(--c-ink-faint);
+  max-inline-size: var(--measure);
+}
+
+.formfield__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  color: var(--c-danger);
+  max-inline-size: var(--measure);
+}
+
+.formfield__error .dot {
+  inline-size: 9px;
+  block-size: 9px;
+  margin-block-start: 6px;
+  flex-shrink: 0;
+}
+
+/*
+ * Поле суммы. Ширина в `ch` считается по цифрам моноширинного начертания:
+ * десятизначная сумма с разделителями и дробной частью — это 18 знаков, и
+ * поле, в которое не влезает самая длинная сумма набора, обрезало бы её от
+ * человека.
+ */
+input.fld {
+  inline-size: 100%;
+  max-inline-size: 22ch;
+  font-variant-numeric: tabular-nums;
+}
+
+input.fld::placeholder {
+  color: var(--c-ink-disabled);
+}
+
+.fld--invalid {
+  border-color: var(--c-danger);
+  background: var(--c-danger-soft);
+}
+
+.formfield__unit {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--c-ink-faint);
+  white-space: nowrap;
+}
+
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-block-size: var(--tap);
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid var(--c-line-field);
+  border-radius: var(--r-2);
+  background: var(--c-surface);
+  cursor: pointer;
+}
+
+/* Выбранный вариант несёт и цвет, и рамку: цвет один состояние не передаёт. */
+.choice:has(.choice__input:checked) {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+}
+
+.choice__input {
+  inline-size: 18px;
+  block-size: 18px;
+  accent-color: var(--c-accent);
+  flex-shrink: 0;
+}
+
+.choice__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-inline-size: 0;
+}
+
+.choice__label {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: var(--t-sm);
+}
+
+.choice__meta {
+  font-size: var(--t-xs);
+  color: var(--c-ink-faint);
+}
+
+.errors {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--c-danger-line);
+  border-radius: var(--r-2);
+  background: var(--c-danger-soft);
+}
+
+.errors__title {
+  font-weight: 700;
+  font-size: var(--t-sm);
+}
+
+.errors__list a {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--tap);
+  font-size: var(--t-sm);
+  color: var(--c-ink);
+  text-decoration: underline;
+}
+
+/* ----------------------------------------------------------- утверждения */
+
+/*
+ * Ступени утверждения. Их две, и обе показаны всегда: пустая ступень — это
+ * подпись, которой **нет**, и её отсутствие обязано быть видно так же, как
+ * набранная. Число рядом словами — цвет и форма состояние не передают.
+ */
+.approvals {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.approvals__steps {
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+}
+
+.approvals__step {
+  inline-size: 44px;
+  block-size: 6px;
+  border-radius: var(--r-pill);
+  background: var(--c-line);
+  border: 1px solid var(--c-line-strong);
+}
+
+.approvals__step--done {
+  background: var(--c-ok-dot);
+  border-color: var(--c-ok);
+}
+
+.approvals__count {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  font-weight: 700;
 }
 
 .locknote {

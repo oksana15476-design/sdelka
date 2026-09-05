@@ -3,7 +3,10 @@ import {
   type UnfreezeTarget,
   type WithdrawalStatus,
   UNFREEZE_TARGETS,
+  WITHDRAWAL_REQUIRED_APPROVALS,
   WITHDRAWAL_STATUSES,
+  WITHDRAWAL_TRANSITIONS,
+  isTerminalWithdrawalStatus,
 } from '@sdelka/domain';
 import { type AllocationKind, type MatchOutcome, type QuoteStatus, QUOTE_STATUSES } from '@sdelka/intake';
 import { type CurrencyCode, type Money, money } from '@sdelka/money';
@@ -11,6 +14,7 @@ import { FIXTURE_NOW } from './engine';
 import { type DealSnapshot, getDeal } from './store';
 import { FIXTURE_DATA } from './scenarios';
 import type { LabelledGuardId } from '@/ui/guards';
+import type { WithdrawSource } from '@/view/withdraw-form';
 
 /**
  * Данные экранов, которых нет в автоматах домена: пополнение, вывод, документы,
@@ -148,8 +152,7 @@ export interface WithdrawView {
   readonly status: WithdrawalStatus;
   readonly amount: Money<CurrencyCode>;
   readonly fee: Money<CurrencyCode>;
-  readonly sourceAccountMasked: string;
-  readonly sourceBank: string;
+  readonly source: WithdrawSource | null;
   /**
    * Отмена доступна только в `requested`: перехода `approved → cancelled` в
    * `client-account.ts` нет, поэтому кнопки быть не должно
@@ -158,21 +161,138 @@ export interface WithdrawView {
   readonly cancellable: boolean;
   /** Повторная заявка запрещена: `g_no_active_withdrawal`. */
   readonly repeatBlocked: boolean;
+  /**
+   * Сколько утверждений набрано из
+   * `WITHDRAWAL_REQUIRED_APPROVALS`. Ноль — законное значение и **единственное**
+   * начальное: заявка создаётся без единой подписи, и экран это показывает
+   * числом, а не умолчанием.
+   */
+  readonly approvals: number;
+  readonly approvalsRequired: number;
 }
 
-export function withdrawStatusOf(value: string | undefined): WithdrawalStatus {
-  return WITHDRAWAL_STATUSES.find((item) => item === value) ?? 'requested';
+/**
+ * Заявка на экране: `null` — активной заявки нет, и на экране стоит форма.
+ *
+ * Прежде отсутствие параметра значило `requested`, то есть у экрана не было
+ * состояния «заявки нет» вовсе — а именно оно и есть первое, что видит клиент.
+ */
+export function withdrawStatusOf(value: string | undefined): WithdrawalStatus | null {
+  return WITHDRAWAL_STATUSES.find((item) => item === value) ?? null;
 }
 
-export async function getWithdraw(status: WithdrawalStatus, free: Money<CurrencyCode>): Promise<WithdrawView> {
+/**
+ * Счёт-источник для приёмки: три положения, которые невозможно получить
+ * фикстурой данных, но которые обязаны быть на снимках.
+ *
+ * `known` — счёт есть и он на имя плательщика; `unknown` — счёта нет вовсе
+ * (заявка не создаётся, работа уходит человеку, И12.2); `otherHolder` — счёт
+ * известен, но владелец не плательщик. Третье — не оттенок второго: инвариант
+ * 20 требует совпадения **имени**, и совпадения счёта для него недостаточно.
+ */
+export type WithdrawSourceCase = 'known' | 'unknown' | 'otherHolder';
+
+export function withdrawSourceCaseOf(value: string | undefined): WithdrawSourceCase {
+  return value === 'unknown' || value === 'otherHolder' ? value : 'known';
+}
+
+export function withdrawSource(situation: WithdrawSourceCase): WithdrawSource | null {
+  if (situation === 'unknown') return null;
+  return {
+    // Ключ реквизитов непрозрачный: номера счёта в домене нет и здесь тоже.
+    accountRef: 'source-weiss-commerzbank',
+    holderIsPayer: situation !== 'otherHolder',
+    masked: FIXTURE_DATA.viewer.sourceAccountMasked,
+    bank: FIXTURE_DATA.viewer.sourceBank,
+  };
+}
+
+/**
+ * Комиссия за перевод. Фиксированная величина фикстуры: тариф вывода документом
+ * не назван — **[открыто]**. Здесь она живёт одним значением, чтобы форма и
+ * созданная заявка не показывали разные числа.
+ *
+ * Из суммы вывода комиссия **не вычитается** ни здесь, ни на экране: удерживается
+ * она из перевода или берётся сверх него — тоже [открыто], и «к зачислению»
+ * посчитано быть не может, пока это не названо.
+ */
+export function withdrawFee(amount: Money<CurrencyCode>): Money<CurrencyCode> {
+  return money(amount.currency, 1_500n);
+}
+
+/**
+ * Можно ли отменить заявку в этом состоянии — **спрашивается у машины**, а не
+ * пишется здесь заново.
+ *
+ * ⚠ И тут же — расхождение, которое надо назвать, а не сгладить.
+ * `WITHDRAWAL_TRANSITIONS` разрешает `withdrawal_cancelled` из трёх состояний:
+ * `requested`, `approved` и `blocked`. Принятый текст утверждает обратное:
+ * `withdraw.state.approved.body` — «отменить заявку после отправки уже нельзя»,
+ * `withdraw.cancel.blocked` — «перехода из утверждённой в отменённую в системе
+ * нет». Второе — прямое утверждение о машине, и машина его не подтверждает.
+ *
+ * Чьё слово здесь главное — вопрос продуктовый, а не оформительский: может ли
+ * клиент отозвать уже утверждённое поручение. Поэтому **[открыто]**, и до ответа
+ * экран держится строгого варианта — как принятый текст, — но расхождение
+ * записано здесь, а не растворено в условии `status === 'requested'`.
+ *
+ * `blocked` при этом отменять можно: машина разрешает, и ни одна принятая
+ * строка обратного не говорит. Прежде экран запрещал и это, объясняя запрет
+ * утверждением, которого у приостановленной заявки нет.
+ */
+const CANCEL_DENIED_BY_COPY: readonly WithdrawalStatus[] = Object.freeze(['approved']);
+
+export function withdrawCancellable(status: WithdrawalStatus): boolean {
+  if (CANCEL_DENIED_BY_COPY.includes(status)) return false;
+  return WITHDRAWAL_TRANSITIONS.some(
+    (item) => item.from === status && item.event === 'withdrawal_cancelled',
+  );
+}
+
+/**
+ * Почему отменить нельзя. У двух состояний причины разные, и общая строка одному
+ * из них врёт: в `paying_out` заявка не «ещё не утверждена», а уже ушла в банк.
+ */
+export function withdrawCancelBlockedKey(status: WithdrawalStatus): string {
+  return status === 'paying_out' ? 'withdraw.cancel.blocked.sent' : 'withdraw.cancel.blocked';
+}
+
+export async function getWithdraw(
+  status: WithdrawalStatus,
+  amount: Money<CurrencyCode>,
+  options: {
+    readonly source?: WithdrawSourceCase | undefined;
+    readonly approvals?: number | undefined;
+  } = {},
+): Promise<WithdrawView> {
+  // Число подписей приходит из адреса и потому обязано быть приведено к
+  // осмысленному: `NaN` и «три из двух» — не состояния заявки, а мусор в
+  // параметре, и на экране он превратился бы в ступени неизвестно чего.
+  const asked = options.approvals;
+  const clamped =
+    asked === undefined || !Number.isFinite(asked)
+      ? undefined
+      : Math.min(Math.max(Math.trunc(asked), 0), WITHDRAWAL_REQUIRED_APPROVALS);
+  const approvals =
+    clamped ??
+    // Утверждённая заявка не существует без двух подписей: их набрали, иначе
+    // перехода `requested → approved` не случилось бы (`APPROVAL_GUARDS`).
+    (status === 'requested' || status === 'blocked' || status === 'cancelled'
+      ? 0
+      : WITHDRAWAL_REQUIRED_APPROVALS);
   return {
     status,
-    amount: free,
-    fee: money(free.currency, 1_500n),
-    sourceAccountMasked: FIXTURE_DATA.viewer.sourceAccountMasked,
-    sourceBank: FIXTURE_DATA.viewer.sourceBank,
-    cancellable: status === 'requested',
-    repeatBlocked: status === 'approved' || status === 'paying_out',
+    amount,
+    fee: withdrawFee(amount),
+    source: withdrawSource(withdrawSourceCaseOf(options.source)),
+    cancellable: withdrawCancellable(status),
+    // Активная заявка — любая нетерминальная, включая `requested` и `blocked`:
+    // `g_no_active_withdrawal` считает заявки в активных статусах, а не только
+    // те, по которым уже ушло поручение. Прежде здесь стояли два статуса из
+    // четырёх, то есть вторую заявку поверх первой экран разрешал бы завести.
+    repeatBlocked: !isTerminalWithdrawalStatus(status),
+    approvals,
+    approvalsRequired: WITHDRAWAL_REQUIRED_APPROVALS,
   };
 }
 

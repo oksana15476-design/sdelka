@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation';
 import { type Locale, DEFAULT_LOCALE, LOCALE_DIRECTION, LOCALES, isLocale } from '@/i18n/locales';
 import { dictionaryOf, t } from '@/i18n/translate';
 import { AppShell } from '@/ui/chrome';
+import { preloadedFonts } from '@/ui/fonts';
 import { viewerCard } from '@/fixtures/store';
 import { getNotifications, unreadCount } from '@/fixtures/screens';
 import '@/styles/app.css';
@@ -62,6 +63,15 @@ export default async function LocaleLayout({
   const unread = console || owner ? 0 : unreadCount(await getNotifications());
   return (
     <html lang={locale} dir={LOCALE_DIRECTION[locale]}>
+      <head>
+        {/* Шрифты лежат рядом с приложением, но `crossorigin` обязателен и для
+            своего домена: без него браузер загрузит файл дважды — один раз по
+            предзагрузке, второй раз по правилу `@font-face`, которое всегда
+            идёт в режиме CORS. */}
+        {preloadedFonts(locale).map((href) => (
+          <link as="font" crossOrigin="anonymous" href={href} key={href} rel="preload" type="font/woff2" />
+        ))}
+      </head>
       <body>
         <AppShell
           l={l}

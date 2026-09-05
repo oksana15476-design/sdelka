@@ -26,6 +26,16 @@ export function middleware(request: NextRequest): NextResponse {
   return NextResponse.redirect(url);
 }
 
+/**
+ * Что мимо языка.
+ *
+ * `fonts` в этом списке — не мелочь: без него запрос `/fonts/manrope-…woff2`
+ * получает редирект на `/ru/fonts/manrope-…woff2`, то есть 404, и весь
+ * интерфейс молча набирается системным шрифтом. Ни сборка, ни снимок этого не
+ * показывают — гарнитура просто не та, а такой дефект живёт годами
+ * (`CABINETS-REDESIGN.md` §1.6). Ловится он проверкой «чем набран текст» в
+ * `scripts/verify-ui.mjs`, и попал сюда именно после неё.
+ */
 export const config = {
-  matcher: ['/((?!_next|favicon.ico|screenshots).*)'],
+  matcher: ['/((?!_next|fonts|favicon.ico|screenshots).*)'],
 };

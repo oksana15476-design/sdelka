@@ -1,0 +1,186 @@
+{
+  "note": "Собрано scripts/fetch-fonts.mjs. Лицензия всех трёх семейств — SIL OFL 1.1.",
+  "fetchedAt": "2026-09-05",
+  "files": [
+    {
+      "family": "Manrope",
+      "subset": "cyrillic-ext",
+      "weight": "400 800",
+      "file": "manrope-cyrillic-ext-400-800.woff2",
+      "bytes": 2552,
+      "sha256": "de37de877dc17e4577341fa68bb5cb526b53d54cb29721e674208546a3c7849d",
+      "source": "https://fonts.gstatic.com/s/manrope/v20/xn7gYHE41ni1AdIRggqxSuXd.woff2",
+      "unicodeRange": "U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F"
+    },
+    {
+      "family": "Manrope",
+      "subset": "cyrillic",
+      "weight": "400 800",
+      "file": "manrope-cyrillic-400-800.woff2",
+      "bytes": 14500,
+      "sha256": "c268b459a9329e59fecf39a17618efd44c71735532048d60b12aab76a8c14914",
+      "source": "https://fonts.gstatic.com/s/manrope/v20/xn7gYHE41ni1AdIRggOxSuXd.woff2",
+      "unicodeRange": "U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116"
+    },
+    {
+      "family": "Manrope",
+      "subset": "latin-ext",
+      "weight": "400 800",
+      "file": "manrope-latin-ext-400-800.woff2",
+      "bytes": 15120,
+      "sha256": "3911b66d9f2e005a4b989223405d0e5032619c668597ba467cc76a23c8fffcfb",
+      "source": "https://fonts.gstatic.com/s/manrope/v20/xn7gYHE41ni1AdIRggmxSuXd.woff2",
+      "unicodeRange": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+    },
+    {
+      "family": "Manrope",
+      "subset": "latin",
+      "weight": "400 800",
+      "file": "manrope-latin-400-800.woff2",
+      "bytes": 24836,
+      "sha256": "a30ddcd349703aff7464c34bef3fffdff405ee50c113440d7c8693c02d210972",
+      "source": "https://fonts.gstatic.com/s/manrope/v20/xn7gYHE41ni1AdIRggexSg.woff2",
+      "unicodeRange": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "subset": "cyrillic",
+      "weight": "400",
+      "file": "plexmono-cyrillic-400.woff2",
+      "bytes": 8356,
+      "sha256": "7635422bd10ddbbcb0e0caa1154b928298f5c8319b8c00b30978d4395f4783ce",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F63fjptAgt5VM-kVkqdyU8n1isq129k.woff2",
+      "unicodeRange": "U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "subset": "latin-ext",
+      "weight": "400",
+      "file": "plexmono-latin-ext-400.woff2",
+      "bytes": 13348,
+      "sha256": "6bc0f226a5b7884a8170e3f62c63d7675609d4631bdc5931b5cdab81821f00eb",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F63fjptAgt5VM-kVkqdyU8n1iEq129k.woff2",
+      "unicodeRange": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "subset": "latin",
+      "weight": "400",
+      "file": "plexmono-latin-400.woff2",
+      "bytes": 14708,
+      "sha256": "08949f728dc52d528e69b1667d15c89a5686a4ee9a296ff90983985f99c380f7",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F63fjptAgt5VM-kVkqdyU8n1i8q1w.woff2",
+      "unicodeRange": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "subset": "cyrillic",
+      "weight": "500",
+      "file": "plexmono-cyrillic-500.woff2",
+      "bytes": 8460,
+      "sha256": "1d89462e86cb8e87e7e9d6f6635605bd7c3081baca6caaecee84916bf7b60edc",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3twJwlRFgtIU.woff2",
+      "unicodeRange": "U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "subset": "latin-ext",
+      "weight": "500",
+      "file": "plexmono-latin-ext-500.woff2",
+      "bytes": 13432,
+      "sha256": "6bb06407c97584b0867a959e05e8874693bfeb8c317de190811c51598f2d99ea",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3twJwl5FgtIU.woff2",
+      "unicodeRange": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "subset": "latin",
+      "weight": "500",
+      "file": "plexmono-latin-500.woff2",
+      "bytes": 14888,
+      "sha256": "01d285447409c8a588692162439a038b8cbd7871309ee20267b0d2d91c6e8e22",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3twJwlBFgg.woff2",
+      "unicodeRange": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "subset": "cyrillic",
+      "weight": "600",
+      "file": "plexmono-cyrillic-600.woff2",
+      "bytes": 9352,
+      "sha256": "2b05a8695c7f9f4abd7178b279646a3b005a8ce57546bef6fd145f25d131e0aa",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3vAOwlRFgtIU.woff2",
+      "unicodeRange": "U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "subset": "latin-ext",
+      "weight": "600",
+      "file": "plexmono-latin-ext-600.woff2",
+      "bytes": 14328,
+      "sha256": "32057cf50dd14bdb21a2c93766c4a2c43e4abe688ea3922df3203cac7751a98b",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3vAOwl5FgtIU.woff2",
+      "unicodeRange": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "subset": "latin",
+      "weight": "600",
+      "file": "plexmono-latin-600.woff2",
+      "bytes": 15620,
+      "sha256": "0d1f0b8d0722224e32e9f28261bdc86c79115be73444ae5eceb73976a1bcdf83",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3vAOwlBFgg.woff2",
+      "unicodeRange": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "subset": "cyrillic",
+      "weight": "700",
+      "file": "plexmono-cyrillic-700.woff2",
+      "bytes": 8676,
+      "sha256": "104701bedfa06b56abba3e273f3ed74d7235d02c00ddc6ca942d65e2940fe6fe",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3pQPwlRFgtIU.woff2",
+      "unicodeRange": "U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "subset": "latin-ext",
+      "weight": "700",
+      "file": "plexmono-latin-ext-700.woff2",
+      "bytes": 13380,
+      "sha256": "5b9b81f54dd69635c7adcaacd4c4545a73fe4809c528e22734b238a83a74135f",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3pQPwl5FgtIU.woff2",
+      "unicodeRange": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "subset": "latin",
+      "weight": "700",
+      "file": "plexmono-latin-700.woff2",
+      "bytes": 14908,
+      "sha256": "4f84d86cfd060f4ded334358ff8a4c81d4db2ed5addd568359d693f44a87765a",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3pQPwlBFgg.woff2",
+      "unicodeRange": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+    },
+    {
+      "family": "Noto Sans Georgian",
+      "subset": "georgian",
+      "weight": "400 800",
+      "file": "georgian-georgian-400-800.woff2",
+      "bytes": 41548,
+      "sha256": "b31b7282fdfba688ecbe401cbda5b3cda45c24e652457cfec694dc6bb5fb5a5d",
+      "source": "https://fonts.gstatic.com/s/notosansgeorgian/v48/PlIVFke5O6RzLfvNNVSitxkr76PRHBC4Ytyq-Gof7PUs4S7zcGyUkdjo.woff2",
+      "unicodeRange": "U+0589, U+10A0-10FF, U+1C90-1CBA, U+1CBD-1CBF, U+205A, U+2D00-2D2F, U+2E31"
+    },
+    {
+      "family": "Noto Sans Georgian",
+      "subset": "latin-ext",
+      "weight": "400 800",
+      "file": "georgian-latin-ext-400-800.woff2",
+      "bytes": 13676,
+      "sha256": "6a9fd333529792bacccd87a837260e78c97d396bcdeab8e22d0938167cf5357c",
+      "source": "https://fonts.gstatic.com/s/notosansgeorgian/v48/PlIVFke5O6RzLfvNNVSitxkr76PRHBC4Ytyq-Gof7PUs4S7zcH2Ukdjo.woff2",
+      "unicodeRange": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+    }
+  ]
+}
