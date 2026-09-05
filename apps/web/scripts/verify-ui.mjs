@@ -46,6 +46,13 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
+import {
+  LEXICON,
+  formatFinding,
+  scanDictionaries,
+  validateAllowances,
+} from './forbidden-lexicon.mjs';
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(HERE, '..');
 const SRC = join(APP_ROOT, 'src');
@@ -89,50 +96,22 @@ const FORBIDDEN_PHRASES = [
   /кабинет[а-яё]*\s+(покупател|продавц|получател|плательщик)/iu,
   /(buyer|seller|payee|payer|client)[\s_-]?cabinet/iu,
   /личный\s+кабинет\s+(покупател|продавц)/iu,
-  /эскроу|escrow|ესქრო/iu,
+  // Красная линия №10 действует и в исходниках: имя переменной, комментарий,
+  // путь файла. Написания не дублируются здесь, а берутся из перечня —
+  // иначе список в двух местах разъедется на первой же транслитерации.
+  ...LEXICON.find((rule) => rule.id === 'escrow').patterns,
 ];
 
 /**
- * Слова, запрещённые в **тексте для клиента**, — по трём словарям сразу.
+ * Запрещённая лексика клиентских текстов живёт в `forbidden-lexicon.mjs`:
+ * перечень собран из документов, каждое правило со ссылкой, исключения — явным
+ * списком с причиной. Отдельный модуль, потому что перечень обязан проверяться
+ * тестом (`forbidden-lexicon.test.mjs`) без сервера и браузера.
  *
- * Прежде эта проверка шла только по исходникам (`FORBIDDEN_PHRASES` выше), то
- * есть ловила слово, вписанное в компонент, — а текста в компонентах у нас нет
- * по построению. Весь клиентский текст живёт в словарях, и там проверки не было
- * вовсе: юрист прочитал их глазами, но микрокопи сокращают и переписывают, а
- * ревью глазами защиты не даёт (`LEGAL-REVIEW.md` §9 п.7).
- *
- * Две разные строгости, потому что слова разные:
- *
- * - `banned` — употребления нет вовсе. «Эскроу» запрещено красной линией №10:
- *   эскроу-агентом по грузинскому праву может быть только банк или микробанк,
- *   и слово незаконно даже в отрицании — оно называет нашу услугу чужим именем.
- * - `onlyDenied` — слово законно **только в отрицании**. «Не гарантия платежа»
- *   сказать можно и нужно, «гарантируем» — нельзя. Отрицание ищется в той же
- *   строке ключами трёх языков; строка без отрицания — отказ.
- *
- * ⚠ Проверка синтаксическая, а не смысловая: она не отличит «мы не гарантируем»
- * от «мы гарантируем, что не». Её задача — не пропустить слово молча, а
- * заставить человека принять решение и записать его.
+ * Здесь остаётся только вызов и печать: `banned` роняет прогон, `open` —
+ * печатается как «ждёт решения» и прогон не роняет (почему именно так —
+ * в шапке модуля).
  */
-const COPY_WORDS = {
-  banned: [
-    { rule: 'эскроу (красная линия №10)', pattern: /эскроу|escrow|ესქრო/iu },
-    { rule: 'обещание безусловной безопасности', pattern: /\bабсолютно\s+безопасн|\b100%\s*(безопасн|safe)/iu },
-  ],
-  onlyDenied: [
-    { rule: 'гарантия', pattern: /гаранти[а-яё]*|guarante|გარანტ/iu },
-  ],
-};
-
-/**
- * Отрицание в трёх языках — целым словом.
- *
- * Границу слова здесь нельзя писать через `\b`: она считается по ASCII, поэтому
- * `\bне\b` не находит «не» ни в русском, ни в грузинском, и проверка отвечала
- * «гарантия без отрицания» на строке «Это не гарантия платежа». Граница —
- * отсутствие буквы слева и справа, по свойству Unicode.
- */
-const DENIAL = /(^|[^\p{L}])(не|нет|not|no|never|არ|აღარ)([^\p{L}]|$)/iu;
 
 /**
  * Слова `buyer` и `seller` в слое интерфейса запрещены целиком: роль — свойство
@@ -287,21 +266,6 @@ function checkDictionaries() {
       if (value.trim().length < 2) {
         fail('словарь', `${locale}: подозрительно короткое значение у ${key} — «${value}»`);
       }
-      for (const item of COPY_WORDS.banned) {
-        const found = value.match(item.pattern);
-        if (found !== null) {
-          fail('слово в тексте клиента', `${locale}: ${key} — «${found[0]}» (${item.rule})`);
-        }
-      }
-      for (const item of COPY_WORDS.onlyDenied) {
-        const found = value.match(item.pattern);
-        if (found !== null && !DENIAL.test(value)) {
-          fail(
-            'слово в тексте клиента',
-            `${locale}: ${key} — «${found[0]}» без отрицания (${item.rule})`,
-          );
-        }
-      }
       const slots = (dicts.ru[key].match(/\{(\w+)\}/gu) ?? []).sort().join(',');
       const own = (value.match(/\{(\w+)\}/gu) ?? []).sort().join(',');
       if (slots !== own) {
@@ -312,7 +276,71 @@ function checkDictionaries() {
   if (failures.length === before) {
     pass(`три словаря совпадают по составу: ${reference.length} ключей в каждом`);
   }
+  checkForbiddenLexicon(dicts);
   return reference.length;
+}
+
+/**
+ * Запрещённая лексика по трём словарям: перечень и исключения — в
+ * `forbidden-lexicon.mjs`, здесь прогон и печать.
+ *
+ * Порядок печати выбран так, чтобы «ждёт решения» нельзя было пролистать: оно
+ * идёт после падений и с точным адресом — язык, ключ, слово, вопрос.
+ */
+function checkForbiddenLexicon(dicts) {
+  process.stdout.write('Запрещённая лексика в текстах для клиента\n');
+  const before = failures.length;
+
+  for (const problem of validateAllowances()) {
+    fail('исключение', problem);
+  }
+
+  const { findings, unusedAllowances, gaps } = scanDictionaries(dicts);
+
+  for (const finding of findings.filter((item) => item.tier === 'banned')) {
+    fail('слово в тексте клиента', `${formatFinding(finding)} · ${finding.source}`);
+  }
+
+  // Разрешение, пережившее свой текст, ничего не ломает сегодня и молча
+  // разрешает завтра: снятое исключение — такая же правка, как снятая строка.
+  for (const allowance of unusedAllowances) {
+    fail(
+      'исключение',
+      `${allowance.rule}/${allowance.key} — исключение ничего не разрешает, слова в тексте больше нет`,
+    );
+  }
+
+  if (failures.length === before) {
+    pass(`запрещённых слов нет: ${LEXICON.filter((r) => r.tier === 'banned').length} правил по трём языкам`);
+  }
+
+  const open = findings.filter((item) => item.tier === 'open');
+  if (open.length > 0) {
+    process.stdout.write(`  ? ждут решения человека: ${open.length}\n`);
+    const byRule = new Map();
+    for (const finding of open) {
+      if (!byRule.has(finding.ruleId)) byRule.set(finding.ruleId, []);
+      byRule.get(finding.ruleId).push(finding);
+    }
+    for (const [ruleId, items] of byRule) {
+      const rule = LEXICON.find((item) => item.id === ruleId);
+      process.stdout.write(`    · ${rule.rule} (${items.length}) — ${rule.question}\n`);
+      process.stdout.write(`      ${rule.source}\n`);
+      for (const finding of items) process.stdout.write(`      ${formatFinding(finding)}\n`);
+    }
+  }
+
+  // Дыра, о которой знают, лучше дыры, о которой забыли: документы называют
+  // написание не на всех трёх языках, и правило без написания на языке ничего
+  // на нём не ловит. Печатаем на каждом прогоне, чтобы это не выглядело
+  // проверкой, которой нет.
+  const unknownSpelling = gaps.filter((gap) => gap.status === 'открыто');
+  if (unknownSpelling.length > 0) {
+    const list = unknownSpelling.map((gap) => `${gap.ruleId}/${gap.locale}`).join(', ');
+    process.stdout.write(
+      `  ? написание не установлено у ${unknownSpelling.length} правил: ${list}\n`,
+    );
+  }
 }
 
 /* --------------------------------------------------------- 4. что обходим */
