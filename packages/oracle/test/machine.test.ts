@@ -1,4 +1,10 @@
-import { type CapturedRawSource, AuditError, auditInstant, captureRawSource } from '@sdelka/audit';
+import {
+  type CapturedRawSource,
+  AuditError,
+  AuditErrorCode,
+  auditInstant,
+  captureRawSource,
+} from '@sdelka/audit';
 import {
   type ObservationLevel,
   type ReleaseObservationInput,
@@ -439,7 +445,35 @@ describe('наблюдение без записанного ответа ист
       observedAt: NOW,
       rawSourceDigest: rawSource().digest,
     });
-    expect(() => sourcedObservation(parsed, other)).toThrow(AuditError);
+    // Утверждается код и причина, а не класс: `rawSourceNotAttested` бросают
+    // три места (длина, отпечаток, сведение наблюдения), и «упало» без разбора
+    // не отличает «предъявлен другой ответ» от «ответ той же длины подменён».
+    let thrown: unknown = null;
+    try {
+      sourcedObservation(parsed, other);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(AuditError);
+    expect((thrown as AuditError).code).toBe(AuditErrorCode.rawSourceNotAttested);
+    expect((thrown as AuditError).details['reason']).toBe('observation');
+    // Значение отпечатка в детали не попадает: за ним стоит документ.
+    expect(Object.keys((thrown as AuditError).details)).toEqual(['reason']);
+  });
+
+  it('наблюдение и его собственный ответ сводятся', () => {
+    // Обратная сторона: проверка не запрещает правильную пару.
+    const parsed = releaseObservation({
+      level: 'L3',
+      conditionType: 'registration_transfer',
+      sourceKey: RELEASE_CONDITIONS.registration_transfer.sourceKey,
+      cadastralCode: CADASTRAL_CODE,
+      fields: MATCHING_FIELDS,
+      ownerCheck: 'established',
+      observedAt: NOW,
+      rawSourceDigest: rawSource().digest,
+    });
+    expect(sourcedObservation(parsed, rawSource()).rawSource.digest).toBe(rawSource().digest);
   });
 
   it('ответ источника доезжает до состояния и до намерения к траншу', () => {

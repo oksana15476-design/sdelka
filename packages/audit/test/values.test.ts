@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AuditError,
   AuditErrorCode,
   assertNoRawIdentifiers,
   auditAmount,
@@ -9,33 +8,52 @@ import {
   auditToken,
   fingerprintLabel,
 } from '../src/index';
-import { fp } from './support/fixtures';
+import { expectAuditError, fp } from './support/fixtures';
 
 describe('персональные данные не попадают в журнал', () => {
   it('строка, похожая на IBAN, в тело записи не проходит', () => {
-    expect(() => assertNoRawIdentifiers({ beneficiary: 'GE29NB0000000101904917' })).toThrow(
-      AuditError,
+    const error = expectAuditError(
+      () => assertNoRawIdentifiers({ beneficiary: 'GE29NB0000000101904917' }),
+      AuditErrorCode.rawIdentifier,
     );
+    expect(error.details['rule']).toBe('iban');
   });
 
   it('номер документа длиной от девяти цифр не проходит', () => {
-    try {
-      assertNoRawIdentifiers({ document: '01019049170' });
-      expect.unreachable();
-    } catch (error) {
-      expect((error as AuditError).code).toBe(AuditErrorCode.rawIdentifier);
-      // В деталях путь и правило — но не само значение.
-      expect(JSON.stringify((error as AuditError).details)).not.toContain('01019049170');
-    }
+    const error = expectAuditError(
+      () => assertNoRawIdentifiers({ document: '01019049170' }),
+      AuditErrorCode.rawIdentifier,
+    );
+    expect(error.details['rule']).toBe('digit_run');
+    // В деталях путь и правило — но не само значение.
+    expect(JSON.stringify(error.details)).not.toContain('01019049170');
   });
 
   it('телефон не проходит', () => {
-    expect(() => assertNoRawIdentifiers({ phone: '+995322000000' })).toThrow(AuditError);
+    // Со знаком «плюс» в начале строка не проходит уже по форме ключа: это
+    // другая проверка и другой код. Правило про телефон ловит номер **внутри**
+    // строки, которая по форме ключом быть могла бы, — и утверждается именно
+    // оно, иначе снятие правила осталось бы незамеченным.
+    expectAuditError(
+      () => assertNoRawIdentifiers({ phone: '+995322000000' }),
+      AuditErrorCode.tokenInvalid,
+    );
+    const error = expectAuditError(
+      () => assertNoRawIdentifiers({ contact: 'call+99532200' }),
+      AuditErrorCode.rawIdentifier,
+    );
+    expect(error.details['rule']).toBe('phone');
   });
 
   it('свободный текст и адрес почты не проходят: в журнале только ключи', () => {
-    expect(() => assertNoRawIdentifiers({ note: 'Иван Петров, паспорт' })).toThrow(AuditError);
-    expect(() => assertNoRawIdentifiers({ actorId: 'ivan@example.com' })).toThrow(AuditError);
+    expectAuditError(
+      () => assertNoRawIdentifiers({ note: 'Иван Петров, паспорт' }),
+      AuditErrorCode.tokenInvalid,
+    );
+    expectAuditError(
+      () => assertNoRawIdentifiers({ actorId: 'ivan@example.com' }),
+      AuditErrorCode.tokenInvalid,
+    );
   });
 
   it('отпечаток того же значения проходит', () => {
@@ -56,9 +74,13 @@ describe('персональные данные не попадают в жур�
   });
 
   it('проверка идёт вглубь массивов и вложенных объектов', () => {
-    expect(() =>
-      assertNoRawIdentifiers({ items: [{ inner: { phone: '+995322000000' } }] }),
-    ).toThrow(AuditError);
+    const error = expectAuditError(
+      () => assertNoRawIdentifiers({ items: [{ inner: { document: '01019049170' } }] }),
+      AuditErrorCode.rawIdentifier,
+    );
+    // Путь ведёт к вложенному полю, а не к корню: иначе по отчёту не найти, где
+    // именно сырое значение попало в тело записи.
+    expect(error.details['path']).toBe('$.items[0].inner.document');
   });
 
   it('метка отпечатка короче отпечатка и не восстанавливает его', () => {
@@ -71,8 +93,8 @@ describe('персональные данные не попадают в жур�
 describe('значения журнала', () => {
   it('идентификатор — технический ключ, не текст', () => {
     expect(auditToken('deal-1')).toBe('deal-1');
-    expect(() => auditToken('сделка номер один')).toThrow(AuditError);
-    expect(() => auditToken('')).toThrow(AuditError);
+    expectAuditError(() => auditToken('сделка номер один'), AuditErrorCode.tokenInvalid);
+    expectAuditError(() => auditToken(''), AuditErrorCode.tokenInvalid);
   });
 
   it('ссылка на сущность заморожена и сравнивается по области и ключу', () => {
@@ -84,7 +106,7 @@ describe('значения журнала', () => {
   it('сумма — целые минорные единицы, валюта трёхбуквенная', () => {
     const amount = auditAmount('GEL', 125_000n);
     expect(amount.minor).toBe(125_000n);
-    expect(() => auditAmount('gel', 1n)).toThrow(AuditError);
-    expect(() => auditAmount('LARI', 1n)).toThrow(AuditError);
+    expectAuditError(() => auditAmount('gel', 1n), AuditErrorCode.currencyInvalid);
+    expectAuditError(() => auditAmount('LARI', 1n), AuditErrorCode.currencyInvalid);
   });
 });

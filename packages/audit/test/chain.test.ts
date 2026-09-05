@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as audit from '../src/index';
-import { AuditError, AuditErrorCode, ZERO_HASH, appendRecord, verifyChain } from '../src/index';
+import { AuditErrorCode, ZERO_HASH, appendRecord, verifyChain } from '../src/index';
 import {
   ANALYST,
   CLIENT,
@@ -11,6 +11,7 @@ import {
   TRANCHE,
   at,
   dossierChain,
+  expectAuditError,
   newChain,
   source,
 } from './support/fixtures';
@@ -77,12 +78,10 @@ describe('append-only', () => {
 describe('что цепочка отвергает при построении', () => {
   it('запись задним числом — не принимается вовсе, а не только замечается потом', () => {
     const chain = appendRecord(newChain(), decision('rec-1', 5));
-    expect(() => appendRecord(chain, decision('rec-2', 4))).toThrow(AuditError);
-    try {
-      appendRecord(chain, decision('rec-2', 4));
-    } catch (error) {
-      expect((error as AuditError).code).toBe(AuditErrorCode.recordTimeRegression);
-    }
+    expectAuditError(
+      () => appendRecord(chain, decision('rec-2', 4)),
+      AuditErrorCode.recordTimeRegression,
+    );
   });
 
   it('одинаковое время допустимо: две записи в одну миллисекунду — норма', () => {
@@ -92,90 +91,136 @@ describe('что цепочка отвергает при построении',
 
   it('повтор идентификатора записи отвергается', () => {
     const chain = appendRecord(newChain(), decision('rec-1', 1));
-    expect(() => appendRecord(chain, decision('rec-1', 2))).toThrow(AuditError);
+    expectAuditError(
+      () => appendRecord(chain, decision('rec-1', 2)),
+      AuditErrorCode.recordIdDuplicate,
+    );
   });
 
   it('исправление несуществующей записи отвергается', () => {
     const chain = newChain();
-    expect(() =>
-      appendRecord(chain, {
-        recordId: 'rec-fix',
-        recordedAt: at(1),
-        actor: OPERATOR,
-        subject: TRANCHE,
-        body: {
-          kind: 'correction',
-          correctsRecordId: 'rec-missing',
-          reasonKey: 'x.y',
-          basis: source(9, 'operator_note', 'sdelka.console'),
-          attributes: {},
-        },
-      }),
-    ).toThrow(AuditError);
+    expectAuditError(
+      () =>
+        appendRecord(chain, {
+          recordId: 'rec-fix',
+          recordedAt: at(1),
+          actor: OPERATOR,
+          subject: TRANCHE,
+          body: {
+            kind: 'correction',
+            correctsRecordId: 'rec-missing',
+            reasonKey: 'x.y',
+            basis: source(9, 'operator_note', 'sdelka.console'),
+            attributes: {},
+          },
+        }),
+      AuditErrorCode.correctionTargetMissing,
+    );
   });
 
-  it('исправление самого себя отвергается', () => {
+  it('исправление самого себя названо самоссылкой, а не пропавшей целью', () => {
+    // Две проверки подряд ловят один и тот же вход: самоссылку и отсутствие
+    // цели. Цели с таким идентификатором в цепочке заведомо нет — предыдущая
+    // проверка уже отвергла бы повтор, — поэтому снятие проверки самоссылки
+    // роняет вызов на следующей строке, с другим кодом. Разница между
+    // «исправление ссылается на себя» и «исправляемой записи нет» — это разница
+    // между ошибкой вызывающего и разрывом досье, и дежурный обязан видеть
+    // именно свою.
     const chain = newChain();
-    expect(() =>
-      appendRecord(chain, {
-        recordId: 'rec-fix',
-        recordedAt: at(1),
-        actor: OPERATOR,
-        subject: TRANCHE,
-        body: {
-          kind: 'correction',
-          correctsRecordId: 'rec-fix',
-          reasonKey: 'x.y',
-          basis: source(9, 'operator_note', 'sdelka.console'),
-          attributes: {},
-        },
-      }),
-    ).toThrow(AuditError);
+    expectAuditError(
+      () =>
+        appendRecord(chain, {
+          recordId: 'rec-fix',
+          recordedAt: at(1),
+          actor: OPERATOR,
+          subject: TRANCHE,
+          body: {
+            kind: 'correction',
+            correctsRecordId: 'rec-fix',
+            reasonKey: 'x.y',
+            basis: source(9, 'operator_note', 'sdelka.console'),
+            attributes: {},
+          },
+        }),
+      AuditErrorCode.correctionSelfReference,
+    );
+  });
+
+  it('исправление, ссылающееся на запись из другой цепочки, отвергается как пропавшая цель', () => {
+    // Соседний вход к предыдущему: идентификатор не свой, но и не найден.
+    // Держит границу между двумя кодами с другой стороны.
+    const chain = appendRecord(newChain(), decision('rec-1', 1));
+    expectAuditError(
+      () =>
+        appendRecord(chain, {
+          recordId: 'rec-fix',
+          recordedAt: at(2),
+          actor: OPERATOR,
+          subject: TRANCHE,
+          body: {
+            kind: 'correction',
+            correctsRecordId: 'rec-1-of-another-chain',
+            reasonKey: 'x.y',
+            basis: source(9, 'operator_note', 'sdelka.console'),
+            attributes: {},
+          },
+        }),
+      AuditErrorCode.correctionTargetMissing,
+    );
   });
 
   it('метка времени, покрывающая чужой хеш, отвергается', () => {
     const chain = appendRecord(newChain(), decision('rec-1', 1));
-    expect(() =>
-      appendRecord(chain, {
-        recordId: 'rec-stamp',
-        recordedAt: at(2),
-        actor: SYSTEM,
-        subject: TRANCHE,
-        body: {
-          kind: 'timestamp_token',
-          coversRecordId: 'rec-1',
-          coveredHash: FOREIGN_HASH,
-          timestamp: {
-            provider: 'tsa-independent',
-            issuedAt: at(2),
-            digest: FOREIGN_HASH,
-            token: 'opaque==',
+    expectAuditError(
+      () =>
+        appendRecord(chain, {
+          recordId: 'rec-stamp',
+          recordedAt: at(2),
+          actor: SYSTEM,
+          subject: TRANCHE,
+          body: {
+            kind: 'timestamp_token',
+            coversRecordId: 'rec-1',
+            coveredHash: FOREIGN_HASH,
+            timestamp: {
+              provider: 'tsa-independent',
+              issuedAt: at(2),
+              digest: FOREIGN_HASH,
+              token: 'opaque==',
+            },
           },
-        },
-      }),
-    ).toThrow(AuditError);
+        }),
+      AuditErrorCode.timestampTargetMissing,
+    );
   });
 
   it('сырой идентификатор в теле записи не проходит', () => {
     const chain = newChain();
-    expect(() =>
-      appendRecord(chain, {
-        recordId: 'rec-view',
-        recordedAt: at(1),
-        actor: CLIENT,
-        subject: TRANCHE,
-        body: {
-          kind: 'personal_data_viewed',
-          purposeKey: 'support.request',
-          fields: ['GE29NB0000000101904917'],
-        },
-      }),
-    ).toThrow(AuditError);
+    const error = expectAuditError(
+      () =>
+        appendRecord(chain, {
+          recordId: 'rec-view',
+          recordedAt: at(1),
+          actor: CLIENT,
+          subject: TRANCHE,
+          body: {
+            kind: 'personal_data_viewed',
+            purposeKey: 'support.request',
+            fields: ['GE29NB0000000101904917'],
+          },
+        }),
+      AuditErrorCode.rawIdentifier,
+    );
+    expect(error.details['rule']).toBe('iban');
+    // Само значение в детали не попадает — иначе проверка сама несла бы в лог
+    // то, что она не пускает в журнал.
+    expect(JSON.stringify(error.details)).not.toContain('GE29NB');
   });
 
   it('в цепочку без генезиса добавить нечего', () => {
-    expect(() => appendRecord({ chainId: 'chain:x', records: [] }, decision('rec-1', 1))).toThrow(
-      AuditError,
+    expectAuditError(
+      () => appendRecord({ chainId: 'chain:x', records: [] }, decision('rec-1', 1)),
+      AuditErrorCode.chainEmpty,
     );
   });
 });

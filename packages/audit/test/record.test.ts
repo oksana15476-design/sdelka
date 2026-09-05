@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AUDIT_RECORD_KINDS,
   AUDIT_ROLES,
-  AuditError,
+  AuditErrorCode,
   type CorrectionBody,
   type DecisionMadeBody,
   type PayoutOrderedBody,
@@ -12,7 +12,7 @@ import {
   auditAmount,
   policyRef,
 } from '../src/index';
-import { BENEFICIARY, COMPLIANCE_POLICY, source } from './support/fixtures';
+import { BENEFICIARY, COMPLIANCE_POLICY, expectAuditError, source } from './support/fixtures';
 
 /**
  * Обязательность полей проверяется компилятором, а не рантаймом: `@ts-expect-error`
@@ -105,9 +105,9 @@ describe('версия политики', () => {
   });
 
   it('произвольная строка версией политики не является', () => {
-    expect(() => policyRef('v1')).toThrow(AuditError);
-    expect(() => policyRef('compliance/2026-09-03')).toThrow(AuditError);
-    expect(() => policyRef('Compliance/2026-09-03.1')).toThrow(AuditError);
+    expectAuditError(() => policyRef('v1'), AuditErrorCode.policyRefInvalid);
+    expectAuditError(() => policyRef('compliance/2026-09-03'), AuditErrorCode.policyRefInvalid);
+    expectAuditError(() => policyRef('Compliance/2026-09-03.1'), AuditErrorCode.policyRefInvalid);
   });
 });
 

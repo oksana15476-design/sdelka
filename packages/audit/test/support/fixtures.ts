@@ -8,6 +8,8 @@ import {
   type RawSourceKind,
   type RawSourceRef,
   type TimestampToken,
+  AuditError,
+  AuditErrorCode,
   appendRecord,
   auditActor,
   auditAmount,
@@ -274,3 +276,31 @@ export function duplicateRecord(chain: AuditChain, index: number): AuditChain {
 
 /** Подменённый отпечаток: та же форма, другое значение. */
 export const FOREIGN_HASH = sha256Hex(fp(0xdead));
+
+/**
+ * Ожидаемая ошибка **по коду**, а не по классу.
+ *
+ * `toThrow(AuditError)` в этом пакете почти ничего не проверяет: класс у всех
+ * проверок один, и снятие любой из них оставляет утверждение истинным — соседняя
+ * ловит тот же вход другим кодом. Мутационный прогон показал это на цикле в
+ * `canonical.ts` (при снятой проверке цикла срабатывал ограничитель глубины) и
+ * на самоссылке исправления в `chain.ts` (срабатывал «цель не найдена»).
+ *
+ * Возвращает саму ошибку: часть проверок различима только деталями (`path`,
+ * `type`, `reason`), и вызывающему они нужны.
+ */
+export function expectAuditError(action: () => unknown, code: AuditErrorCode): AuditError {
+  let thrown: unknown = null;
+  try {
+    action();
+  } catch (error) {
+    thrown = error;
+  }
+  if (!(thrown instanceof AuditError)) {
+    throw new Error(`ожидалась AuditError ${code}, получено: ${String(thrown)}`);
+  }
+  if (thrown.code !== code) {
+    throw new Error(`ожидался код ${code}, получен ${thrown.code}`);
+  }
+  return thrown;
+}

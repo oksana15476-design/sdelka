@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AuditError,
+  AuditErrorCode,
   HASH_DOMAIN,
   ZERO_HASH,
   auditInstant,
@@ -9,6 +9,7 @@ import {
   digestOfParts,
   sha256Hex,
 } from '../src/index';
+import { expectAuditError } from './support/fixtures';
 
 describe('хеш', () => {
   it('отпечаток байтов совпадает с известным вектором SHA-256', () => {
@@ -37,14 +38,17 @@ describe('хеш', () => {
   });
 
   it('строка не той формы отвергается', () => {
-    expect(() => sha256Hex('ZZ')).toThrow(AuditError);
-    expect(() => sha256Hex('A'.repeat(64))).toThrow(AuditError);
+    // Верхний регистр отвергается наравне с мусором: два написания одного хеша
+    // дали бы две разные строки под один и тот же смысл, и сравнение цепочек
+    // стало бы зависеть от того, кто их записал.
+    expectAuditError(() => sha256Hex('ZZ'), AuditErrorCode.hashInvalid);
+    expectAuditError(() => sha256Hex('A'.repeat(64)), AuditErrorCode.hashInvalid);
   });
 
   it('время в журнале целое и неотрицательное', () => {
     expect(auditInstant(0)).toBe(0);
-    expect(() => auditInstant(1.5)).toThrow(AuditError);
-    expect(() => auditInstant(-1)).toThrow(AuditError);
+    expectAuditError(() => auditInstant(1.5), AuditErrorCode.instantInvalid);
+    expectAuditError(() => auditInstant(-1), AuditErrorCode.instantInvalid);
   });
 
   it('хеш значения зависит от значения', () => {

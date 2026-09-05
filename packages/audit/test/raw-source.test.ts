@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AuditError,
   AuditErrorCode,
   type CapturedRawSource,
   attestRawSource,
@@ -9,7 +8,7 @@ import {
   rawSourceRef,
   verifyRawSource,
 } from '../src/index';
-import { at } from './support/fixtures';
+import { at, expectAuditError } from './support/fixtures';
 
 const BYTES = new TextEncoder().encode('{"registered":true,"cadastral":"aa-bb"}');
 
@@ -55,17 +54,19 @@ describe('сырой ответ источника', () => {
   });
 
   it('отрицательная длина отвергается', () => {
-    expect(() =>
-      rawSourceRef({
-        sourceKind: 'contract',
-        storageRef: 'documents/x',
-        mediaType: 'application/pdf',
-        byteLength: -1,
-        digest: rawSourceDigest(BYTES),
-        receivedAt: at(1),
-        provider: 'cabinet',
-      }),
-    ).toThrow(AuditError);
+    expectAuditError(
+      () =>
+        rawSourceRef({
+          sourceKind: 'contract',
+          storageRef: 'documents/x',
+          mediaType: 'application/pdf',
+          byteLength: -1,
+          digest: rawSourceDigest(BYTES),
+          receivedAt: at(1),
+          provider: 'cabinet',
+        }),
+      AuditErrorCode.rawSourceByteLengthInvalid,
+    );
   });
 });
 
@@ -106,36 +107,31 @@ describe('засвидетельствованный отпечаток', () => 
       return;
     }
     tampered[0] = first ^ 0x01;
-    try {
-      attestRawSource(tampered, ref);
-      expect.unreachable();
-    } catch (error) {
-      expect(error).toBeInstanceOf(AuditError);
-      expect((error as AuditError).code).toBe(AuditErrorCode.rawSourceNotAttested);
-      // Подмена содержимого и подобранная коллизия различимы в отчёте.
-      expect((error as AuditError).details['reason']).toBe('digest');
-    }
+    const error = expectAuditError(
+      () => attestRawSource(tampered, ref),
+      AuditErrorCode.rawSourceNotAttested,
+    );
+    // Подмена содержимого и подобранная коллизия различимы в отчёте.
+    expect(error.details['reason']).toBe('digest');
   });
 
   it('другая длина названа своей причиной', () => {
     const ref = refFor(BYTES);
-    try {
-      attestRawSource(BYTES.slice(0, BYTES.length - 1), ref);
-      expect.unreachable();
-    } catch (error) {
-      expect((error as AuditError).details['reason']).toBe('byte_length');
-    }
+    const error = expectAuditError(
+      () => attestRawSource(BYTES.slice(0, BYTES.length - 1), ref),
+      AuditErrorCode.rawSourceNotAttested,
+    );
+    expect(error.details['reason']).toBe('byte_length');
   });
 
   it('в деталях отказа нет ни байтов, ни отпечатка', () => {
     // Значение в детали не кладём никогда: сработавшая проверка — это ровно тот
     // момент, когда в деталях оказался бы чужой документ.
-    try {
-      attestRawSource(new TextEncoder().encode('other'), refFor(BYTES));
-      expect.unreachable();
-    } catch (error) {
-      expect(Object.keys((error as AuditError).details)).toEqual(['reason']);
-    }
+    const error = expectAuditError(
+      () => attestRawSource(new TextEncoder().encode('other'), refFor(BYTES)),
+      AuditErrorCode.rawSourceNotAttested,
+    );
+    expect(Object.keys(error.details)).toEqual(['reason']);
   });
 
   it('ссылка, принятая на слово, засвидетельствованной не считается — проверка типом', () => {

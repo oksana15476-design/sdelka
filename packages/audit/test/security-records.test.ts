@@ -4,7 +4,6 @@ import {
   AUDIT_RECORD_KINDS,
   AUDIT_SECOND_FACTOR_KINDS,
   type AuditBody,
-  AuditError,
   AuditErrorCode,
   type RoleChangedBody,
   type SessionDeniedBody,
@@ -18,7 +17,17 @@ import {
   policyRef,
   verifyChain,
 } from '../src/index';
-import { DEAL, FOREIGN_HASH, OPERATOR, SYSTEM, at, fp, newChain, source } from './support/fixtures';
+import {
+  DEAL,
+  FOREIGN_HASH,
+  OPERATOR,
+  SYSTEM,
+  at,
+  expectAuditError,
+  fp,
+  newChain,
+  source,
+} from './support/fixtures';
 
 /**
  * События безопасности и изменения настроек.
@@ -38,18 +47,6 @@ const FX_POLICY = policyRef('fx/2026-09-04.1');
 
 /** Актор события безопасности — сам входящий; у настройки — тот, кто внёс. */
 const CONSOLE_ACTOR = OPERATOR;
-
-/** Ожидаемая ошибка **по коду**: «упало» без кода не отличает одну причину от другой. */
-function expectCode(action: () => unknown, code: AuditErrorCode): void {
-  try {
-    action();
-  } catch (error) {
-    expect(error).toBeInstanceOf(AuditError);
-    expect((error as AuditError).code).toBe(code);
-    return;
-  }
-  throw new Error(`ожидалась ошибка ${code}, но её не было`);
-}
 
 function sessionEstablishedBody(): SessionEstablishedBody {
   return {
@@ -170,7 +167,7 @@ describe('вход', () => {
   it('субъектом входа не может быть сделка', () => {
     // Иначе выборка по субъекту врёт: досье сделки наполняется чужими входами,
     // а входы по учётной записи не находятся.
-    expectCode(
+    expectAuditError(
       () =>
         appendRecord(newChain(), {
           recordId: 'rec-login',
@@ -229,7 +226,7 @@ describe('отказ во входе', () => {
   it('причина — ключ, а не текст для человека', () => {
     // `CLAUDE.md`, «Три языка»: ни одной строки пользовательского текста.
     // Свободный текст не проходит форму `AUDIT_TOKEN` и в журнал не попадает.
-    expectCode(
+    expectAuditError(
       () =>
         appendRecord(newChain(), {
           recordId: 'rec-denied',
@@ -287,7 +284,7 @@ describe('смена роли', () => {
   });
 
   it('смена роли на ту же самую не записывается', () => {
-    expectCode(
+    expectAuditError(
       () =>
         change({
           kind: 'role_changed',
@@ -301,7 +298,7 @@ describe('смена роли', () => {
   });
 
   it('субъектом смены роли не может быть сделка', () => {
-    expectCode(
+    expectAuditError(
       () =>
         appendRecord(newChain(), {
           recordId: 'rec-role',
@@ -470,14 +467,14 @@ describe('изменение настройки', () => {
   it('настройка не вводится в действие задним числом', () => {
     // `ROADMAP.md` И16.2: пересчёт задним числом невозможен, а не запрещён
     // правилом. Настройка, действующая раньше собственной записи, и есть он.
-    expectCode(
+    expectAuditError(
       () => change({ ...settingChangedBody(), effectiveFrom: auditInstant(1) }, at(10)),
       AuditErrorCode.settingEffectiveFromBackdated,
     );
   });
 
   it('запись об изменении, в котором ничего не изменилось, не создаётся', () => {
-    expectCode(
+    expectAuditError(
       () => change({ ...settingChangedBody(), previous: 180, next: 180 }),
       AuditErrorCode.settingChangeIsNoop,
     );
@@ -485,7 +482,7 @@ describe('изменение настройки', () => {
 
   it('перестановка ключей значением не является', () => {
     // Сравнение по канонической форме: `{a,b}` и `{b,a}` — одно значение.
-    expectCode(
+    expectAuditError(
       () =>
         change({
           ...settingChangedBody(),
@@ -497,7 +494,7 @@ describe('изменение настройки', () => {
   });
 
   it('настройка в теле и в субъекте — одна и та же', () => {
-    expectCode(
+    expectAuditError(
       () =>
         appendRecord(newChain(), {
           recordId: 'rec-setting',
@@ -511,7 +508,7 @@ describe('изменение настройки', () => {
   });
 
   it('субъектом изменения настройки не может быть сделка', () => {
-    expectCode(
+    expectAuditError(
       () =>
         appendRecord(newChain(), {
           recordId: 'rec-setting',
@@ -587,7 +584,7 @@ describe('новые виды идут через ту же дверь, что �
       subject: ACCOUNT,
       body: sessionEstablishedBody(),
     });
-    expectCode(
+    expectAuditError(
       () =>
         appendRecord(chain, {
           recordId: 'rec-login-2',
