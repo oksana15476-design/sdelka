@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { isFullyCovered } from '@sdelka/ledger';
 import { MONEY_STATES } from '@/view/money-state';
 import { SCENARIOS } from './scenarios';
-import { getAccount, getDeal, getOpsQueue, listDeals, worldJournal } from './store';
+import { TASK_TYPES, getAccount, getDeal, getOpsQueue, listDeals, reviewKindOf, worldJournal } from './store';
 
 /**
  * Фикстуры проверяются автоматом, а не глазами: если событие не проходит
@@ -100,11 +100,52 @@ describe('фикстуры', () => {
     expect(settlement?.amount.minor).toBeGreaterThan(0n);
   });
 
-  it('очередь работы отсортирована по сроку и покрывает все восемь типов задач', async () => {
+  it('очередь работы отсортирована по сроку и показывает каждый вид задачи', async () => {
     const ops = await getOpsQueue();
     const types = new Set(ops.tasks.map((task) => task.type));
-    expect(types.size).toBeGreaterThanOrEqual(7);
+    // Вид задачи, которого нет в очереди, оператор не увидит никогда — а
+    // ровно так девять видов разбора и прожили: объявлены в коде, невидимы на
+    // экране. Проверяется присутствие каждого, а не их количество.
+    expect(TASK_TYPES.filter((type) => !types.has(type))).toEqual([]);
     const deadlines = ops.tasks.map((task) => task.deadline?.at ?? Number.MAX_SAFE_INTEGER);
     expect([...deadlines].sort((left, right) => left - right)).toEqual(deadlines);
+  });
+
+  it('каждому виду разбора из кода отвечает вид задачи консоли', async () => {
+    // `EVERY_REVIEW_KIND_HAS_A_PLACE` проверяет это сборкой; здесь — вторая
+    // опора, читаемая человеком: соответствие не пустое и не выдумано.
+    const placed = TASK_TYPES.map((type) => reviewKindOf(type)).filter((kind) => kind !== null);
+    expect(new Set(placed).size).toBe(placed.length);
+    expect(placed).toContain('intake_underpayment');
+    expect(placed).toContain('sanctions_unavailable');
+  });
+
+  it('недоплата приходит в очередь из учёта, а не из таблицы фикстур', async () => {
+    // `INTAKE.md` И2.1, критерий 3: «оператор видит задачу». Задача выводится
+    // из положения денег, поэтому её нельзя потерять, поправив таблицу.
+    const ops = await getOpsQueue();
+    const task = ops.tasks.find((item) => item.type === 'intakeUnderpayment');
+    expect(task).toBeDefined();
+    const deal = await getDeal(task?.dealId ?? '');
+    expect(deal?.moneyState).toBe('partiallyFunded');
+    // Недостача в карточке — та же величина, что в учёте, и в той же валюте.
+    const shortfall = task?.facts.find((fact) => fact.labelKey === 'ops.fact.shortfall');
+    expect(shortfall?.kind).toBe('money');
+    expect(shortfall?.kind === 'money' ? shortfall.value.minor : 0n).toBe(deal?.shortfall?.minor);
+    expect(shortfall?.kind === 'money' ? shortfall.value.currency : null).toBe(
+      deal?.required.currency,
+    );
+  });
+
+  it('суммы в фактах разбора не смешивают валюты с суммой ранжирования', async () => {
+    const ops = await getOpsQueue();
+    for (const task of ops.tasks) {
+      for (const fact of task.facts) {
+        if (fact.kind !== 'money' && fact.kind !== 'delta') continue;
+        // Валюта у каждой суммы своя и складывать их не с чем: единой суммы
+        // «всего по задаче» не существует.
+        expect(fact.value.currency.length, `${task.id}:${fact.labelKey}`).toBe(3);
+      }
+    }
   });
 });

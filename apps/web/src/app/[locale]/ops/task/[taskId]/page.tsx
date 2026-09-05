@@ -10,6 +10,7 @@ import { Amount, Badge, BlockedAction, DeadlineTimer, Eyebrow, Row } from '@/ui/
 import {
   BasisCard,
   BreaksList,
+  CaseFacts,
   ClosingCard,
   DetailMissing,
   EvidencePackage,
@@ -27,8 +28,8 @@ import { MONEY_STATE_TONE } from '@/view/money-state';
 /**
  * Карточка задачи — то, ради чего очередь вообще существует.
  *
- * Одна и та же рамка у всех восьми видов задач, и порядок блоков не меняется
- * никогда:
+ * Одна и та же рамка у всех семнадцати видов задач, и порядок блоков не
+ * меняется никогда:
  *
  * 1. **почему это у вас** — иначе разбор начинается с «что тут не так»;
  * 2. **срок и последствие** — таймер без последствия не рендерится вовсе;
@@ -40,9 +41,14 @@ import { MONEY_STATE_TONE } from '@/view/money-state';
  *    а не отказом в момент нажатия;
  * 8. **что произойдёт дальше**.
  *
- * Постоянство порядка важнее плотности: оператор разбирает восемь разных задач
- * за смену, и место, где написано «чем подтверждать», обязано быть одним и тем
- * же во всех восьми.
+ * Постоянство порядка важнее плотности: оператор разбирает за смену разные
+ * задачи, и место, где написано «чем подтверждать», обязано быть одним и тем же
+ * во всех.
+ *
+ * Девять видов разбора, добавленных последними, рамку не расширяют: у них тот
+ * же порядок блоков, а «разбор» наполнен фактами, которые детектор уже посчитал
+ * (`CaseFacts`). Вторая рамка под них не заводилась — она и была бы тем самым
+ * «ещё одним экраном», из-за которого оператор ищет работу глазами.
  */
 export default async function OpsTaskPage({
   params,
@@ -220,7 +226,13 @@ export default async function OpsTaskPage({
         </section>
       ) : null}
 
-      {detail === 'none' ? <DetailMissing l={l} /> : null}
+      {detail === 'facts' && task.facts.length > 0 ? (
+        <CaseFacts l={l} facts={task.facts} operationsZone={OPERATIONS_TIME_ZONE} />
+      ) : null}
+
+      {detail === 'none' || (detail === 'facts' && task.facts.length === 0) ? (
+        <DetailMissing l={l} />
+      ) : null}
 
       <BasisCard l={l} type={task.type} />
 

@@ -1,8 +1,14 @@
 import type { ReactNode } from 'react';
 import type { CurrencyCode, Money } from '@sdelka/money';
-import { formatMoney, formatRemaining } from '@/i18n/format';
+import {
+  formatBasisPoints,
+  formatDateTime,
+  formatMoney,
+  formatNumber,
+  formatRemaining,
+} from '@/i18n/format';
 import { t } from '@/i18n/translate';
-import type { DeadlineView, OpsTask } from '@/fixtures/store';
+import type { CaseFact, DeadlineView, OpsTask } from '@/fixtures/store';
 import type { BreakItem, FieldMatch } from '@/fixtures/screens';
 import { type StateTone, MONEY_STATE_TONE } from '@/view/money-state';
 import type { L10n } from './l10n';
@@ -351,6 +357,61 @@ export function DetailMissing({ l }: { readonly l: L10n }): ReactNode {
         {t(l.dict, 'ops.detail.missing.title')}
       </h2>
       <p className="muted">{t(l.dict, 'ops.detail.missing.body')}</p>
+    </section>
+  );
+}
+
+/**
+ * Разбор для видов задач, у которых своего экрана нет: факты, посчитанные
+ * детектором, строками одной формы.
+ *
+ * Одна карточка на девять видов — намеренно. Девять собственных разборов дали
+ * бы девять разных мест, где лежит «на чём строится решение», а постоянство
+ * места здесь важнее плотности: оператор за смену открывает разные задачи и
+ * обязан находить факты там же, где нашёл их в прошлый раз.
+ *
+ * Форматирует всё локаль: суммы — `Intl` по целым минорным единицам, доли — по
+ * базисным пунктам, моменты — в зоне операций. Ни одной строки, склеенной в
+ * фикстуре: склеенная строка не переводится и ломает грузинский формат.
+ */
+export function CaseFacts({
+  l,
+  facts,
+  operationsZone,
+}: {
+  readonly l: L10n;
+  readonly facts: readonly CaseFact[];
+  readonly operationsZone: string;
+}): ReactNode {
+  return (
+    <section className="card" aria-labelledby="facts">
+      <h2 className="card__title" id="facts">
+        {t(l.dict, 'ops.facts.title')}
+      </h2>
+      <div className="rows">
+        {facts.map((fact) => (
+          <Row l={l} labelKey={fact.labelKey} key={fact.labelKey}>
+            {fact.kind === 'phrase' ? <span>{t(l.dict, fact.valueKey)}</span> : null}
+            {fact.kind === 'code' ? <span className="mono">{fact.value}</span> : null}
+            {fact.kind === 'money' ? <Amount l={l} value={fact.value} /> : null}
+            {fact.kind === 'delta' ? <Amount l={l} value={fact.value} signed /> : null}
+            {fact.kind === 'moment' ? (
+              <span className="mono">{formatDateTime(l.locale, fact.at, operationsZone)}</span>
+            ) : null}
+            {fact.kind === 'span' ? <span className="mono">{formatRemaining(l.locale, fact.ms)}</span> : null}
+            {fact.kind === 'count' ? <span className="mono">{formatNumber(l.locale, fact.value)}</span> : null}
+            {fact.kind === 'share' ? (
+              <span className="mono">{formatBasisPoints(l.locale, fact.bp)}</span>
+            ) : null}
+            {fact.kind === 'signal' ? (
+              <Badge tone={fact.tone} label={t(l.dict, fact.textKey)} />
+            ) : null}
+          </Row>
+        ))}
+      </div>
+      <p className="faint" style={{ marginBlockStart: 'var(--s-3)' }}>
+        {t(l.dict, 'ops.facts.note')}
+      </p>
     </section>
   );
 }

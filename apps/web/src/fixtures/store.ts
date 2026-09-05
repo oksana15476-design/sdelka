@@ -17,6 +17,7 @@ import {
   coverage,
   emptyJournal,
 } from '@sdelka/ledger';
+import type { IntakeRouting } from '@sdelka/intake';
 import { type CurrencyCode, type Money, isPositive, money, subtract } from '@sdelka/money';
 import {
   type AssuranceLevel,
@@ -566,7 +567,19 @@ export async function getRequisites(state: PerimeterState): Promise<RequisitesVi
   };
 }
 
-/** Восемь типов задач консоли (`SCREENS.md` §5.1). */
+/**
+ * Виды задач консоли.
+ *
+ * Восемь первых пришли из `SCREENS.md` §5.1 — и покрывали ровно четыре вида
+ * разбора из тринадцати, объявленных в коде (`REVIEW_TASK_KINDS`,
+ * `packages/compliance/src/queue.ts`). Девять остальных существовали в домене
+ * комплаенса и приёма и **не имели в интерфейсе места вовсе**: оператор
+ * физически не мог их увидеть. У недоплаты это прямое расхождение с
+ * требованием — `INTAKE.md` И2.1, критерий 3: «оператор видит задачу».
+ *
+ * Порядок перечисления — порядок появления, а не важности: важность считает
+ * очередь по сроку и сумме, а не человек глазами.
+ */
 export const TASK_TYPES = [
   'verifyClient',
   'reviewSof',
@@ -576,9 +589,95 @@ export const TASK_TYPES = [
   'approvePayout',
   'reviewBreak',
   'releaseBlock',
+  'sanctionsUnavailable',
+  'payerException',
+  'priceMismatch',
+  'structuring',
+  'linkage',
+  'flipping',
+  'relatedParties',
+  'beneficiaryChange',
+  'intakeUnderpayment',
 ] as const;
 
 export type TaskType = (typeof TASK_TYPES)[number];
+
+/**
+ * Вид разбора из кода — тот же тип, что возвращает маршрутизация приёма
+ * (`queueTask`, `packages/intake/src/route.ts`). Пакет `@sdelka/compliance` в
+ * зависимостях приложения не значится, и добавлять его сюда незачем: тип
+ * доезжает через `@sdelka/intake`, зато доезжает **типом**, а не списком строк.
+ * Новый вид разбора в `REVIEW_TASK_KINDS` теперь ломает сборку интерфейса, а не
+ * тихо остаётся невидимым для оператора.
+ */
+type ReviewTaskKind = NonNullable<IntakeRouting['queueTask']>;
+
+/**
+ * Какому виду разбора отвечает вид задачи. `null` — задача не из очереди
+ * комплаенса: проверка личности живёт в `packages/compliance/src/identity.ts`,
+ * подтверждение регистрации — в `packages/oracle`, утверждение выплаты и разбор
+ * расхождения — в домене и сверке. Ставить им выдуманный вид разбора было бы
+ * враньём в обратную сторону.
+ */
+const REVIEW_KIND_OF = Object.freeze({
+  verifyClient: null,
+  reviewSof: 'source_of_funds',
+  reviewSanction: 'sanctions_possible_match',
+  matchPayment: 'intake_unmatched',
+  confirmRegistration: null,
+  approvePayout: null,
+  reviewBreak: null,
+  releaseBlock: 'payer_hold',
+  sanctionsUnavailable: 'sanctions_unavailable',
+  payerException: 'payer_exception',
+  priceMismatch: 'price_mismatch',
+  structuring: 'structuring',
+  linkage: 'linkage',
+  flipping: 'flipping',
+  relatedParties: 'related_parties',
+  beneficiaryChange: 'beneficiary_change',
+  intakeUnderpayment: 'intake_underpayment',
+} as const) satisfies Readonly<Record<TaskType, ReviewTaskKind | null>>;
+
+export function reviewKindOf(type: TaskType): ReviewTaskKind | null {
+  return REVIEW_KIND_OF[type];
+}
+
+type PlacedReviewKind = NonNullable<(typeof REVIEW_KIND_OF)[TaskType]>;
+
+/**
+ * Не значение, а утверждение компилятору: **каждый** вид разбора из кода имеет
+ * место в очереди. Приём тот же, что у `EXCEPTIONS_ARE_EXACTLY_AS_DOCUMENTED`
+ * в `packages/compliance/src/detectors/payer.ts`: перечень закрыт не обещанием,
+ * а сборкой.
+ */
+export const EVERY_REVIEW_KIND_HAS_A_PLACE: [ReviewTaskKind] extends [PlacedReviewKind]
+  ? true
+  : never = true;
+
+/**
+ * Факт разбора — строка карточки, которую оператор читает перед решением.
+ *
+ * Размеченное объединение, а не «метка и строка»: число, сумма, момент и срок
+ * форматируются локалью по-разному, и склеенная заранее строка ломает и
+ * грузинский формат, и правило «никаких сумм в плавающей точке». Через границу
+ * сервер → клиент едут только данные и ключи — ни одной функции.
+ */
+export type CaseFact =
+  /** Значение — из словаря: перечень закрыт, строка не сочиняется на месте. */
+  | { readonly kind: 'phrase'; readonly labelKey: string; readonly valueKey: string }
+  /** Идентификатор, ссылка, маскированный счёт: данные, а не текст. */
+  | { readonly kind: 'code'; readonly labelKey: string; readonly value: string }
+  | { readonly kind: 'money'; readonly labelKey: string; readonly value: Money<CurrencyCode> }
+  /** Разница: со знаком, иначе «меньше на» и «больше на» неразличимы. */
+  | { readonly kind: 'delta'; readonly labelKey: string; readonly value: Money<CurrencyCode> }
+  | { readonly kind: 'moment'; readonly labelKey: string; readonly at: number }
+  | { readonly kind: 'span'; readonly labelKey: string; readonly ms: number }
+  | { readonly kind: 'count'; readonly labelKey: string; readonly value: number }
+  /** Доля целыми базисными пунктами: плавающей точки в долях тоже нет. */
+  | { readonly kind: 'share'; readonly labelKey: string; readonly bp: number }
+  /** Условие проверки: пройдено или нет, цветом и словом сразу. */
+  | { readonly kind: 'signal'; readonly labelKey: string; readonly tone: StateTone; readonly textKey: string };
 
 export interface OpsTask {
   readonly id: string;
@@ -588,24 +687,166 @@ export interface OpsTask {
   readonly dealId: string;
   readonly dealRef: string;
   readonly address: string;
+  /**
+   * Сумма ранжирования — **в валюте сделки**, и только в ней.
+   *
+   * Тот же смысл, что у `rankAmount` в `packages/compliance/src/queue.ts`:
+   * очередь сортирует по одной шкале, а пересчёт по официальному курсу делает
+   * вызывающий. Величины в других валютах (перевод, цена договора, недостача)
+   * живут в `facts` со своей валютой и не складываются ни с чем.
+   */
   readonly amount: Money<CurrencyCode>;
   readonly deadline: DeadlineView | null;
   readonly ageMs: number;
   readonly claimedBy: string | null;
   readonly blockedReasonKey: string | null;
+  /** Материал разбора. Пусто — у вида задачи тела разбора в этом слое нет. */
+  readonly facts: readonly CaseFact[];
 }
 
+const NO_FACTS: readonly CaseFact[] = Object.freeze([]);
+
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+
 /**
- * Две задачи из восьми не выводятся из положения денег: проверка клиента и
- * разбор источника средств живут в комплаенсе, которого в этом слое нет.
- * Поэтому они заданы явно и помечены — молчаливое отсутствие двух типов из
- * восьми выглядело бы как «в очереди их не бывает».
+ * Задачи, которые из положения денег не выводятся: они живут в комплаенсе и в
+ * реквизитах выплаты, а этого слоя в фикстурах нет. Заданы явно и по одному
+ * правдоподобному примеру на вид — молчаливое отсутствие вида читается как
+ * «такого в очереди не бывает».
+ *
+ * Факты каждого примера собраны из тех же величин, что живут в учёте: целые
+ * минорные единицы, валюта при каждой сумме, доли — базисными пунктами. Ни
+ * одного правила здесь не введено: пороги, лестницы исходов и перечни причин
+ * лежат в пакетах, а тут только пример, на котором рамку видно.
  */
-const COMPLIANCE_TASKS: readonly { readonly dealId: string; readonly type: TaskType }[] = [
-  { dealId: 'r01', type: 'verifyClient' },
-  { dealId: 'm04', type: 'reviewSof' },
+const SEEDED_TASKS: readonly { readonly dealId: string; readonly type: TaskType; readonly facts: readonly CaseFact[] }[] = [
+  { dealId: 'r01', type: 'verifyClient', facts: NO_FACTS },
+  { dealId: 'm04', type: 'reviewSof', facts: NO_FACTS },
+  {
+    /* Провайдер скрининга не ответил. `decideSanctions` отвечает `unavailable`,
+       а не пустым списком кандидатов, и лестница переводит это в удержание, а
+       не в «чисто» (`packages/compliance/src/screening.ts`, fail-closed). */
+    dealId: 'm09',
+    type: 'sanctionsUnavailable',
+    facts: Object.freeze([
+      { kind: 'phrase', labelKey: 'ops.fact.subject', valueKey: 'ops.fact.value.subject.recipient' },
+      { kind: 'code', labelKey: 'ops.fact.provider', value: 'screening-provider-1' },
+      { kind: 'moment', labelKey: 'ops.fact.requestedAt', at: FIXTURE_NOW - 3 * HOUR },
+      { kind: 'signal', labelKey: 'ops.fact.response', tone: 'danger', textKey: 'ops.fact.value.providerUnavailable' },
+      { kind: 'phrase', labelKey: 'ops.fact.route', valueKey: 'ops.fact.value.hold' },
+    ] as const),
+  },
+  {
+    /* Исключение по плательщику: супруг, документ проверен, проверка стороны
+       завершена. `assessPayer` отвечает `review` и `exceptionApplied`, маршрут —
+       на счёт клиента (`packages/intake/src/route.ts`). Перевод пришёл в валюте,
+       отличной от валюты сделки: сумма стоит в своей валюте и ни с чем не
+       складывается — единой суммы «всего по задаче» не существует. */
+    dealId: 'm06',
+    type: 'payerException',
+    facts: Object.freeze([
+      { kind: 'phrase', labelKey: 'ops.fact.relationship', valueKey: 'ops.fact.value.relationship.spouse' },
+      { kind: 'signal', labelKey: 'ops.fact.kinshipProof', tone: 'ok', textKey: 'ops.fact.value.verified' },
+      { kind: 'signal', labelKey: 'ops.fact.payerKyc', tone: 'ok', textKey: 'ops.fact.value.complete' },
+      { kind: 'money', labelKey: 'ops.fact.transfer', value: money('USD', 8_084_560n) },
+      { kind: 'phrase', labelKey: 'ops.fact.route', valueKey: 'ops.fact.value.toClientAccount' },
+    ] as const),
+  },
+  {
+    /* Расхождение цены: сумма через платформу ниже цены договора.
+       Сравниваются две **заявленные** величины, а не полученная с отправленной,
+       поэтому задача существует до всякого поступления — здесь она стоит на
+       сделке, по которой деньги ещё не пришли. Доля считается с округлением
+       вверх: на границе допуска решение принимается в строгую сторону
+       (`packages/compliance/src/detectors/price.ts:41`). */
+    dealId: 'm01',
+    type: 'priceMismatch',
+    facts: Object.freeze([
+      { kind: 'money', labelKey: 'ops.fact.contractPrice', value: money('GEL', 24_000_000n) },
+      { kind: 'money', labelKey: 'ops.fact.platformAmount', value: money('GEL', 21_700_000n) },
+      { kind: 'delta', labelKey: 'ops.fact.delta', value: money('GEL', -2_300_000n) },
+      { kind: 'share', labelKey: 'ops.fact.deltaShare', bp: 959 },
+      { kind: 'signal', labelKey: 'ops.fact.secondAmount', tone: 'ok', textKey: 'ops.fact.value.notRequested' },
+    ] as const),
+  },
+  {
+    /* Разбиение платежа: три поступления одного плательщика в одном окне, каждое
+       под порогом, вместе — выше (`findStructuringClusters`). Исход `review`:
+       операция продолжается, деньги не удерживаются. */
+    dealId: 'm08',
+    type: 'structuring',
+    facts: Object.freeze([
+      { kind: 'count', labelKey: 'ops.fact.payments', value: 3 },
+      { kind: 'span', labelKey: 'ops.fact.window', ms: 72 * HOUR },
+      { kind: 'money', labelKey: 'ops.fact.clusterTotal', value: money('GEL', 22_450_000n) },
+      { kind: 'money', labelKey: 'ops.fact.threshold', value: money('GEL', 7_600_000n) },
+      { kind: 'phrase', labelKey: 'ops.fact.route', valueKey: 'ops.fact.value.toClientAccount' },
+    ] as const),
+  },
+  {
+    /* Связанность сторон по общему признаку. Общий счёт — единственный признак,
+       который `assessLinkage` поднимает до удержания; остальные дают разбор. */
+    dealId: 'm02',
+    type: 'linkage',
+    facts: Object.freeze([
+      { kind: 'phrase', labelKey: 'ops.fact.signal', valueKey: 'ops.fact.value.signal.account' },
+      { kind: 'count', labelKey: 'ops.fact.parties', value: 2 },
+      { kind: 'signal', labelKey: 'ops.fact.declaredRelation', tone: 'danger', textKey: 'ops.fact.value.notDeclared' },
+      { kind: 'phrase', labelKey: 'ops.fact.route', valueKey: 'ops.fact.value.hold' },
+    ] as const),
+  },
+  {
+    /* Быстрая перепродажа: переход того же объекта внутри окна плюс скачок цены.
+       Скачок считается к цене прошлого перехода в базисных пунктах
+       (`packages/compliance/src/detectors/flipping.ts`). */
+    dealId: 'r02',
+    type: 'flipping',
+    facts: Object.freeze([
+      { kind: 'moment', labelKey: 'ops.fact.lastTransfer', at: FIXTURE_NOW - 41 * DAY },
+      { kind: 'span', labelKey: 'ops.fact.sinceTransfer', ms: 41 * DAY },
+      { kind: 'money', labelKey: 'ops.fact.previousPrice', value: money('GEL', 16_800_000n) },
+      { kind: 'money', labelKey: 'ops.fact.currentPrice', value: money('GEL', 18_900_000n) },
+      { kind: 'share', labelKey: 'ops.fact.priceJump', bp: 1_250 },
+    ] as const),
+  },
+  {
+    /* Связанные лица по обе стороны одной сделки — усиленная проверка, не отказ
+       (И6.4). Отказ здесь ровно один и он про другое: один и тот же ключ
+       личности по обе стороны (`selfDealingPairs`). */
+    dealId: 'r03',
+    type: 'relatedParties',
+    facts: Object.freeze([
+      { kind: 'phrase', labelKey: 'ops.fact.relation', valueKey: 'ops.fact.value.relation.parent' },
+      { kind: 'signal', labelKey: 'ops.fact.proof', tone: 'danger', textKey: 'ops.fact.value.missing' },
+      { kind: 'signal', labelKey: 'ops.fact.sameIdentity', tone: 'ok', textKey: 'ops.fact.value.no' },
+      { kind: 'phrase', labelKey: 'ops.fact.route', valueKey: 'ops.fact.value.enhancedCheck' },
+    ] as const),
+  },
+  {
+    /* Изменение реквизитов выплаты: заявка в охлаждении, повторная проверка
+       владельца ещё не пройдена. Четыре условия применения проверяются вместе,
+       и окно релиза — повторно на момент применения
+       (`packages/compliance/src/beneficiary.ts`). */
+    dealId: 'r07',
+    type: 'beneficiaryChange',
+    facts: Object.freeze([
+      { kind: 'moment', labelKey: 'ops.fact.requestedAt', at: FIXTURE_NOW - 20 * HOUR },
+      { kind: 'code', labelKey: 'ops.fact.proposedIban', value: 'GE** **** **** **41' },
+      { kind: 'signal', labelKey: 'ops.fact.reverification', tone: 'danger', textKey: 'ops.fact.value.missing' },
+      { kind: 'span', labelKey: 'ops.fact.coolingLeft', ms: 28 * HOUR },
+      { kind: 'count', labelKey: 'ops.decision.fourEyes.approvals', value: 1 },
+    ] as const),
+  },
 ];
 
+/**
+ * Вид задачи по положению денег.
+ *
+ * `partiallyFunded` попал сюда не как новая проекция, а как исправление: транш
+ * остаётся в `collecting`, стороне показана недостающая сумма, и `INTAKE.md`
+ * (И2.1, критерий 3) требует, чтобы задачу видел и оператор. Он её не видел.
+ */
 function taskTypeOf(snapshot: DealSnapshot): TaskType | null {
   switch (snapshot.moneyState) {
     case 'unidentified':
@@ -620,9 +861,32 @@ function taskTypeOf(snapshot: DealSnapshot): TaskType | null {
       return 'reviewSanction';
     case 'heldThirdParty':
       return 'releaseBlock';
+    case 'partiallyFunded':
+      return 'intakeUnderpayment';
     default:
       return null;
   }
+}
+
+/**
+ * Факты недоплаты берутся не из таблицы, а из учёта: требуемое, накопленное и
+ * разница — те же величины, которыми считается положение денег. Допуск показан
+ * отдельной строкой и равен нулю, потому что без факта раскрытия он равен нулю
+ * (`INTAKE.md` §3.3), а причина недостачи — «неизвестна», и при неизвестной
+ * причине допуск не применяется вовсе (§3.5, отказ закрытый).
+ */
+function derivedFacts(snapshot: DealSnapshot, type: TaskType): readonly CaseFact[] {
+  if (type !== 'intakeUnderpayment') return NO_FACTS;
+  const currency = snapshot.required.currency;
+  const received = money(currency, snapshot.credited.minor + snapshot.locked.minor);
+  const shortfall = snapshot.shortfall ?? money(currency, snapshot.required.minor - received.minor);
+  return Object.freeze([
+    { kind: 'money', labelKey: 'ops.fact.required', value: snapshot.required },
+    { kind: 'money', labelKey: 'ops.fact.received', value: received },
+    { kind: 'money', labelKey: 'ops.fact.shortfall', value: shortfall },
+    { kind: 'money', labelKey: 'ops.fact.tolerance', value: money(currency, 0n) },
+    { kind: 'phrase', labelKey: 'ops.fact.shortfallCause', valueKey: 'ops.fact.value.cause.unknown' },
+  ] as const);
 }
 
 export interface OpsView {
@@ -643,12 +907,14 @@ export async function getOpsQueue(): Promise<OpsView> {
   for (const item of BUILT) {
     const snapshot = item.snapshot;
     const derived = taskTypeOf(snapshot);
-    const extra = COMPLIANCE_TASKS.filter((task) => task.dealId === snapshot.id).map((task) => task.type);
-    const types = derived === null ? extra : [derived, ...extra];
-    for (const type of types) {
+    const seeded = SEEDED_TASKS.filter((task) => task.dealId === snapshot.id);
+    const entries: { readonly type: TaskType; readonly facts: readonly CaseFact[] }[] =
+      derived === null ? [] : [{ type: derived, facts: derivedFacts(snapshot, derived) }];
+    for (const task of seeded) entries.push({ type: task.type, facts: task.facts });
+    for (const entry of entries) {
       tasks.push({
-        id: `${snapshot.id}-${type}`,
-        type,
+        id: `${snapshot.id}-${entry.type}`,
+        type: entry.type,
         moneyState: snapshot.moneyState,
         dealId: snapshot.id,
         dealRef: snapshot.ref,
@@ -656,8 +922,9 @@ export async function getOpsQueue(): Promise<OpsView> {
         amount: snapshot.required,
         deadline: snapshot.deadline,
         ageMs: FIXTURE_NOW - (snapshot.marks.at(-1)?.at ?? FIXTURE_NOW),
-        claimedBy: type === 'confirmRegistration' ? 'operator-2' : null,
-        blockedReasonKey: type === 'approvePayout' ? 'ops.task.blocked.samePreparer' : null,
+        claimedBy: entry.type === 'confirmRegistration' ? 'operator-2' : null,
+        blockedReasonKey: entry.type === 'approvePayout' ? 'ops.task.blocked.samePreparer' : null,
+        facts: entry.facts,
       });
     }
   }

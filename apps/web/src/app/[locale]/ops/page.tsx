@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { isLocale } from '@/i18n/locales';
 import { dictionaryOf, plural, t } from '@/i18n/translate';
 import { formatDateTime, formatNumber, formatPercent } from '@/i18n/format';
-import { getOpsQueue, now } from '@/fixtures/store';
+import { TASK_TYPES, getOpsQueue, now } from '@/fixtures/store';
 import { OPERATIONS_TIME_ZONE } from '@/fixtures/engine';
 import { Banner, EmptyState, Eyebrow } from '@/ui/primitives';
 import { QueueShelf, TaskRow } from '@/ui/ops';
@@ -54,7 +54,16 @@ export default async function OpsPage({
       : filter === null
         ? ops.tasks
         : ops.tasks.filter((task) => task.type === filter);
-  const types = [...new Set(ops.tasks.map((task) => task.type))];
+  /*
+   * Порядок фильтров — объявленный, а не порядок появления в очереди.
+   *
+   * Прежде перечень строился из отсортированного списка задач, то есть менялся
+   * вместе со сроками: один и тот же фильтр каждое утро стоял в новом месте, и
+   * оператор искал его глазами. Видов задач стало семнадцать, и цена такого
+   * перемешивания выросла ровно в два раза. Порядок берётся из `TASK_TYPES`.
+   */
+  const present = new Set(ops.tasks.map((task) => task.type));
+  const types = TASK_TYPES.filter((type) => present.has(type));
   const groups = groupQueue(tasks);
   const breached = screenState === 'breach' || ops.coverage.some((item) => !item.covered);
 

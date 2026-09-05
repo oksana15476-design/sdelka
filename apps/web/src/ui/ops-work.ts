@@ -42,7 +42,7 @@ export type WaitingOn = 'human' | 'external';
  * Какого внешнего факта ждёт задача. Ключ подписи, а не тон: оператору важно
  * знать, что именно должно прийти и откуда.
  */
-export type ExternalFact = 'registry' | 'statement';
+export type ExternalFact = 'registry' | 'statement' | 'screening';
 
 const EXTERNAL: Readonly<Partial<Record<TaskType, ExternalFact>>> = Object.freeze({
   /* `M-10 submitted`: заявление в реестре подано, ждём карточку и выписку —
@@ -51,6 +51,12 @@ const EXTERNAL: Readonly<Partial<Record<TaskType, ExternalFact>>> = Object.freez
   /* `M-13 payoutUnknown`: ответа банка нет. Повтор поручения запрещён, выход —
      ежедневная сверка (`packages/domain/src/payout.ts:66`). */
   reviewBreak: 'statement',
+  /* Провайдер скрининга не ответил. Третий внешний факт заведён не для полноты
+     перечня: `SanctionsProviderResponse` различает «ничего не нашли» и «не
+     смогли посмотреть» (`packages/compliance/src/screening.ts:77`), и второе
+     переводится в удержание, а не в «чисто». Пока ответа нет, решать человеку
+     нечего — ровно та полка, ради которой она заведена. */
+  sanctionsUnavailable: 'screening',
 });
 
 export function externalFactOf(type: TaskType): ExternalFact | null {
@@ -184,6 +190,76 @@ const OUTCOMES: Readonly<Record<TaskType, readonly string[]>> = Object.freeze({
     'ops.outcome.hold',
     'ops.outcome.block',
   ]),
+
+  /*
+   * Девять видов разбора, у которых места в очереди не было вовсе.
+   *
+   * Перечень исходов у каждого — **ступени лестницы `DETECTOR_OUTCOMES`,
+   * достижимые в коде соответствующего детектора**, а не лестница целиком и не
+   * наш выбор из неё. Это уже, чем показывать все пять, и проверяемо: ступень,
+   * которую функция не возвращает ни одной веткой, в карточке не стоит.
+   */
+
+  /* `decideSanctions` при `unavailable` возвращает единственный исход, и он не
+     человеческий: отсутствие ответа переводится в удержание
+     (`sanctionsToDetectorOutcome`, `packages/compliance/src/screening.ts:176`).
+     Человеческого ребра здесь нет ни одного — `adjudicateSanctions` принимает
+     только `possible_match` и не собирается с `unavailable` по типу. Поэтому
+     исход один: удержание продолжается, пока провайдер не ответил. */
+  sanctionsUnavailable: Object.freeze(['ops.outcome.hold']),
+
+  /* `assessPayer` возвращает четыре ступени из пяти: `clear`, `review`, `hold`,
+     `block` (`packages/compliance/src/detectors/payer.ts:181`). `stop` не
+     возвращает ни одна ветка, и показывать её значило бы предлагать переход,
+     которого нет. */
+  payerException: Object.freeze([
+    'ops.outcome.clear',
+    'ops.outcome.review',
+    'ops.outcome.hold',
+    'ops.outcome.block',
+  ]),
+
+  /* `assessPrice`: `clear` при совпадении в пределах допуска, `stop` при
+     расхождении и при несравнимых величинах, `block` при предложении указать
+     другую сумму (`detectors/price.ts:41`). Ни `review`, ни `hold`. */
+  priceMismatch: Object.freeze(['ops.outcome.clear', 'ops.outcome.stop', 'ops.outcome.block']),
+
+  /* `assessStructuring` знает ровно две ступени: кластер найден или нет
+     (`detectors/structuring.ts:98`). */
+  structuring: Object.freeze(['ops.outcome.clear', 'ops.outcome.review']),
+
+  /* `assessLinkage`: общий счёт поднимает до удержания, прочие признаки дают
+     разбор, отсутствие признаков — `clear` (`detectors/linkage.ts:147`). */
+  linkage: Object.freeze(['ops.outcome.clear', 'ops.outcome.review', 'ops.outcome.hold']),
+
+  /* `assessFlipping`: переход внутри окна — разбор, переход со скачком цены —
+     остановка (`detectors/flipping.ts:43`). */
+  flipping: Object.freeze(['ops.outcome.clear', 'ops.outcome.review', 'ops.outcome.stop']),
+
+  /* `assessCounterparty`: один ключ личности по обе стороны — отказ, связанные
+     лица — усиленная проверка, а не отказ (И6.4, `detectors/counterparty.ts:125`). */
+  relatedParties: Object.freeze(['ops.outcome.clear', 'ops.outcome.review', 'ops.outcome.block']),
+
+  /* Изменение реквизитов выплаты — не детектор, и лестницы исходов у него нет.
+     Человеческое ребро в коде ровно одно: `approval_added`
+     (`packages/compliance/src/beneficiary.ts:290`), а применение собирает все
+     четыре условия сразу. Ребра «отклонить» в автомате **нет**: отказ сегодня
+     выражается тем, что утверждение не добавлено, и рисовать кнопку, которой
+     не соответствует переход, запрещено. */
+  beneficiaryChange: Object.freeze(['ops.outcome.approveBeneficiaryChange']),
+
+  /* Недоплата сверх допуска. Исходы — концы, которые описаны в `INTAKE.md`
+     §4.2 и §4.3: недостача покрывается допуском и признаётся расходом
+     платформы (`shortfall_absorbed`), либо деньги остаются в свободной части и
+     транш ждёт доплаты (`insufficient`), либо срок выходит — и по умолчанию при
+     бездействии деньги идут обратно на счёт-источник (красные линии №7 и №9).
+     Причину недостачи выбирает не оператор: она устанавливается по реквизитам
+     поступления (§3.5), и при неизвестной причине допуск не применяется. */
+  intakeUnderpayment: Object.freeze([
+    'ops.outcome.shortfallAbsorbed',
+    'ops.outcome.awaitTopUp',
+    'ops.outcome.returnToSender',
+  ]),
 });
 
 export function outcomesOf(type: TaskType): readonly string[] {
@@ -232,6 +308,15 @@ const EVIDENCE: Readonly<Record<TaskType, readonly EvidenceKind[]>> = Object.fre
   confirmRegistration: Object.freeze(['registry_extract'] as const),
   verifyClient: Object.freeze(['identity_document', 'test_transfer'] as const),
   reviewSof: Object.freeze(['bank_statement', 'ownership_document'] as const),
+  sanctionsUnavailable: Object.freeze(['screening_response', 'operator_note'] as const),
+  payerException: Object.freeze(['kinship_document', 'ownership_document', 'identity_document'] as const),
+  priceMismatch: Object.freeze(['contract', 'bank_statement', 'operator_note'] as const),
+  structuring: Object.freeze(['bank_statement', 'operator_note'] as const),
+  linkage: Object.freeze(['identity_document', 'operator_note'] as const),
+  flipping: Object.freeze(['registry_extract', 'contract'] as const),
+  relatedParties: Object.freeze(['identity_document', 'kinship_document'] as const),
+  beneficiaryChange: Object.freeze(['ownership_document', 'identity_document', 'operator_note'] as const),
+  intakeUnderpayment: Object.freeze(['bank_statement', 'operator_note'] as const),
 });
 
 export function evidenceOf(type: TaskType): readonly EvidenceKind[] {
@@ -266,6 +351,33 @@ const CLOSING: Readonly<Record<TaskType, ClosingRule>> = Object.freeze({
   confirmRegistration: 'singleWithRecord',
   verifyClient: 'singleWithRecord',
   reviewSof: 'singleWithRecord',
+
+  /*
+   * У девяти новых видов правило берётся так же: где код называет второго
+   * человека — `dualControl`, где не называет — `singleWithRecord`.
+   *
+   * Обратное — назвать второго там, где системе он не нужен, — не «строже», а
+   * ложное обещание: оператор поверит, что за ним проверят, а проверять некому.
+   * Пол, который держится всегда, — запись решения с версией политики,
+   * причинами и доказательством (`Decision`, `decision.ts:48`).
+   */
+
+  /* Периметр санкций: снимает не тот, кто вёл (`reviewSanction` выше), а разбор
+     требует отдельного полномочия `adjudicate_screening` (`screening.ts:374`). */
+  sanctionsUnavailable: 'dualControl',
+  /* Тот же периметр, что `releaseBlock`: решается, признать ли чужой платёж
+     деньгами плательщика по сделке. Правило не смягчается оттого, что
+     исключение по родству заявлено (`route.ts:80`). */
+  payerException: 'dualControl',
+  /* Второе утверждение названо кодом: `beneficiaryChangeAwaitsSecondApproval` и
+     `dualControlFailures` в `applyBeneficiaryChange` (`beneficiary.ts:347`). */
+  beneficiaryChange: 'dualControl',
+  priceMismatch: 'singleWithRecord',
+  structuring: 'singleWithRecord',
+  linkage: 'singleWithRecord',
+  flipping: 'singleWithRecord',
+  relatedParties: 'singleWithRecord',
+  intakeUnderpayment: 'singleWithRecord',
 });
 
 export function closingRuleOf(type: TaskType): ClosingRule {
@@ -284,7 +396,7 @@ export function taskHref(locale: string, taskId: string): string {
  * разбора нет, и карточка честно показывает это отдельным состоянием, а не
  * пустым местом: пустое место читается как «данных нет вообще».
  */
-export type DetailKind = 'decision' | 'break' | 'unfreeze' | 'none';
+export type DetailKind = 'decision' | 'break' | 'unfreeze' | 'facts' | 'none';
 
 const DETAIL: Readonly<Record<TaskType, DetailKind>> = Object.freeze({
   approvePayout: 'decision',
@@ -295,6 +407,22 @@ const DETAIL: Readonly<Record<TaskType, DetailKind>> = Object.freeze({
   confirmRegistration: 'none',
   verifyClient: 'none',
   reviewSof: 'none',
+  /*
+   * `facts` — не четвёртый экран разбора, а тот же блок карточки, наполненный
+   * фактами, которые детектор и так посчитал: суммы, доли, моменты, признаки.
+   * Заводить под каждый из девяти видов собственный разбор было бы девятью
+   * рамками вместо одной; заводить `none` — показать девять пустых карточек
+   * подряд и объявить это состоянием.
+   */
+  sanctionsUnavailable: 'facts',
+  payerException: 'facts',
+  priceMismatch: 'facts',
+  structuring: 'facts',
+  linkage: 'facts',
+  flipping: 'facts',
+  relatedParties: 'facts',
+  beneficiaryChange: 'facts',
+  intakeUnderpayment: 'facts',
 });
 
 export function detailKindOf(type: TaskType): DetailKind {
