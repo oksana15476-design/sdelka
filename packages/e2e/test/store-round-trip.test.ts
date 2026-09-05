@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  type StoreOption,
-  type World,
-  type Written,
   WITHOUT_STORE,
-  advance,
+  dealStatusOf,
   emptyWorld,
   invariantViolations,
   openWorld,
@@ -12,40 +9,32 @@ import {
   restoredViolations,
   stepResult,
   stepWorld,
-  toClientKey,
   trancheOf,
   trancheOptions,
   trancheStatusOf,
-  dealStatusOf,
 } from '@sdelka/app';
-import { payerKeyForDomain } from '@sdelka/compliance';
 import { refundIdempotencyKey } from '@sdelka/domain';
-import { accountBalance, bankNominal, clientFreeAccount } from '@sdelka/ledger';
+import { accountBalance, bankNominal, bankOperating } from '@sdelka/ledger';
+import { applyTrancheEvent, createDeal } from './support/acting';
 import {
-  applyDealEvent,
-  applyTrancheEvent,
-  createDeal,
-  createTranche,
-  receiveExternalPayment,
-  recordConditionAct,
-} from './support/acting';
-import {
-  BANK_RESPONSE_SOURCE,
   BUYER,
-  CADASTRAL_CODE,
-  CONDITION_ACT_SOURCE,
-  CREATED_ON,
   DEAL_AMOUNT,
   GEL,
   NOW,
-  PLATFORM_FEE,
   POLICY_VERSION,
   SELLER,
-  TARIFF_VERSION,
-  beneficiaryFor,
   conditionAct,
   partyRef,
 } from './support/fixtures';
+import {
+  REFUND_SCOPE,
+  collectedPath,
+  newDeal,
+  newTranche,
+  payoutKeysOf,
+  refundPath,
+  settlementPath,
+} from './support/store-path';
 import { STORE_ERROR, memoryWorldStore } from './support/memory-store';
 
 /**
@@ -57,222 +46,85 @@ import { STORE_ERROR, memoryWorldStore } from './support/memory-store';
  * процессом. Здесь шаги идут **через** хранилище, и после них состояние
  * поднимается заново — как его поднял бы перезапущенный процесс.
  *
- * **Путь — возвратный, и это не выбор пути поудобнее.** Расчёт получателю идёт
- * двумя записями, вторая из которых — начисление комиссии с версией тарифного
- * плана, а колонки под неё в `sdelka.ledger_entry` нет: хранилище отвергает
- * такую запись ключом `db.entry.declaration_not_storable`
- * (`packages/db/src/store/journal.ts`). Сценарий, который бы это обошёл, скрыл
- * бы дыру схемы вместо того, чтобы её назвать. Возвратная ветвь — красная линия
- * №7 («состояние по умолчанию при бездействии — возврат покупателю») — ложится
- * целиком.
+ * **Путь — возвратный** (красная линия №7: состояние по умолчанию при
+ * бездействии есть возврат покупателю), и он же идёт против живого Postgres в
+ * `test/int/store-round-trip.int.test.ts`. Сам сценарий здесь больше не живёт:
+ * он вынесен в `support/store-path.ts` и один на оба прогона. Второй текст того
+ * же пути сравнивал бы не хранилища, а два текста сценария.
  *
- * **Чего сценарий не доказывает.** Что то же самое проходит в Postgres:
+ * **Чего этот файл не доказывает.** Что то же самое проходит в Postgres:
  * реализация порта здесь — `memoryWorldStore`, и почему она не мок, написано у
- * неё же. Схему сторожат интеграционные тесты `packages/db`, форму порта —
- * `store-port.test.ts`, а прогон этого сценария против кластера назван в отчёте
- * как несделанное.
+ * неё же. Это доказывает интеграционный набор
+ * (`pnpm --filter @sdelka/e2e test:int`), и расхождения, которые он вскрыл,
+ * названы там же.
  */
 
 const OPTIONS = trancheOptions(POLICY_VERSION);
 /** Деньги уже на свободной части счёта клиента: откат резерва их не зачисляет заново. */
 const ROLLBACK = trancheOptions(POLICY_VERSION, { creditRoute: 'already_on_client_account' });
-const DEAL = 'deal-store-refund';
-const TRANCHE = 'tranche-store-refund';
-const CHAIN = 'chain-store-refund';
-const DAY_MS = 24 * 60 * 60 * 1000;
+const SCOPE = REFUND_SCOPE;
+const DEAL = SCOPE.dealId;
+const TRANCHE = SCOPE.trancheId;
+const CHAIN = SCOPE.chainId;
 
-interface Run {
-  readonly world: World;
-  readonly log: readonly Written[];
-}
+/** Область имён расчётной ветви: тот же мир не годится, деньги идут иначе. */
+const SETTLE_SCOPE = Object.freeze({
+  ...REFUND_SCOPE,
+  dealId: 'deal-store-settle',
+  trancheId: 'tranche-store-settle',
+  chainId: 'chain-store-settle',
+});
 
-/**
- * Возвратный путь целиком, шаг за шагом.
- *
- * Каждый шаг проходит через `stepWorld`/`stepResult`: сначала полномочие,
- * автомат и `sealed`, потом транзакция. Один и тот же сценарий гоняется дважды
- * — с хранилищем и без (`WITHOUT_STORE`), — и это и есть проверка того, что
- * хранилище остаётся портом: миры обязаны совпасть до последнего поля.
- */
-async function collectedPath(store: StoreOption): Promise<Run> {
-  const log: Written[] = [];
-  const record = (written: Written): World => {
-    log.push(written);
-    return written.world;
-  };
+describe('хранилище: расчёт получателю проходит через базу и поднимается из неё', () => {
+  it('запись расчёта вместе с начислением комиссии ложится в базу целиком', async () => {
+    const store = memoryWorldStore();
+    const { world, log } = await settlementPath(store, SETTLE_SCOPE);
+    const tranche = SETTLE_SCOPE.trancheId;
 
-  let world = emptyWorld({ now: NOW, chainId: CHAIN });
-  world = record(await openWorld(store, world));
+    expect(trancheStatusOf(world, tranche)).toBe('paid_out');
+    expect(dealStatusOf(world, SETTLE_SCOPE.dealId)).toBe('settled');
+    expect(invariantViolations(world)).toEqual([]);
+    // Красная линия №2: комиссия не осталась на номинальном счёте.
+    expect(accountBalance(world.journal, bankOperating(GEL), GEL).minor).toBe(300_000n);
 
-  world = record(
-    await stepWorld(store, world, (now) =>
-      createDeal(now, {
-        dealId: DEAL,
-        conditionAct: conditionAct(partyRef(SELLER)),
-        objectCadastralCode: CADASTRAL_CODE,
-      }),
-    ),
-  );
+    /*
+     * 5 записей журнала учёта — зачисление, запирание, начисление комиссии,
+     * расчёт получателю, получение комиссии на операционный счёт;
+     * 19 записей журнала аудита — вся цепочка вместе с открытием;
+     * 8 состояний сделки, 8 состояний транша, 2 состояния поручения.
+     */
+    const written = log.reduce((sum, item) => sum + item.outcome.written, 0);
+    expect(world.journal.entries).toHaveLength(5);
+    expect(world.chain.records).toHaveLength(19);
+    expect(written).toBe(5 + 19 + 8 + 8 + 2);
+    expect(store.committed).toBe(log.length);
 
-  world = record(
-    await stepWorld(store, world, (now) =>
-      createTranche(now, {
-        dealId: DEAL,
-        trancheId: TRANCHE,
-        buyer: partyRef(BUYER),
-        buyerPayerKey: payerKeyForDomain(BUYER.document),
-        buyerNames: BUYER.names,
-        requiredAmount: DEAL_AMOUNT,
-        conditionAct: conditionAct(partyRef(SELLER)),
-        createdOn: CREATED_ON,
-        deductions: PLATFORM_FEE,
-        tariffVersionId: TARIFF_VERSION,
-        beneficiary: beneficiaryFor(SELLER, 500),
-        sourceAccountKnown: true,
-      }),
-    ),
-  );
+    const restored = await restoreWorld(store, {
+      chainId: SETTLE_SCOPE.chainId,
+      deals: [{ dealId: SETTLE_SCOPE.dealId, trancheIds: [tranche] }],
+    });
+    expect(restoredViolations(restored)).toEqual([]);
+    expect(restored.journal.entries).toEqual(world.journal.entries);
+    expect(restored.chain).toEqual(world.chain);
 
-  world = record(
-    await stepWorld(store, world, (now) =>
-      recordConditionAct(
-        now,
-        DEAL,
-        TRANCHE,
-        conditionAct(partyRef(SELLER)),
-        CONDITION_ACT_SOURCE,
-        POLICY_VERSION,
-      ),
-    ),
-  );
-
-  for (const event of ['parties_check_started', 'parties_verified', 'property_verified'] as const) {
-    world = record(
-      await stepWorld(store, world, (now) => applyDealEvent(now, DEAL, { type: event }, OPTIONS)),
-    );
-  }
-
-  world = record(
-    await stepResult(store, world, (now) =>
-      applyTrancheEvent(now, TRANCHE, { type: 'instructions_issued' }, OPTIONS),
-    ),
-  );
-
-  world = record(
-    await stepWorld(store, world, (now) =>
-      receiveExternalPayment(now, toClientKey(BUYER.document), DEAL_AMOUNT),
-    ),
-  );
-
-  world = record(
-    await stepResult(store, world, (now) =>
-      applyTrancheEvent(
-        now,
-        TRANCHE,
-        {
-          type: 'funds_received',
-          amount: DEAL_AMOUNT,
-          sender: payerKeyForDomain(BUYER.document),
-          reference: `payment-${TRANCHE}`,
-        },
-        ROLLBACK,
-      ),
-    ),
-  );
-
-  world = record(
-    await stepWorld(store, world, (now) =>
-      applyDealEvent(now, DEAL, { type: 'funds_received' }, OPTIONS),
-    ),
-  );
-  return { world, log };
-}
-
-/**
- * Дальше — резерв, истёкший срок и возврат покупателю. Продолжение отдельной
- * функцией потому, что точка `collected` нужна ещё одному сценарию: из неё
- * расходятся два разных шага, и на них проверяется, что потерянный шаг
- * называется конфликтом, а не выигрывается последним записавшим.
- */
-async function refundPath(store: StoreOption): Promise<Run> {
-  const collected = await collectedPath(store);
-  const log: Written[] = [...collected.log];
-  const record = (written: Written): World => {
-    log.push(written);
-    return written.world;
-  };
-  let world = collected.world;
-
-  world = record(
-    await stepResult(store, world, (now) =>
-      applyTrancheEvent(now, TRANCHE, { type: 'reserve_requested' }, OPTIONS),
-    ),
-  );
-  world = record(
-    await stepWorld(store, world, (now) =>
-      applyDealEvent(now, DEAL, { type: 'tranches_reserved' }, OPTIONS),
-    ),
-  );
-
-  // Заявление подано стороной: без него сделка не выходит из `funded`, и
-  // `condition_failed` отвергается таблицей переходов (`deal.ts`, §1.4).
-  world = record(
-    await stepWorld(store, world, (now) =>
-      applyDealEvent(
-        now,
-        DEAL,
-        { type: 'filing_registered', applicationId: 'app-store-refund', source: 'party_claim' },
-        OPTIONS,
-      ),
-    ),
-  );
-
-  // Часы. Шаг мира, у которого в базе следа нет вовсе: время не состояние.
-  world = record(await stepWorld(store, world, (now) => advance(now, DAY_MS)));
-
-  world = record(
-    await stepResult(store, world, (now) =>
-      applyTrancheEvent(now, TRANCHE, { type: 'reserve_expired' }, ROLLBACK),
-    ),
-  );
-  world = record(
-    await stepResult(store, world, (now) =>
-      applyTrancheEvent(now, TRANCHE, { type: 'deadline_reached' }, ROLLBACK),
-    ),
-  );
-  world = record(
-    await stepWorld(store, world, (now) =>
-      applyDealEvent(now, DEAL, { type: 'condition_failed' }, OPTIONS),
-    ),
-  );
-  world = record(
-    await stepResult(store, world, (now) =>
-      applyTrancheEvent(now, TRANCHE, { type: 'refund_initiated' }, ROLLBACK),
-    ),
-  );
-  world = record(
-    await stepResult(store, world, (now) =>
-      applyTrancheEvent(
-        now,
-        TRANCHE,
-        { type: 'payout_result', outcome: 'settled' },
-        { ...ROLLBACK, payoutResponse: BANK_RESPONSE_SOURCE },
-      ),
-    ),
-  );
-  world = record(
-    await stepWorld(store, world, (now) =>
-      applyDealEvent(now, DEAL, { type: 'tranches_refunded' }, OPTIONS),
-    ),
-  );
-
-  return { world, log };
-}
+    /*
+     * Поручение расчёта в базу **ложится** — в отличие от возвратного: пакет
+     * доказательств у него есть (`payout.evidence_bundle_id NOT NULL`, красная
+     * линия №5 в схеме). Сумма — нетто получателя, а не брутто: комиссия ушла
+     * платформе той же записью.
+     */
+    const payout = restored.deals[0]?.tranches[0]?.payouts[0];
+    expect(payout?.state.leg).toBe('release');
+    expect(payout?.state.status).toBe('settled');
+    expect(payout?.amount.minor).toBe(19_700_000n);
+    expect(payout?.evidenceBundleId).toBe(`evidence-${tranche}`);
+  });
+});
 
 describe('хранилище: возврат покупателю проходит через базу и поднимается из неё', () => {
   it('шаг мира ложится в базу, а мир поднимается из неё с теми же инвариантами', async () => {
     const store = memoryWorldStore();
-    const { world, log } = await refundPath(store);
+    const { world, log } = await refundPath(store, SCOPE);
 
     expect(trancheStatusOf(world, TRANCHE)).toBe('refunded');
     expect(dealStatusOf(world, DEAL)).toBe('unwound');
@@ -323,7 +175,7 @@ describe('хранилище: возврат покупателю проходи
 
   it('называет то, что в базу не легло, вместо того чтобы промолчать', async () => {
     const store = memoryWorldStore();
-    const { log } = await refundPath(store);
+    const { log } = await refundPath(store, SCOPE);
     const reasons = log.flatMap((item) => item.unmapped.map((part) => part.reasonKey));
 
     /*
@@ -352,23 +204,21 @@ describe('хранилище: возврат покупателю проходи
     expect(reasons).toContain('port.no_method');
 
     const store2 = memoryWorldStore();
-    const { world } = await refundPath(store2);
+    const { world } = await refundPath(store2, SCOPE);
     const restored = await restoreWorld(store2, {
       chainId: CHAIN,
       deals: [{ dealId: DEAL, trancheIds: [TRANCHE] }],
     });
     // Поручение есть в мире и отсутствует в базе. Отсутствие названо.
-    expect(trancheOf(world, TRANCHE).payouts.map((payout) => payout.idempotencyKey)).toEqual([
-      refundIdempotencyKey(TRANCHE),
-    ]);
+    expect(payoutKeysOf(world, TRANCHE)).toEqual([refundIdempotencyKey(TRANCHE)]);
     expect(restored.deals[0]?.tranches[0]?.payouts).toEqual([]);
     expect(restored.missing.map((part) => part.reasonKey)).toContain('invariant.not_checkable');
     expect(restored.missing.map((part) => part.reasonKey)).toContain('port.no_listing');
   });
 
   it('мир без хранилища идёт тем же путём и приходит к тому же состоянию', async () => {
-    const stored = await refundPath(memoryWorldStore());
-    const plain = await refundPath(WITHOUT_STORE);
+    const stored = await refundPath(memoryWorldStore(), SCOPE);
+    const plain = await refundPath(WITHOUT_STORE, SCOPE);
 
     // Хранилище — порт: мир от него не зависит ни одним полем.
     expect(plain.world.journal.entries).toEqual(stored.world.journal.entries);
@@ -387,30 +237,10 @@ describe('хранилище: отказ базы и повтор шага', () 
     const store = memoryWorldStore();
     let world = (await openWorld(store, emptyWorld({ now: NOW, chainId: CHAIN }))).world;
     world = (
-      await stepWorld(store, world, (now) =>
-        createDeal(now, {
-          dealId: DEAL,
-          conditionAct: conditionAct(partyRef(SELLER)),
-          objectCadastralCode: CADASTRAL_CODE,
-        }),
-      )
+      await stepWorld(store, world, newDeal(SCOPE))
     ).world;
 
-    const step = (now: World): World =>
-      createTranche(now, {
-        dealId: DEAL,
-        trancheId: TRANCHE,
-        buyer: partyRef(BUYER),
-        buyerPayerKey: payerKeyForDomain(BUYER.document),
-        buyerNames: BUYER.names,
-        requiredAmount: DEAL_AMOUNT,
-        conditionAct: conditionAct(partyRef(SELLER)),
-        createdOn: CREATED_ON,
-        deductions: PLATFORM_FEE,
-        tariffVersionId: TARIFF_VERSION,
-        beneficiary: beneficiaryFor(SELLER, 500),
-        sourceAccountKnown: true,
-      });
+    const step = newTranche(SCOPE);
 
     const first = await stepWorld(store, world, step);
     expect(first.outcome.written).toBeGreaterThan(0);
@@ -427,31 +257,11 @@ describe('хранилище: отказ базы и повтор шага', () 
     const store = memoryWorldStore();
     let world = (await openWorld(store, emptyWorld({ now: NOW, chainId: CHAIN }))).world;
     world = (
-      await stepWorld(store, world, (now) =>
-        createDeal(now, {
-          dealId: DEAL,
-          conditionAct: conditionAct(partyRef(SELLER)),
-          objectCadastralCode: CADASTRAL_CODE,
-        }),
-      )
+      await stepWorld(store, world, newDeal(SCOPE))
     ).world;
     const before = world;
 
-    const step = (now: World): World =>
-      createTranche(now, {
-        dealId: DEAL,
-        trancheId: TRANCHE,
-        buyer: partyRef(BUYER),
-        buyerPayerKey: payerKeyForDomain(BUYER.document),
-        buyerNames: BUYER.names,
-        requiredAmount: DEAL_AMOUNT,
-        conditionAct: conditionAct(partyRef(SELLER)),
-        createdOn: CREATED_ON,
-        deductions: PLATFORM_FEE,
-        tariffVersionId: TARIFF_VERSION,
-        beneficiary: beneficiaryFor(SELLER, 500),
-        sourceAccountKnown: true,
-      });
+    const step = newTranche(SCOPE);
 
     store.failOnce(STORE_ERROR.conflict);
     const committedBefore = store.committed;
@@ -483,7 +293,7 @@ describe('хранилище: отказ базы и повтор шага', () 
 
   it('чужой шаг не затирается молча: разошедшееся состояние — отказ с именем', async () => {
     const store = memoryWorldStore();
-    const collected = await collectedPath(store);
+    const collected = await collectedPath(store, SCOPE);
     const world = collected.world;
 
     // Первый шаг из `collected`: резерв. Он ложится.
@@ -526,8 +336,8 @@ describe('хранилище: отказ базы и повтор шага', () 
     await expect(
       stepWorld(store, world, (now) =>
         createDeal(now, {
-          dealId: 'deal-no-object',
-          conditionAct: conditionAct(partyRef(SELLER)),
+          dealId: `${DEAL}-no-object`,
+          conditionAct: conditionAct(partyRef(SCOPE.seller)),
           objectCadastralCode: '',
         }),
       ),

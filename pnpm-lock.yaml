@@ -148,6 +148,9 @@ importers:
       '@sdelka/compliance':
         specifier: workspace:*
         version: link:../compliance
+      '@sdelka/db':
+        specifier: workspace:*
+        version: link:../db
       '@sdelka/domain':
         specifier: workspace:*
         version: link:../domain

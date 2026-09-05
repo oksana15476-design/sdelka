@@ -5,14 +5,16 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
-    "mutation": "node scripts/guard-mutation.mjs"
+    "test": "vitest run --config vitest.config.ts",
+    "mutation": "node scripts/guard-mutation.mjs",
+    "test:int": "vitest run --config vitest.int.config.ts"
   },
   "dependencies": {
     "@sdelka/app": "workspace:*",
     "@sdelka/audit": "workspace:*",
     "@sdelka/auth": "workspace:*",
     "@sdelka/compliance": "workspace:*",
+    "@sdelka/db": "workspace:*",
     "@sdelka/domain": "workspace:*",
     "@sdelka/intake": "workspace:*",
     "@sdelka/ledger": "workspace:*",

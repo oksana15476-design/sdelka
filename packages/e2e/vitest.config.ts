@@ -80,4 +80,14 @@ function guardMutation(): Plugin {
 
 export default defineConfig({
   plugins: [guardMutation()],
+  test: {
+    /*
+     * Офлайн-набор: сеть не нужна, Postgres не нужен. Перечень **явный**, а не
+     * умолчание vitest: умолчание забрало бы и `test/int/**`, и корневой
+     * `pnpm -r test` перестал бы быть бессетевым — он падал бы у любого, у кого
+     * кластер не поднят. Интеграция запускается отдельной командой
+     * (`vitest.int.config.ts`, `pnpm --filter @sdelka/e2e test:int`).
+     */
+    include: ['test/*.test.ts'],
+  },
 });
