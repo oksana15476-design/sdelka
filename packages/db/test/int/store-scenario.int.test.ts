@@ -35,12 +35,14 @@ import {
 } from '@sdelka/ledger';
 import { isoDate, money } from '@sdelka/money';
 import { expect, it } from 'vitest';
+import { pgWorldStore } from '../../src/store/pg-store.ts';
 import type { WorldStore } from '../../src/store/port.ts';
 import type {
   DealSnapshot,
   PayoutSnapshot,
   TrancheSnapshot,
 } from '../../src/store/port.ts';
+import { OWNER_ROLE } from '../../src/roles.ts';
 import { dbSuite, withRollback } from './support/pg.ts';
 import { savepointStore } from './support/store.ts';
 
@@ -60,6 +62,13 @@ import { savepointStore } from './support/store.ts';
  * `checkLedgerInvariants` обязан дать то же, что на исходном. Пока хранилища не
  * было, эта проверка не могла существовать: мир жил в памяти и умирал вместе с
  * процессом.
+ *
+ * ⚠ **Сценарий идёт под ролью владельца схемы, а не под ролью приложения, и
+ * это не удобство, а обход названного дефекта.** Под `sdelka_app` дописать
+ * запись журнала аудита сегодня невозможно вовсе: триггер `assert_audit_chain`
+ * объявлен `SECURITY INVOKER` и берёт `SELECT … FOR UPDATE`, а `FOR UPDATE`
+ * требует права `UPDATE`, которое инвариант 21 у роли приложения отбирает.
+ * Разбор и проба — в `store-grants.int.test.ts`.
  *
  * ⚠ Расчёт получателю в этот сценарий не входит, и это не выбор пути поудобнее.
  * Расчёт идёт двумя записями, вторая из которых — начисление комиссии с
@@ -164,7 +173,7 @@ run(title, () => {
   it('возврат покупателю проходит целиком через базу и поднимается из неё', async () => {
     if (pool === null) return;
     await withRollback(pool, async (client) => {
-      const store: WorldStore = savepointStore(client);
+      const store: WorldStore = savepointStore(client, OWNER_ROLE);
 
       /* --- Шаг 1: сделка и транш заведены --- */
       let chain = genesisChain(CHAIN, auditInstant(START), ACTOR);
@@ -374,7 +383,7 @@ run(title, () => {
   it('шаг ложится целиком или не ложится вовсе', async () => {
     if (pool === null) return;
     await withRollback(pool, async (client) => {
-      const store: WorldStore = savepointStore(client);
+      const store: WorldStore = savepointStore(client, OWNER_ROLE);
       await store.transact(async (tx) => {
         await tx.saveDeal({
           dealId: DEAL,
@@ -407,5 +416,22 @@ run(title, () => {
       const after = await store.transact(async (tx) => tx.readJournal());
       expect(after.entries).toEqual([]);
     });
+  });
+
+  it('настоящее хранилище откатывает шаг целиком: ничего не зафиксировано', async () => {
+    if (pool === null) return;
+    // Здесь работает `pgWorldStore` с настоящими `BEGIN`/`COMMIT`, а не точки
+    // сохранения: проверяется именно его граница транзакции. Зафиксировать шаг
+    // этот тест не может по построению — он падает, — поэтому базу он не
+    // засоряет, а журнал только дополняется и вычистить его было бы нечем.
+    const store = pgWorldStore(pool, { role: OWNER_ROLE });
+    const entry = clientTopUp(meta('sc-committed', START + 9_000), BUYER_ACCOUNT, AMOUNT);
+    const failed = store.transact(async (tx) => {
+      await tx.appendJournal([entry]);
+      throw new Error('шаг решил, что дальше нельзя');
+    });
+    await expect(failed).rejects.toThrow('шаг решил, что дальше нельзя');
+    const after = await store.transact(async (tx) => tx.readJournal());
+    expect(after.entries.some((item) => item.id === entry.id)).toBe(false);
   });
 });

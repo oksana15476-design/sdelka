@@ -26,18 +26,17 @@ import { pgWorldTransaction } from '../../../src/store/pg-store.ts';
  * записи. `IMMEDIATE` прогоняет накопленное, `DEFERRED` возвращает режим, иначе
  * первая же проводка следующего шага падала бы до второй.
  */
-export function savepointStore(client: PoolClient): WorldStore {
+export function savepointStore(client: PoolClient, role: string = APP_ROLE): WorldStore {
   let depth = 0;
   return {
     async transact<T>(body: (tx: WorldTransaction) => Promise<T>): Promise<T> {
       depth += 1;
       const name = `step_${depth}`;
       await client.query(`SAVEPOINT ${name}`);
-      // Роль приложения — как в `pgWorldStore`. Без неё сценарий шёл бы под
-      // логин-ролью, которая состоит и в `sdelka_owner`, то есть с правами,
-      // которых у продукта нет: инвариант 21 держится грантами, и проверять
-      // его надо той ролью, под которой ходит приложение.
-      await client.query(`SET LOCAL ROLE ${APP_ROLE}`);
+      // Роль — как в `pgWorldStore`. Умолчание то же самое: логин-роль набора
+      // состоит и в `sdelka_owner`, то есть имеет права, которых у продукта
+      // нет, и сценарий под ней проверял бы не то, что работает на проде.
+      await client.query(`SET LOCAL ROLE ${role}`);
       try {
         const result = await body(pgWorldTransaction(client));
         await translating(async () => {
