@@ -1,4 +1,4 @@
-import { payoutIdempotencyKey } from './ids';
+import { payoutIdempotencyKey, refundIdempotencyKey } from './ids';
 import type { Intent } from './intents';
 import { type Rejection, type Result, RejectionCode, failure, ok, rejection } from './result';
 
@@ -32,11 +32,32 @@ export type PayoutEvent =
 
 export type PayoutEventType = PayoutEvent['type'];
 
+/**
+ * Нога перевода. Их две, и это **две разные операции с деньгами**, а не два
+ * имени одной:
+ *
+ * - `release` — расчёт в пользу получателя, названного актом об условии;
+ * - `refund` — возврат покупателю на счёт-источник (красная линия №9).
+ *
+ * Ноги нужны потому, что у транша обе могут случиться подряд: банк отклоняет
+ * расчёт, транш уходит в `release_blocked`, оператор ведёт его в возврат. До
+ * появления этого поля у возврата собственной записи поручения не было вовсе, и
+ * приложение отдавало исход возврата **последней** выплате транша — то есть
+ * отклонённому расчёту. Подтверждение возврата при этом становилось
+ * невыразимым (`domain.state.terminal`), а в узком случае «ответ по расчёту
+ * потерян» выписка о возврате покупателю молча закрывала расчёт продавцу.
+ */
+export const PAYOUT_LEGS = ['release', 'refund'] as const;
+
+export type PayoutLeg = (typeof PAYOUT_LEGS)[number];
+
 export interface PayoutState {
   readonly status: PayoutStatus;
-  /** Ключ детерминирован по траншу: ни попытки, ни времени в нём нет. */
+  /** Ключ детерминирован по траншу и ноге: ни попытки, ни времени в нём нет. */
   readonly idempotencyKey: string;
   readonly trancheId: string;
+  /** Какое обязательство исполняет этот перевод. */
+  readonly leg: PayoutLeg;
 }
 
 export interface PayoutTransition {
@@ -93,11 +114,30 @@ export function violatesSingleActivePayout(
   return activePayoutsForTranche(payouts, trancheId).length > 1;
 }
 
+/** Поручение на расчёт в пользу получателя. */
 export function createPayout(trancheId: string): PayoutState {
   return Object.freeze({
     status: 'created',
     idempotencyKey: payoutIdempotencyKey(trancheId),
     trancheId,
+    leg: 'release',
+  });
+}
+
+/**
+ * Поручение на возврат покупателю.
+ *
+ * Отдельная функция, а не второй аргумент у `createPayout`: аргумент со
+ * значением по умолчанию означал бы, что нога выбирается умолчанием, — а она
+ * выбирается тем, какое обязательство исполняется, и молчаливого варианта у
+ * этого выбора быть не должно.
+ */
+export function createRefundPayout(trancheId: string): PayoutState {
+  return Object.freeze({
+    status: 'created',
+    idempotencyKey: refundIdempotencyKey(trancheId),
+    trancheId,
+    leg: 'refund',
   });
 }
 
@@ -130,6 +170,7 @@ export function reducePayout(
       status: candidate.to,
       idempotencyKey: state.idempotencyKey,
       trancheId: state.trancheId,
+      leg: state.leg,
     }),
     intents: Object.freeze([]),
   });

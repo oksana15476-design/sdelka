@@ -28,6 +28,7 @@ import {
   returnHeldPayment,
 } from './support/acting';
 import {
+  BANK_RESPONSE_SOURCE,
   BUYER,
   GEL,
   NOW,
@@ -151,7 +152,12 @@ describe('платёж от третьего лица', () => {
     ).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('refund_pending');
     world = applyTrancheEvent(world, TRANCHE, { type: 'refund_initiated' }, OPTIONS).world;
-    const refunded = applyTrancheEvent(world, TRANCHE, { type: 'payout_result', outcome: 'settled' }, OPTIONS);
+    const refunded = applyTrancheEvent(
+      world,
+      TRANCHE,
+      { type: 'payout_result', outcome: 'settled' },
+      { ...OPTIONS, payoutResponse: BANK_RESPONSE_SOURCE },
+    );
     world = refunded.world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('refunded');
 

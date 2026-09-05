@@ -618,6 +618,7 @@ describe('новые виды идут через ту же дверь, что �
         kind: 'correction',
         correctsRecordId: 'rec-login',
         reasonKey: 'session.device_fingerprint_misattributed',
+        basis: source(9, 'operator_note', 'sdelka.console'),
         attributes: { device: auditFingerprint('device', fp(0x99)) },
       },
     });

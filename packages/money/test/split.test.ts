@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MoneyError,
   MoneyErrorCode,
   allocate,
   fromDecimalString,
@@ -10,6 +9,7 @@ import {
   split,
   splitPartsTotal,
 } from '../src/index';
+import { expectMoneyError } from './support/errors';
 
 const platformFee = { key: 'fee:income', rate: rationalFromDecimalString('0.005') };
 
@@ -92,18 +92,120 @@ describe('split: сумма частей строго равна исходно�
     expect(splitPartsTotal(result).minor).toBe(total.minor);
   });
 
+  it('leaves the whole amount to the recipient when there is nothing to deduct', () => {
+    const total = money('GEL', 21_349_500n);
+    const result = split(total, []);
+    expect(result.deductions).toEqual([]);
+    expect(result.recipient.minor).toBe(total.minor);
+    expect(splitPartsTotal(result).minor).toBe(total.minor);
+  });
+
   it('rejects deductions above the amount instead of producing a negative payout', () => {
-    try {
-      split(money('GEL', 1_000n), [{ key: 'fee:income', fixed: 1_001n }]);
-      expect.unreachable();
-    } catch (error) {
-      expect((error as MoneyError).code).toBe(MoneyErrorCode.splitDeductionsExceedTotal);
-    }
+    expectMoneyError(
+      () => split(money('GEL', 1_000n), [{ key: 'fee:income', fixed: 1_001n }]),
+      MoneyErrorCode.splitDeductionsExceedTotal,
+      { total: '1000', deducted: '1001' },
+    );
   });
 
   it('rejects duplicate deduction keys and negative amounts', () => {
-    expect(() => split(money('GEL', 1_000n), [platformFee, platformFee])).toThrow(MoneyError);
-    expect(() => split(money('GEL', -1n), [])).toThrow(MoneyError);
+    expectMoneyError(
+      () => split(money('GEL', 1_000n), [platformFee, platformFee]),
+      MoneyErrorCode.splitDuplicateKey,
+      { key: 'fee:income' },
+    );
+    // Код обязателен: без него снятие проверки на отрицательную сумму уводит
+    // тот же вход на `splitDeductionsExceedTotal` (0 > −1), и тест зеленеет.
+    expectMoneyError(() => split(money('GEL', -1n), []), MoneyErrorCode.negativeAmount, {
+      amount: '-1',
+    });
+  });
+
+  /**
+   * Красные линии №1 и №2: удержание не может уйти в минус, потому что
+   * отрицательное удержание — это выплата получателю **больше**, чем поступило
+   * на номинальный счёт, за счёт чужих денег.
+   *
+   * Проверка `deducted > total.minor` этот класс не ловит по построению: сумма
+   * частей остаётся равной исходной (20 000 000 = 20 000 001 + (−1)), поэтому
+   * инвариант «сумма частей строго равна исходной» тоже остаётся истинным.
+   * Единственное, что отделяет платформу от такой выплаты, — проверка знака,
+   * и вот три двери, через которые в неё входят.
+   */
+  it('refuses a deduction that would turn into a payment to the recipient', () => {
+    // Дверь первая: потолок удержания задан отрицательным. Сценарий из аудита —
+    // 200 000 ₾ с потолком −0,01 ₾ отдавали получателю 200 000,01 ₾.
+    expectMoneyError(
+      () =>
+        split(money('GEL', 20_000_000n), [
+          { key: 'fee:income', rate: rationalFromDecimalString('0.005'), maximum: -1n },
+        ]),
+      MoneyErrorCode.splitNegativeDeduction,
+      { key: 'fee:income' },
+    );
+    // Дверь вторая: отрицательная фиксированная часть перевешивает ставку.
+    expectMoneyError(
+      () =>
+        split(money('GEL', 10_000n), [
+          { key: 'fee:income', rate: rationalFromDecimalString('0.005'), fixed: -100n },
+        ]),
+      MoneyErrorCode.splitNegativeDeduction,
+      { key: 'fee:income' },
+    );
+    // Дверь третья: отрицательная ставка.
+    expectMoneyError(
+      () =>
+        split(money('GEL', 10_000n), [
+          { key: 'fee:income', rate: rationalFromDecimalString('-0.005') },
+        ]),
+      MoneyErrorCode.splitNegativeDeduction,
+      { key: 'fee:income' },
+    );
+    // Отрицательный пол сам по себе в минус увести не может — он поднимает
+    // удержание, а не опускает, — но и не спасает уже отрицательное:
+    // −50 поднимается до −5 и всё равно отвергается.
+    expectMoneyError(
+      () =>
+        split(money('GEL', 10_000n), [
+          { key: 'fee:income', rate: rationalFromDecimalString('-0.005'), minimum: -5n },
+        ]),
+      MoneyErrorCode.splitNegativeDeduction,
+      { key: 'fee:income' },
+    );
+    // Отказ наступает на самом удержании, а не после сборки результата: ключ в
+    // `details` — того удержания, которое ушло в минус, хотя оно не последнее.
+    expectMoneyError(
+      () =>
+        split(money('GEL', 20_000_000n), [
+          { key: 'fee:income', rate: rationalFromDecimalString('0.005'), maximum: -1n },
+          { key: 'partner:fee', fixed: 100n },
+        ]),
+      MoneyErrorCode.splitNegativeDeduction,
+      { key: 'fee:income' },
+    );
+  });
+
+  it('leaves a negative floor inert when the deduction is already non-negative', () => {
+    const result = split(money('GEL', 10_000n), [
+      { key: 'fee:income', rate: rationalFromDecimalString('0.005'), minimum: -100n },
+    ]);
+    expect(result.deductions[0]?.amount.minor).toBe(50n);
+  });
+
+  /**
+   * Порядок применения границ: потолок ставится **после** пола, поэтому при
+   * несовместимой паре (минимум выше максимума) побеждает максимум.
+   *
+   * Тест фиксирует поведение, а не выбирает его: FUNCTIONAL.md §4.3 такой пары
+   * не описывает. [открыто] — отвергать ли `minimum > maximum` на входе как
+   * заведомо противоречивый тариф; вопрос продуктовый, поднят в отчёте.
+   */
+  it('applies the ceiling after the floor when the two contradict each other', () => {
+    const result = split(money('GEL', 10_000n), [
+      { key: 'fee:income', rate: rationalFromDecimalString('0.005'), minimum: 500n, maximum: 100n },
+    ]);
+    expect(result.deductions[0]?.amount.minor).toBe(100n);
+    expect(result.recipient.minor).toBe(9_900n);
   });
 
   it('handles a zero-decimal currency without special casing', () => {
@@ -120,10 +222,37 @@ describe('allocate: пропорциональное деление', () => {
     expect(parts.reduce((acc, part) => acc + part.minor, 0n)).toBe(100n);
   });
 
+  /**
+   * Все четыре отказа — с кодом, а у индекса остатка ещё и с `details`.
+   *
+   * Без кода пустой набор весов проходил бы через соседнюю проверку («индекс
+   * остатка вне диапазона»: 0 >= 0 для пустого массива) и снятие запрета на
+   * пустые веса оставалось бы незамеченным. У самого индекса остатка соседняя
+   * проверка на дне функции даёт **тот же код**, и различает их только состав
+   * пояснения: ранний отказ называет допустимый диапазон (`weights`), поздний —
+   * нет. Поэтому здесь утверждается и он.
+   */
   it('rejects an empty or zero weight set and an out-of-range remainder index', () => {
-    expect(() => allocate(money('GEL', 100n), [], 0)).toThrow(MoneyError);
-    expect(() => allocate(money('GEL', 100n), [0n, 0n], 0)).toThrow(MoneyError);
-    expect(() => allocate(money('GEL', 100n), [1n], 5)).toThrow(MoneyError);
-    expect(() => allocate(money('GEL', 100n), [-1n, 2n], 0)).toThrow(MoneyError);
+    expectMoneyError(() => allocate(money('GEL', 100n), [], 0), MoneyErrorCode.allocateNoWeights, {});
+    expectMoneyError(
+      () => allocate(money('GEL', 100n), [0n, 0n], 0),
+      MoneyErrorCode.allocateNoWeights,
+      {},
+    );
+    expectMoneyError(
+      () => allocate(money('GEL', 100n), [1n], 5),
+      MoneyErrorCode.allocateRemainderIndexOutOfRange,
+      { remainderIndex: '5', weights: '1' },
+    );
+    expectMoneyError(
+      () => allocate(money('GEL', 100n), [1n, 2n], -1),
+      MoneyErrorCode.allocateRemainderIndexOutOfRange,
+      { remainderIndex: '-1', weights: '2' },
+    );
+    expectMoneyError(
+      () => allocate(money('GEL', 100n), [-1n, 2n], 0),
+      MoneyErrorCode.allocateNegativeWeight,
+      { weight: '-1' },
+    );
   });
 });

@@ -760,6 +760,46 @@ function fundsSourceKey(currency: CurrencyCode, ref: FundsRef | null): string {
     : `${currency}|tranche|${ref.dealId}|${ref.trancheId}`;
 }
 
+/** Читаемое имя файла для сообщения об ошибке. Пустая строка — файла нет. */
+export function fundsRefText(ref: FundsRef | null): string {
+  if (ref === null) return '';
+  return isClientRef(ref) ? ref.clientKey : `${ref.dealId}:${ref.trancheId}`;
+}
+
+/**
+ * Файл, которого проводка касается **на самом деле**.
+ *
+ * Одна модель на весь пакет, а не три похожие: у счёта с владельцем в коде файл
+ * читается из кода (отнесение там либо отсутствует, либо обязано совпасть —
+ * `assertAttribution`), у пула файла нет по объявлению, у всех прочих файл
+ * приносит отнесение. Разойтись этим трём случаям нельзя: пофайловая сверка
+ * (`clientFileGains`) и сверка исправления с целью (`journal.ts`) обязаны
+ * называть один и тот же файл одним и тем же именем, иначе «то же самое» в
+ * одном месте окажется «другим» в другом.
+ */
+export function postingFile(posting: Posting): FundsRef | null {
+  const scope = clientFundsFile(posting.account);
+  if (scope === 'owner_in_code') return clientAccountFile(posting.account);
+  if (scope === 'pooled') return null;
+  return posting.attribution;
+}
+
+/**
+ * Ключ движения: счёт, валюта и файл вместе.
+ *
+ * Валюта и файл входят в ключ по той же причине, по которой они входят в
+ * `fundsSourceKey`: сто лари в файле транша A и сто лари в файле постороннего
+ * лица — это не одно движение, разошедшееся по строкам, а два разных движения.
+ * Код счёта и идентификаторы `|` не содержат (`assertAccountIdentifier`),
+ * поэтому ключ разбирается однозначно.
+ */
+export function postingMovementKey(posting: Posting): string {
+  return `${accountCode(posting.account)}|${fundsSourceKey(
+    posting.amount.currency,
+    postingFile(posting),
+  )}`;
+}
+
 function assertNoClientCrossSubsidy(postings: readonly Posting[]): void {
   // Красная линия №1 и FUNCTIONAL.md §3.1: «проводка „дебет клиентского
   // обязательства, кредит номинального счёта“ без встречной выплаты этому же
@@ -1207,6 +1247,16 @@ function assertNoOwnedObligationIntoIntakePool(
  * подтверждение домена о том, кто и на каком основании заявил права, — по
  * образцу `DealPartiesAttestation`. До тех пор форма не выразима записью типа
  * `settlement`, а ошибочное списание отменяется `correction` со ссылкой.
+ *
+ * **Послабление для исправления держится не на виде записи, а на зеркальности.**
+ * Само по себе оно было дырой: с `kind: 'correction'` та же выдача проходила
+ * молча, потому что ссылку никто не сверял с содержанием
+ * (проба — `test/correction-mirror.test.ts`). Теперь исправление обязано быть
+ * обратным движением **своей цели** по тем же счетам и файлам
+ * (`journal.ts`, `assertCorrectionMirrorsTarget`), поэтому опустошить пул можно
+ * ровно в ту сторону, откуда деньги в него пришли, и ровно в тот файл. Ранний
+ * выход остаётся здесь: конструктор записи журнала не видит, а без журнала
+ * отличить отмену списания от выдачи постороннему нечем.
  */
 function assertNoPayoutFromTerminalPool(
   kind: JournalEntryKind,
@@ -1262,15 +1312,10 @@ export function clientFileGains(postings: readonly Posting[]): readonly ClientFi
   for (const posting of postings) {
     const account = posting.account;
     const currency = posting.amount.currency;
-    const scope = clientFundsFile(account);
-    if (scope === null) continue;
-    // Файл: из кода счёта, из отнесения, либо «вне файлов» у пулов.
-    const ref: FundsRef | null =
-      scope === 'owner_in_code'
-        ? clientAccountFile(account)
-        : scope === 'in_attribution'
-          ? posting.attribution
-          : null;
+    if (clientFundsFile(account) === null) continue;
+    // Файл: из кода счёта, из отнесения, либо «вне файлов» у пулов — одной
+    // моделью на весь пакет (`postingFile`).
+    const ref = postingFile(posting);
     const key = fundsSourceKey(currency, ref);
     sources.set(key, ref);
     const signed = posting.direction === 'debit' ? posting.amount.minor : -posting.amount.minor;
@@ -1361,10 +1406,12 @@ export function platformFunding(
  *   маршрут обязан оставить след на настоящем банковском счёте, где его найдёт
  *   сверка с выпиской;
  * - исправление, в котором прирост чужого файла подпёрт встречным кредитом
- *   расхода платформы, формально пройдёт — ценой признанного убытка и ссылки
- *   на конкретную исправляемую запись. Полностью закрывается только сверкой
- *   исправления с исправляемой записью, а это знание журнала, которого у
- *   конструктора записи нет; см. отчёт по батчу.
+ *   расхода платформы, конструктор пропускает — ценой признанного убытка и
+ *   ссылки на конкретную исправляемую запись. **Здесь** это закрыть нечем:
+ *   сверка исправления с целью — знание журнала, которого у конструктора
+ *   записи нет. Она появилась этажом выше (`journal.ts`,
+ *   `assertCorrectionMirrorsTarget`): в журнал такая запись больше не ложится,
+ *   потому что чужого файла её цель не трогала.
  */
 function assertNoUnfundedClientFileGain(
   kind: JournalEntryKind,

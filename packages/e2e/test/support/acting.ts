@@ -16,6 +16,7 @@ import type { Authority } from '@sdelka/app';
 import type { Capability } from '@sdelka/auth';
 import {
   type ConversionResult,
+  type CorrectionRequest,
   type DealSpec,
   type DecisionRecord,
   type ObservationStepResult,
@@ -43,6 +44,7 @@ import {
   attachObservation as appAttachObservation,
   authorizeUnwind as appAuthorizeUnwind,
   convertBalance as appConvertBalance,
+  correctPayoutReason as appCorrectPayoutReason,
   createDeal as appCreateDeal,
   createTranche as appCreateTranche,
   executeBalanceConversion as appExecuteBalanceConversion,
@@ -471,6 +473,27 @@ export function authorizeUnwind(
 ): World {
   const step = acting(world, 'approve_lift_block', subjectOfDeal(dealId), as);
   return appAuthorizeUnwind(step.world, dealId, step.authority, options);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Исправление записи журнала                                                */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Исправление ключа причины у записанного исхода выплаты.
+ *
+ * Полномочие то же, под которым исход был записан, — `record_bank_outcome`:
+ * исправление собственной формулировки нового права не даёт. Автора обёртка не
+ * называет и назвать не может: он выводится из сессии внутри шага.
+ */
+export function correctPayoutReason(
+  world: World,
+  trancheId: string,
+  request: CorrectionRequest,
+  as: Actor = STAFF.operator,
+): World {
+  const step = acting(world, 'record_bank_outcome', subjectOfTranche(world, trancheId), as);
+  return appCorrectPayoutReason(step.world, request, step.authority);
 }
 
 /* ------------------------------------------------------------------------- */

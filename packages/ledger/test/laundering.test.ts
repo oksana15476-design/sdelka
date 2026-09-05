@@ -31,6 +31,7 @@ import {
   unclaimedLiability,
 } from '../src/index';
 import { attestDealParties } from './support/deal-parties';
+import { unguardedJournal } from './support/unguarded-journal';
 
 const buyer = clientKey('c1');
 /** Постороннее лицо: к сделке A отношения не имеет ни в какой роли. */
@@ -398,36 +399,38 @@ describe('атака 5: те же схемы, помеченные исправ�
   });
 
   /**
-   * Остаток, который эта конструкция не закрывает, — и он оставлен видимым
-   * нарочно, чтобы его не сочли невозможным.
+   * Остаток, который эта конструкция не закрывала, — **закрыт этажом выше**.
    *
-   * Исправление, в котором прирост чужого файла подпёрт встречным кредитом
-   * расхода платформы, собирается. Цена — признанный убыток платформы и ссылка
-   * на конкретную исправляемую запись, но форма проходит. Закрыть её может
-   * только сверка исправления с исправляемой записью: у конструктора записи
-   * журнала нет, у `appendEntry` он есть, и это следующий шаг.
+   * Прежняя редакция теста фиксировала его как известный: исправление, в
+   * котором прирост чужого файла подпёрт встречным кредитом расхода платформы,
+   * собиралось и ложилось в журнал. Здесь, у конструктора записи, оно
+   * по-прежнему собирается — журнала он не видит, — но `appendEntry` его больше
+   * не принимает: исправление обязано быть зеркалом своей цели, а файла
+   * постороннего лица цель (`f2`, привязка денег покупателя к траншу) не
+   * трогала (`journal.ts`, `assertCorrectionMirrorsTarget`).
    *
-   * Журнал при этом не молчит: файл постороннего лица оказывается в профиците,
-   * приём новых сделок останавливается.
+   * Второй контур при этом никуда не делся: журнал приходит и из базы, в том
+   * числе с записями, сделанными до появления правила, — и в таком журнале файл
+   * постороннего лица виден в профиците.
    */
-  it('does not catch a correction propped up by a platform expense — known residue', () => {
-    let journal = lockedUnderA();
-    journal = appendEntry(
-      journal,
-      createJournalEntry({
-        ...at('c5', 30),
-        kind: 'correction',
-        correctsEntryId: 'f2',
-        memoKey: 'ledger.entry.shortfall_reversed',
-        postings: [
-          debit(lockedA, sum, dealA),
-          credit({ kind: 'shortfall_expense' }, sum),
-          credit(bankNominal('GEL'), sum, dealA),
-          debit(bankNominal('GEL'), sum, { clientKey: stranger }),
-        ],
-      }),
-    );
-    const codes = checkLedgerInvariants(journal).map((item) => item.code);
+  it('refuses a correction propped up by a platform expense, and still sees the damage', () => {
+    const journal = lockedUnderA();
+    const entry = createJournalEntry({
+      ...at('c5', 30),
+      kind: 'correction',
+      correctsEntryId: 'f2',
+      memoKey: 'ledger.entry.shortfall_reversed',
+      postings: [
+        debit(lockedA, sum, dealA),
+        credit({ kind: 'shortfall_expense' }, sum),
+        credit(bankNominal('GEL'), sum, dealA),
+        debit(bankNominal('GEL'), sum, { clientKey: stranger }),
+      ],
+    });
+    expectCode(() => appendEntry(journal, entry), LedgerErrorCode.journalCorrectionNotMirror);
+    const codes = checkLedgerInvariants(
+      unguardedJournal([...journal.entries, entry]),
+    ).map((item) => item.code);
     expect(codes).toContain('ledger.invariant.custody_surplus');
   });
 });

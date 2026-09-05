@@ -12,6 +12,7 @@ import {
   receiveExternalPayment,
 } from './support/acting';
 import {
+  BANK_RESPONSE_SOURCE,
   BUYER,
   DEAL_AMOUNT,
   GEL,
@@ -121,7 +122,12 @@ describe('возврат без счёта-источника', () => {
     expect(trancheStatusOf(world, TRANCHE)).toBe('refund_pending');
     world = applyTrancheEvent(world, TRANCHE, { type: 'refund_initiated' }, ATTACHED).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('refunding');
-    world = applyTrancheEvent(world, TRANCHE, { type: 'payout_result', outcome: 'settled' }, ATTACHED).world;
+    world = applyTrancheEvent(
+      world,
+      TRANCHE,
+      { type: 'payout_result', outcome: 'settled' },
+      { ...ATTACHED, payoutResponse: BANK_RESPONSE_SOURCE },
+    ).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('refunded');
 
     // Деньги ушли с номинального счёта, обязательства перед покупателем нет.

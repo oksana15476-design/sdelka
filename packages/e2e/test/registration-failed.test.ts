@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assessRefundDestination, accountFingerprint, payerKeyForDomain } from '@sdelka/compliance';
 import { accountBalance, bankNominal, clientFreeAccount, coverage } from '@sdelka/ledger';
-import { toBeneficiaryLock } from '@sdelka/compliance';
 import { STAFF } from './support/actors';
 import {
   advance,
@@ -16,10 +15,10 @@ import {
   applyTrancheEvent,
   approve,
   attachObservation,
-  patchFacts,
   receiveExternalPayment,
 } from './support/acting';
 import {
+  BANK_RESPONSE_SOURCE,
   BUYER,
   CADASTRAL_CODE,
   DAY_MS,
@@ -138,7 +137,12 @@ describe('регистрация не состоялась', () => {
 
     world = applyTrancheEvent(world, TRANCHE, { type: 'refund_initiated' }, ROLLBACK).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('refunding');
-    world = applyTrancheEvent(world, TRANCHE, { type: 'payout_result', outcome: 'settled' }, ROLLBACK).world;
+    world = applyTrancheEvent(
+      world,
+      TRANCHE,
+      { type: 'payout_result', outcome: 'settled' },
+      { ...ROLLBACK, payoutResponse: BANK_RESPONSE_SOURCE },
+    ).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('refunded');
 
     world = applyDealEvent(world, DEAL, { type: 'tranches_refunded' }, OPTIONS);
@@ -191,13 +195,11 @@ describe('регистрация не состоялась', () => {
     world = applyTrancheEvent(world, TRANCHE_B, { type: 'approval_added', userId: 'approver-1' }, OPTIONS).world;
     expect(trancheStatusOf(world, TRANCHE_B)).toBe('release_pending');
 
-    // Уход из резерва снял блокировку реквизитов — правило соседнее и здесь ни
-    // при чём, поэтому реквизиты запираются обратно: отказ обязан остаться
-    // ровно один и именно про собственника.
-    const beneficiary = trancheOf(world, TRANCHE_B).beneficiary;
-    world = patchFacts(world, TRANCHE_B, {
-      beneficiary: toBeneficiaryLock({ ...beneficiary, locked: true }),
-    });
+    // Разбор блокировку реквизитов не снимает (§1.5: `release_blocked` внутри
+    // периметра резерва), поэтому отказ остаётся ровно один и именно про
+    // собственника — прежде здесь стояло восстановление блокировки чёрным
+    // ходом, без которого сценарий до своего утверждения не доходил.
+    expect(trancheOf(world, TRANCHE_B).beneficiary.locked).toBe(true);
     const refusedAgain = rejectTrancheEvent(world, TRANCHE_B, { type: 'release_authorized' });
     expect([...refusedAgain.failedGuards]).toEqual(['g_owner_is_buyer']);
 

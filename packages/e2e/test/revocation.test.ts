@@ -90,7 +90,12 @@ describe('отзыв средств покупателем', () => {
     expect(dealStatusOf(world, 'deal-revoke-a')).toBe('unwinding');
 
     world = applyTrancheEvent(world, 'tranche-revoke-a', { type: 'refund_initiated' }, ROLLBACK).world;
-    world = applyTrancheEvent(world, 'tranche-revoke-a', { type: 'payout_result', outcome: 'settled' }, ROLLBACK).world;
+    world = applyTrancheEvent(
+      world,
+      'tranche-revoke-a',
+      { type: 'payout_result', outcome: 'settled' },
+      { ...ROLLBACK, payoutResponse: BANK_RESPONSE_SOURCE },
+    ).world;
     expect(trancheStatusOf(world, 'tranche-revoke-a')).toBe('refunded');
     world = applyDealEvent(world, 'deal-revoke-a', { type: 'tranches_refunded' }, OPTIONS);
     expect(dealStatusOf(world, 'deal-revoke-a')).toBe('unwound');
@@ -112,7 +117,12 @@ describe('отзыв средств покупателем', () => {
 
     world = applyDealEvent(world, 'deal-revoke-b', { type: 'revocation_requested' }, OPTIONS);
     world = applyTrancheEvent(world, 'tranche-revoke-b', { type: 'refund_initiated' }, ROLLBACK).world;
-    world = applyTrancheEvent(world, 'tranche-revoke-b', { type: 'payout_result', outcome: 'settled' }, ROLLBACK).world;
+    world = applyTrancheEvent(
+      world,
+      'tranche-revoke-b',
+      { type: 'payout_result', outcome: 'settled' },
+      { ...ROLLBACK, payoutResponse: BANK_RESPONSE_SOURCE },
+    ).world;
     expect(trancheStatusOf(world, 'tranche-revoke-b')).toBe('refunded');
     world = applyDealEvent(world, 'deal-revoke-b', { type: 'tranches_refunded' }, OPTIONS);
     expect(dealStatusOf(world, 'deal-revoke-b')).toBe('unwound');

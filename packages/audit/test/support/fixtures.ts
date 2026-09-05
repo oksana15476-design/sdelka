@@ -226,6 +226,7 @@ export function dossierChain(): AuditChain {
       kind: 'correction',
       correctsRecordId: 'rec-evidence',
       reasonKey: 'evidence.provider_misattributed',
+      basis: source(8, 'operator_note', 'sdelka.console'),
       attributes: { provider: 'registry-regional' },
     },
   });

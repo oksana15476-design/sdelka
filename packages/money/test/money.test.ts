@@ -2,9 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
   MoneyError,
   MoneyErrorCode,
+  absolute,
   add,
+  assertCurrencyCode,
   compare,
+  equals,
   fromDecimalString,
+  isCurrencyCode,
+  isNegative,
+  isPositive,
+  isZero,
+  maximum,
+  minimum,
   minorUnitScale,
   money,
   multiplyByInteger,
@@ -12,7 +21,9 @@ import {
   subtract,
   sum,
   toDecimalString,
+  zero,
 } from '../src/index';
+import { expectMoneyError } from './support/errors';
 
 describe('money: construction and parsing', () => {
   it('builds from minor units', () => {
@@ -97,5 +108,96 @@ describe('money: arithmetic', () => {
     const usd = fromDecimalString('USD', '1.00');
     // @ts-expect-error красная линия: сложение разных валют — ошибка типа
     expect(() => add(gel('1.00'), usd)).toThrow(MoneyError);
+    expectMoneyError(
+      // @ts-expect-error та же величина, теперь ради кода ошибки
+      () => subtract(gel('1.00'), usd),
+      MoneyErrorCode.currencyMismatch,
+      { left: 'GEL', right: 'USD' },
+    );
+  });
+
+  /**
+   * `sum` — единственная операция, куда валюта приходит отдельным аргументом, а
+   * не выводится из самих сумм: список может быть пуст. Поэтому у неё своя
+   * проверка на каждый элемент, и она обязана иметь падающий тест — иначе
+   * сложение лари с долларами проходит молча, а результат подписан лари.
+   */
+  it('refuses to sum amounts in a currency other than the one it is asked for', () => {
+    const usd = fromDecimalString('USD', '1.00');
+    expectMoneyError(
+      // @ts-expect-error красная линия: чужая валюта в списке — ошибка типа
+      () => sum('GEL', [gel('1.00'), usd]),
+      MoneyErrorCode.currencyMismatch,
+      { left: 'GEL', right: 'USD' },
+    );
+    expect(sum('GEL', []).minor).toBe(0n);
+    expect(sum('GEL', []).currency).toBe('GEL');
+  });
+});
+
+/**
+ * Предикаты и границы. Отдельный набор появился после мутационного прогона:
+ * `isPositive`, `isNegative`, `absolute`, `minimum` вызываются из домена,
+ * учёта и приложения (десятки мест), но в самом `@sdelka/money` не были
+ * задеты ни одним тестом — подмена `>` на `>=` в `isPositive` переживала весь
+ * набор пакета. Знак и границы — вход в решения «хватает ли средств»
+ * и «есть ли недостача», поэтому проверяются здесь, а не косвенно.
+ */
+describe('money: знак, границы и равенство', () => {
+  const gel = (minor: bigint) => money('GEL', minor);
+
+  it('tells zero from positive and negative without treating zero as either', () => {
+    expect(isZero(gel(0n))).toBe(true);
+    expect(isZero(gel(1n))).toBe(false);
+    expect(isZero(gel(-1n))).toBe(false);
+    expect(isPositive(gel(0n))).toBe(false);
+    expect(isPositive(gel(1n))).toBe(true);
+    expect(isNegative(gel(0n))).toBe(false);
+    expect(isNegative(gel(-1n))).toBe(true);
+    expect(zero('GEL')).toEqual(money('GEL', 0n));
+  });
+
+  it('takes the absolute value and keeps the currency', () => {
+    expect(absolute(gel(-250n)).minor).toBe(250n);
+    expect(absolute(gel(250n)).minor).toBe(250n);
+    expect(absolute(gel(0n)).minor).toBe(0n);
+    expect(absolute(money('JPY', -7n)).currency).toBe('JPY');
+  });
+
+  it('picks the smaller and the larger amount, ties included', () => {
+    expect(minimum(gel(1n), gel(2n)).minor).toBe(1n);
+    expect(minimum(gel(2n), gel(1n)).minor).toBe(1n);
+    expect(maximum(gel(1n), gel(2n)).minor).toBe(2n);
+    expect(maximum(gel(2n), gel(1n)).minor).toBe(2n);
+    expect(minimum(gel(-5n), gel(0n)).minor).toBe(-5n);
+    expect(maximum(gel(2n), gel(2n)).minor).toBe(2n);
+  });
+
+  it('never calls equal two amounts in different currencies', () => {
+    expect(equals(gel(100n), gel(100n))).toBe(true);
+    expect(equals(gel(100n), gel(101n))).toBe(false);
+    // Сто тетри и сто центов — не одна величина, сколько бы ни совпадало число.
+    expect(equals(gel(100n), money('USD', 100n))).toBe(false);
+  });
+});
+
+describe('currency: код валюты с границы процесса', () => {
+  /**
+   * Валюта приходит строкой из базы и от провайдера. `assertCurrencyCode` —
+   * единственное место, где строка становится `CurrencyCode`; без падающего
+   * теста снятие проверки пропускает внутрь ядра валюту, у которой нет ни
+   * числа знаков, ни множителя.
+   */
+  it('refuses an unknown currency instead of letting the string through', () => {
+    expect(isCurrencyCode('GEL')).toBe(true);
+    expect(isCurrencyCode('XXX')).toBe(false);
+    expect(isCurrencyCode('toString')).toBe(false);
+    expect(assertCurrencyCode('GEL')).toBe('GEL');
+    expectMoneyError(() => assertCurrencyCode('RUB'), MoneyErrorCode.unknownCurrency, {
+      currency: 'RUB',
+    });
+    expectMoneyError(() => assertCurrencyCode('gel'), MoneyErrorCode.unknownCurrency, {
+      currency: 'gel',
+    });
   });
 });

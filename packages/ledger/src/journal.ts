@@ -1,6 +1,14 @@
 import type { CurrencyCode } from '@sdelka/money';
 import { accountCode, conversionOfAccount } from './accounts';
-import { type FxExecution, type JournalEntry, type Posting, isClientRef } from './entry';
+import {
+  type FxExecution,
+  type JournalEntry,
+  type Posting,
+  fundsRefText,
+  isClientRef,
+  postingFile,
+  postingMovementKey,
+} from './entry';
 import { LedgerError, LedgerErrorCode } from './errors';
 
 /**
@@ -366,6 +374,131 @@ function assertShortfallFundingResolves(journal: Journal, entry: JournalEntry): 
 }
 
 /**
+ * Чистое движение записи по одному счёту в одном файле. Дебет — плюс.
+ *
+ * `account` и `file` хранятся рядом с суммой только ради сообщения об ошибке:
+ * ключ (`postingMovementKey`) разбирается однозначно, но дежурному его читать
+ * незачем.
+ */
+interface Movement {
+  readonly account: string;
+  readonly file: string;
+  readonly currency: CurrencyCode;
+  readonly minor: bigint;
+}
+
+function netMovements(entry: JournalEntry): ReadonlyMap<string, Movement> {
+  const net = new Map<string, Movement>();
+  for (const posting of entry.postings) {
+    const key = postingMovementKey(posting);
+    const signed = posting.direction === 'debit' ? posting.amount.minor : -posting.amount.minor;
+    net.set(key, {
+      account: accountCode(posting.account),
+      file: fundsRefText(postingFile(posting)),
+      currency: posting.amount.currency,
+      minor: (net.get(key)?.minor ?? 0n) + signed,
+    });
+  }
+  return net;
+}
+
+/**
+ * **Исправление — зеркало своей цели, а не свободная запись со ссылкой.**
+ *
+ * Красная линия №11 обещает не ссылку, а след: «журнал не редактируется,
+ * исправление — только новой записью со ссылкой на предыдущую». Пока ссылка
+ * проверялась на одно лишь существование цели, обещание было пустым, и вот чем
+ * это кончалось (проба — `test/correction-mirror.test.ts`):
+ *
+ * ```
+ * clientTopUp(X) → lockForTranche(X, A/t1) → writeOffUnclaimed(X, A/t1)   — всё законно
+ * correction correctsEntryId: <любая лежащая запись>
+ *   Дт unclaimed:liability      100 000     Кт client:Z:free   100 000  {Z}
+ *   Кт transit:writeoff         100 000     Дт bank:nominal    100 000  {Z}
+ * ```
+ *
+ * Четыре проводки, где кастодиан едет вместе с обязательством: прирост каждого
+ * файла ровно нулевой — молчит `assertNoUnfundedClientFileGain`; ключ пула у
+ * дебета и кредита один — молчит `assertNoClientCrossSubsidy`; у пула нет
+ * владельца — молчит `assertClientOwnerMoveOnlySettles`; вид записи
+ * `correction` — молчит `assertNoPayoutFromTerminalPool`. Итог прогона:
+ * невостребованные средства транша стали свободным остатком постороннего лица,
+ * покрытие 1/1, `checkLedgerInvariants()` пуст, стоп-кран не сработал.
+ *
+ * **Почему правило стоит здесь, а не на виде записи.** Затыкать `correction` в
+ * `assertNoPayoutFromTerminalPool` бесполезно: та же форма собирается через
+ * любой другой пул и любую другую пару счетов, а законное исправление ошибочного
+ * списания стало бы невыразимым. Причина не в том, что исправление трогает пул,
+ * а в том, что исправление **ничем не связано со своей целью**. Связь выразима,
+ * и вот она: движение исправления по каждому счёту и файлу обязано быть
+ * обратным движению цели по тому же счёту и файлу и не больше его — с учётом
+ * того, что прежние исправления той же цели уже отмотали. Цель у `appendEntry`
+ * под рукой, у конструктора записи её нет — поэтому правило journal-уровня.
+ *
+ * Что из этого следует буквально:
+ *
+ * 1. **Ни одного счёта и ни одного файла мимо цели.** `client:Z:free` в цели не
+ *    участвовал — исправление его не трогает. Этим атака и ломается.
+ * 2. **Только назад.** Движение в ту же сторону, что и у цели, — это не
+ *    исправление, а второй такой же расчёт под видом отмены.
+ * 3. **Не больше, чем было.** Сумма всех исправлений одной цели по каждому
+ *    ключу не превышает того, что цель двинула: цель отдаётся один раз, и
+ *    «отмотать вдвое» — способ создать деньги из ссылки.
+ *
+ * Оба законных исправления продукта — образец зеркальности и проходят по
+ * построению: `reverseTrancheSettlement` строится зеркалом самой записи расчёта,
+ * `reverseFeeAccrual` — обратной парой к начислению. Частичное исправление тоже
+ * остаётся возможным (возврат одной лишь комиссии в транзит, см.
+ * `feeRestorableBy`): «не больше цели» — неравенство, а не равенство.
+ *
+ * ⚠ **[открыто]** Правило требует, чтобы исправление отматывало **тем же
+ * счётом**. Исправление, которому пришлось бы вернуть деньги другим маршрутом
+ * (счёт-источник закрыт, валюта поменялась), этой формой не выражается. Такой
+ * операции сегодня нет ни в словаре, ни в приложении; появится — ей нужно своё
+ * объявление, по образцу `DealPartiesAttestation`, а не послабление здесь.
+ */
+function assertCorrectionMirrorsTarget(journal: Journal, entry: JournalEntry): void {
+  if (entry.correctsEntryId === null) return;
+  const target = journal.entries.find((existing) => existing.id === entry.correctsEntryId);
+  // Отсутствия цели здесь не разбирается: его ловит
+  // `journalCorrectionTargetMissing` — своей ошибкой и своим именем.
+  if (target === undefined) return;
+  const targetNet = netMovements(target);
+  const unwound = new Map<string, bigint>();
+  for (const existing of journal.entries) {
+    if (existing.correctsEntryId !== target.id) continue;
+    for (const [key, movement] of netMovements(existing)) {
+      unwound.set(key, (unwound.get(key) ?? 0n) + movement.minor);
+    }
+  }
+  for (const [key, movement] of netMovements(entry)) {
+    // Ноль — не движение: счёт, дебетованный и тут же кредитованный в одном
+    // файле на ту же сумму, ничего не двинул. Переезд между файлами нулём не
+    // выглядит никогда: файл входит в ключ.
+    if (movement.minor === 0n) continue;
+    const moved = targetNet.get(key)?.minor ?? 0n;
+    const fail = (reason: string): never => {
+      throw new LedgerError(LedgerErrorCode.journalCorrectionNotMirror, {
+        id: entry.id,
+        correctsEntryId: target.id,
+        account: movement.account,
+        file: movement.file,
+        currency: movement.currency,
+        reason,
+        moved: movement.minor.toString(),
+        target: moved.toString(),
+      });
+    };
+    if (moved === 0n) fail('account_not_in_target');
+    if (moved > 0n === movement.minor > 0n) fail('same_direction');
+    const total = (unwound.get(key) ?? 0n) + movement.minor;
+    // Отмотано в сумме не больше, чем цель двинула. Знак у `total` тот же, что
+    // у `movement.minor`: прежние исправления прошли это же правило.
+    if (moved > 0n ? total < -moved : total > -moved) fail('exceeds_target');
+  }
+}
+
+/**
  * Запись обязана быть записью целиком, а не «почти записью».
  *
  * Проба, ради которой проверка появилась: объект, у которого нет поля `funds`
@@ -426,6 +559,11 @@ export function appendEntry(journal: Journal, entry: JournalEntry): Journal {
   // которому относится.
   assertSettlementReversedOnce(journal, entry);
   assertFeeAccruedOnce(journal, entry);
+  // Зеркальность стоит **после** двух правил выше, и это тот же довод о
+  // порядке: второй реверс расчёта и возврат требования сверх снятого она тоже
+  // отвергает, но своим общим именем, а у обоих случаев имя уже есть. Общее
+  // правило отвечает там, где именного нет.
+  assertCorrectionMirrorsTarget(journal, entry);
   assertConversionKeyNotReused(journal, entry);
   assertShortfallFundingResolves(journal, entry);
   return Object.freeze({ entries: Object.freeze([...journal.entries, entry]) });

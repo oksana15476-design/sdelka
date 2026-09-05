@@ -53,7 +53,9 @@ import {
   DEFAULT_DEADLINE_POLICY,
   DEFAULT_OBSERVATION_POLICY,
   RELEASE_CONDITIONS,
+  activePayoutsForTranche,
   createPayout,
+  createRefundPayout,
   dealState,
   initialTrancheState,
   instant,
@@ -1513,6 +1515,59 @@ function applyIntents(
         });
         break;
       }
+      case 'enqueue_outbound_refund': {
+        // Возврат — такое же поручение в банк, как расчёт, и **своя** запись
+        // выплаты с собственным ключом. До этого записи у возврата не было
+        // вовсе, и ответ банка по нему приложение отдавало последней выплате
+        // транша: у транша с отклонённым расчётом подтверждение возврата
+        // отвергалось как `domain.state.terminal`, а у транша с потерянным
+        // ответом — молча закрывало **чужую** ногу.
+        //
+        // Повтор гасится тем же способом, что у расчёта: активное поручение с
+        // тем же ключом второй раз не выпускается. Самоперехода
+        // `refunding → refunding` по неответу это не касается — он объявлен
+        // внутренним, и действий входа при нём нет.
+        const active = next.payouts.find(
+          (payout) =>
+            payout.idempotencyKey === intent.idempotencyKey &&
+            (['created', 'submitted', 'unknown'] as readonly string[]).includes(payout.status),
+        );
+        if (active !== undefined) {
+          reissued.push(intent.idempotencyKey);
+          break;
+        }
+        const created: PayoutState = createRefundPayout(runtime.trancheId);
+        const submitted = reducePayout(created, { type: 'payout_submitted' });
+        if (!submitted.ok) {
+          throw new Error(`app.payout.submit_rejected:${submitted.error.code}`);
+        }
+        next = { ...next, payouts: [...next.payouts, submitted.value.state] };
+        seq += 1;
+        // ⚠ Записью журнала аудита здесь идёт переход **машины выплаты**, а не
+        // `payout_ordered`: у того пакет доказательств обязателен и непуст по
+        // типу (`PayoutOrderedBody`, красная линия №5), а у возврата пакета нет
+        // и быть не обязано — возвращаются собственные деньги покупателя.
+        // Подставить сюда пустой список нельзя, выдумать непустой — тем более.
+        // Своего тела записи у поручения на возврат в `@sdelka/audit` пока нет;
+        // до его появления поручение видно в цепочке этим переходом, а его
+        // исход — записью `payout_result` с тем же предметом.
+        chain = appendRecord(chain, {
+          recordId: `${chain.chainId}:r${seq}`,
+          recordedAt: auditInstant(world.now),
+          actor,
+          subject: auditRef('payout', intent.idempotencyKey),
+          related: [auditRef('tranche', runtime.trancheId), auditRef('deal', runtime.dealId)],
+          body: {
+            kind: 'state_transition',
+            machine: 'payout',
+            from: 'created',
+            to: 'submitted',
+            eventKey: 'payout_submitted',
+            failedGuards: [],
+          },
+        });
+        break;
+      }
       case 'enqueue_operator_task':
         // ⚠ Намерение несёт только сумму приоритета. Вид задачи, важность,
         // сторона и версия политики — обязательные поля `ReviewTask` в
@@ -1673,12 +1728,44 @@ function applyTrancheEventInternal(
   // Машина выплаты ведётся отдельно и **раньше** машины транша: у неё легально
   // состояние «неизвестно», которого у транша нет (`STATE-MACHINES.md` §2).
   let payouts = runtime.payouts;
+  /** Поручение, которому адресован исход банка. `undefined` — исхода нет вовсе. */
+  let addressed: PayoutState | undefined;
   const payoutEvent = payoutEventFor(event);
-  if (payoutEvent !== null && payouts.length > 0) {
-    const active = payouts[payouts.length - 1];
-    if (active === undefined) {
-      throw new Error('app.payout.missing');
+  if (payoutEvent !== null) {
+    /**
+     * ⚠ Исход адресуется **поручению в полёте**, а не последней записи.
+     *
+     * Раньше здесь стояло `payouts[payouts.length - 1]`, и это молча означало
+     * «у транша одна нога». У транша их две: расчёт получателю и возврат
+     * покупателю, и они случаются подряд — банк отклоняет расчёт, транш уходит
+     * в `release_blocked`, оператор ведёт его в возврат. Последней записью при
+     * этом остаётся отклонённый расчёт, то есть **терминальная** выплата, и
+     * подтверждение возврата отвергалось как `domain.state.terminal`: транш
+     * оставался в `refunding` навсегда, а деньги покупателя — на номинальном
+     * счёте (красная линия №7). В узком случае «ответ по расчёту потерян»
+     * запись была нетерминальной, и выписка о возврате покупателю молча
+     * закрывала расчёт продавцу.
+     *
+     * Поручение в полёте ровно одно: `g_no_active_payout` стоит на обоих
+     * рёбрах выпуска (`release_pending → paying_out` и
+     * `refund_pending → refunding`), а `violatesSingleActivePayout` держит то
+     * же правило инвариантом мира. Больше одного — нарушение, и шаг обязан
+     * остановиться здесь, а не выбрать любое.
+     *
+     * Ни одного активного — тоже остановка: исход банка есть ответ на
+     * поручение, и ответ без поручения означает, что мы собираемся двинуть
+     * деньги по факту, которого не заказывали.
+     */
+    const inFlight = activePayoutsForTranche(payouts, trancheId);
+    if (inFlight.length > 1) {
+      throw new Error(`app.payout.ambiguous:${inFlight.length}`);
     }
+    const active = inFlight[0];
+    if (active === undefined) {
+      throw new Error(`app.payout.missing:${runtime.state.status}`);
+    }
+    const at = payouts.lastIndexOf(active);
+    addressed = active;
     // ⚠ Две машины расходятся на одном и том же событии. У транша
     // `paying_out --payout_result(unknown)--> paying_out` — ребро, которое
     // можно пройти сколько угодно раз; у выплаты из `unknown` сетевого ребра
@@ -1693,7 +1780,7 @@ function applyTrancheEventInternal(
       if (!moved.ok) {
         throw new Error(`app.payout.rejected:${moved.error.code}`);
       }
-      payouts = [...payouts.slice(0, -1), moved.value.state];
+      payouts = [...payouts.slice(0, at), moved.value.state, ...payouts.slice(at + 1)];
     }
   }
 
@@ -1710,7 +1797,10 @@ function applyTrancheEventInternal(
   let chain = applied.chain;
   let seq = applied.seq;
   if (event.type === 'payout_result' || event.type === 'reconciliation_resolved') {
-    const last = applied.runtime.payouts[applied.runtime.payouts.length - 1];
+    // Предмет записи — то самое поручение, которому исход адресован. По
+    // последней записи транша брать нельзя по той же причине, по которой её
+    // нельзя двигать: у транша с двумя ногами последняя запись — не та.
+    const last = addressed;
     if (last !== undefined) {
       seq += 1;
       const outcome = event.type === 'payout_result' ? event.outcome : event.outcome;

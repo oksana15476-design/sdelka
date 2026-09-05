@@ -61,6 +61,10 @@ function bodyEvidence(record: AuditRecord): readonly RawSourceRef[] {
       return [body.act];
     case 'evidence_attached':
       return [body.evidence];
+    case 'correction':
+      // Основание исправления — такой же материал досье, как основание решения:
+      // аудитор обязан увидеть, на чём стоит пометка, а не только её текст-ключ.
+      return [body.basis];
     default:
       return [];
   }

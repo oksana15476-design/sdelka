@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { appendRecord, correctionsOf, effectiveView, verifyChain } from '../src/index';
-import { DEAL, OPERATOR, TRANCHE, at, dossierChain } from './support/fixtures';
+import { DEAL, OPERATOR, TRANCHE, at, dossierChain, source } from './support/fixtures';
 
 describe('исправление — только новой записью', () => {
   it('исходная запись остаётся в цепочке и остаётся видимой', () => {
@@ -26,6 +26,7 @@ describe('исправление — только новой записью', ()
         kind: 'correction',
         correctsRecordId: 'rec-fix',
         reasonKey: 'correction.superseded',
+        basis: source(9, 'operator_note', 'sdelka.console'),
         attributes: { provider: 'registry-central' },
       },
     });

@@ -122,6 +122,33 @@ describe('направление — часть величины курса', ()
   it('refuses a rates set whose pair does not match the source amount', () => {
     expect(() => convert(twoHundredThousandGel, rates as never, asOf, 'trunc')).toThrow(MoneyError);
   });
+
+  /**
+   * Второй запрет в `assertRateApplies` — курс, у которого база и котировка
+   * совпали. Через `fxRate` такую величину не собрать, и до появления этого
+   * теста в неё не заходил ни один прогон: `fxRatePairMismatch` перехватывал
+   * все входы раньше, а снятие запрета оставалось незамеченным.
+   *
+   * Вход существует ровно потому, что типы не переживают границу процесса:
+   * курс приходит из базы и от провайдера, там пара — две строки, и они могут
+   * совпасть. Курс «лари за лари» умножает сумму на произвольное число, оставив
+   * валюту прежней, — молча и без единого признака ошибки.
+   */
+  it('refuses a rate whose own pair collapsed to one currency, as data from the wire can', () => {
+    const fromTheWire = {
+      base: 'GEL',
+      quote: 'GEL',
+      value: rationalFromDecimalString('2.50'),
+    } as unknown as Parameters<typeof convertAtRate<'GEL', 'GEL'>>[1];
+    try {
+      convertAtRate(twoHundredThousandGel, fromTheWire, 'trunc');
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(MoneyError);
+      expect((error as MoneyError).code).toBe(MoneyErrorCode.fxCurrencyMismatch);
+      expect((error as MoneyError).details).toEqual({ source: 'GEL', target: 'GEL' });
+    }
+  });
 });
 
 describe('направление округления при конвертации', () => {

@@ -64,6 +64,12 @@ export const LedgerErrorCode = {
   journalEntryMalformed: 'ledger.journal.entry_malformed',
   journalDuplicateEntryId: 'ledger.journal.duplicate_entry_id',
   journalCorrectionTargetMissing: 'ledger.journal.correction_target_missing',
+  // Исправление не является зеркалом своей цели: трогает счёт или файл, которого
+  // цель не трогала, двигает его в ту же сторону, что и цель, либо отматывает
+  // больше, чем цель двинула. Красная линия №11 обещает не ссылку, а след:
+  // ссылка, содержание которой ни с чем не сверяется, снимает с записи все
+  // ограничения обычной записи и не даёт взамен ничего.
+  journalCorrectionNotMirror: 'ledger.journal.correction_not_mirror',
   // Второе начисление комиссии по тому же траншу. Идемпотентность начисления
   // (§4.6, Ф16): «начислено» — величина транша, а не счётчик вызовов.
   journalFeeAccruedTwice: 'ledger.journal.fee_accrued_twice',

@@ -62,6 +62,19 @@ describe('тело записи: обязательное обязательно
     const body: CorrectionBody = {
       kind: 'correction',
       reasonKey: 'evidence.provider_misattributed',
+      basis: source(9, 'operator_note', 'console'),
+      attributes: {},
+    };
+    expect(body.kind).toBe('correction');
+  });
+
+  it('исправление без основания не собирается', () => {
+    // @ts-expect-error — `CORE.md` Ф11: разобранные поля без исходника суд не
+    // убедит. Исправление без основания — мнение, дописанное в вечный журнал.
+    const body: CorrectionBody = {
+      kind: 'correction',
+      correctsRecordId: 'rec-evidence',
+      reasonKey: 'evidence.provider_misattributed',
       attributes: {},
     };
     expect(body.kind).toBe('correction');

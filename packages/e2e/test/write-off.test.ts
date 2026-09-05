@@ -25,7 +25,7 @@ import {
   applyTrancheEvent,
   receiveWriteOffTransit,
 } from './support/acting';
-import { DEAL_AMOUNT, GEL, POLICY_VERSION } from './support/fixtures';
+import { BANK_RESPONSE_SOURCE, DEAL_AMOUNT, GEL, POLICY_VERSION } from './support/fixtures';
 import { toCollected, toReserved } from './support/paths';
 
 const OPTIONS = trancheOptions(POLICY_VERSION, { taskKind: 'source_of_funds' });
@@ -201,7 +201,12 @@ describe('невостребованные средства', () => {
     const tranche = 'tranche-unclaimed-free';
     let world = applyTrancheEvent(collected.world, tranche, { type: 'refund_requested', reason: 'buyer.requested' }, ROLLBACK).world;
     world = applyTrancheEvent(world, tranche, { type: 'refund_initiated' }, ROLLBACK).world;
-    world = applyTrancheEvent(world, tranche, { type: 'payout_result', outcome: 'rejected' }, ROLLBACK).world;
+    world = applyTrancheEvent(
+      world,
+      tranche,
+      { type: 'payout_result', outcome: 'rejected' },
+      { ...ROLLBACK, payoutResponse: BANK_RESPONSE_SOURCE },
+    ).world;
     expect(trancheStatusOf(world, tranche)).toBe('release_blocked');
 
     // Собрано — да; заперто — нет. Ровно та пара, которую `g_funds_locked`

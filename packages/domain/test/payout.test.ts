@@ -15,7 +15,12 @@ import {
 } from '../src/index';
 
 function at(status: PayoutStatus): PayoutState {
-  return { status, idempotencyKey: payoutIdempotencyKey('tranche-1'), trancheId: 'tranche-1' };
+  return {
+    status,
+    idempotencyKey: payoutIdempotencyKey('tranche-1'),
+    trancheId: 'tranche-1',
+    leg: 'release',
+  };
 }
 
 function step(state: PayoutState, event: PayoutEvent): PayoutState {

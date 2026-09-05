@@ -79,7 +79,12 @@ describe('невозможные состояния', () => {
   it('повтор выплаты после unknown: перехода нет в таблице', () => {
     const fromUnknown = PAYOUT_TRANSITIONS.filter((item) => item.from === 'unknown');
     expect(fromUnknown.map((item) => item.to).sort()).toEqual(['rejected', 'settled']);
-    const unknown = { status: 'unknown', idempotencyKey: 'k', trancheId: 't1' } as const;
+    const unknown = {
+      status: 'unknown',
+      idempotencyKey: 'k',
+      trancheId: 't1',
+      leg: 'release',
+    } as const;
     for (const event of ['payout_submitted'] as const) {
       const result = reducePayout(unknown, { type: event });
       expect(result.ok).toBe(false);

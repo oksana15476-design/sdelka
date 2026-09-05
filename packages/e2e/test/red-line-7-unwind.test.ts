@@ -23,6 +23,7 @@ import {
   requestUnwind,
 } from './support/acting';
 import {
+  BANK_RESPONSE_SOURCE,
   CADASTRAL_CODE,
   CONDITION_ACT_SOURCE,
   DAY_MS,
@@ -243,7 +244,7 @@ describe('красная линия №7: от бездействия до во�
       world,
       TRANCHE,
       { type: 'payout_result', outcome: 'settled' },
-      ROLLBACK,
+      { ...ROLLBACK, payoutResponse: BANK_RESPONSE_SOURCE },
     ).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('refunded');
 

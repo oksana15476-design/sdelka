@@ -22,6 +22,7 @@ import {
   debit,
   emptyJournal,
   feeCeiling,
+  feeCeilingCap,
   feePositions,
   feeReceivable,
   lockForTranche,
@@ -50,6 +51,25 @@ function expectCode(run: () => unknown, code: LedgerErrorCodeType): void {
   } catch (error) {
     expect(error).toBeInstanceOf(LedgerError);
     expect((error as LedgerError).code).toBe(code);
+  }
+}
+
+/**
+ * Там, где один код закрывает несколько разных дверей, утверждается ещё и
+ * пояснение: иначе снятие одной проверки прячется за срабатыванием соседней.
+ */
+function expectCodeAndDetails(
+  run: () => unknown,
+  code: LedgerErrorCodeType,
+  details: Readonly<Record<string, string>>,
+): void {
+  try {
+    run();
+    expect.unreachable();
+  } catch (error) {
+    expect(error).toBeInstanceOf(LedgerError);
+    expect((error as LedgerError).code).toBe(code);
+    expect((error as LedgerError).details).toEqual(details);
   }
 }
 
@@ -398,5 +418,68 @@ describe('негодное значение — ошибка учёта, а не
       () => appendEntry(emptyJournal, malformed),
       LedgerErrorCode.journalEntryMalformed,
     );
+  });
+});
+
+/**
+ * Две проверки, у которых до этого батча не было падающего теста.
+ *
+ * Найдены тем же вопросом, что и дыра в `@sdelka/money`: «каким изменением
+ * исходника этот тест обязан упасть?». Ни один прогон не подавал в `accrueFee`
+ * неположительную комиссию и ни один не строил негодный потолок — коды
+ * `entryNonPositiveFee` и `feeCeilingInvalid` не встречались в тестах учёта ни
+ * разу, хотя оба стоят на денежном пути.
+ */
+describe('начисление и потолок: негодная величина отвергается названной причиной', () => {
+  it('нулевая и отрицательная комиссия не становятся начислением', () => {
+    // Код обязателен, а не класс ошибки: без проверки нулевая комиссия уходит
+    // в конструктор и отвергается уже проводкой (`postingNonPositiveAmount`) —
+    // тем же классом `LedgerError`, но по другой причине. «Ноль — это
+    // отсутствие комиссии, а не проводка на ноль» держится вот этим кодом.
+    expectCodeAndDetails(
+      () => accrueFee(at('p1'), dealA, money('GEL', 0n), 'plan-1'),
+      LedgerErrorCode.entryNonPositiveFee,
+      { amount: '0' },
+    );
+    expectCodeAndDetails(
+      () => accrueFee(at('p2'), dealA, money('GEL', -500n), 'plan-1'),
+      LedgerErrorCode.entryNonPositiveFee,
+      { amount: '-500' },
+    );
+    // Положительная — собирается: правило отсекает негодную величину, а не
+    // начисление как таковое.
+    expect(accrueFee(at('p3'), dealA, money('GEL', 1n), 'plan-1').postings).toHaveLength(2);
+  });
+
+  it('потолок как величина: доля не бывает отрицательной и не бывает больше единицы', () => {
+    // Отрицательная доля дала бы отрицательный предел, при котором законным
+    // остаётся только отрицательное удержание, — то есть выплата получателю
+    // сверх брутто. Доля больше единицы — величина, которой не существует.
+    expectCodeAndDetails(
+      () => feeCeiling(rational(-1n, 100n)),
+      LedgerErrorCode.feeCeilingInvalid,
+      { reason: 'negative' },
+    );
+    expectCodeAndDetails(
+      () => feeCeiling(rational(101n, 100n)),
+      LedgerErrorCode.feeCeilingInvalid,
+      { reason: 'above_one' },
+    );
+    // Границы включительны с обеих сторон: ноль — это «удерживать нельзя
+    // ничего», единица — законная величина, которую сужает `strictestFeeCeiling`.
+    expect(feeCeiling(rational(0n, 1n)).maxShare).toEqual(rational(0n, 1n));
+    expect(feeCeiling(rational(1n, 1n)).maxShare).toEqual(rational(1n, 1n));
+  });
+
+  it('предел не считается от отрицательного брутто', () => {
+    // Брутто ниже нуля — не «маленькая сумма»: доля от него отрицательна, и
+    // сравнение «удержание не больше предела» начинает пропускать всё подряд.
+    expectCodeAndDetails(
+      () => feeCeilingCap(money('GEL', -1n)),
+      LedgerErrorCode.feeCeilingInvalid,
+      { reason: 'negative_gross', amount: '-1' },
+    );
+    expect(feeCeilingCap(money('GEL', 100_000n)).minor).toBe(2_000n);
+    expect(feeCeilingCap(money('GEL', 0n)).minor).toBe(0n);
   });
 });

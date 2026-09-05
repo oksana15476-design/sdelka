@@ -191,7 +191,12 @@ describe('санкционная заморозка', () => {
     expect(trancheStatusOf(world, TRANCHE)).toBe('refund_pending');
 
     world = applyTrancheEvent(world, TRANCHE, { type: 'refund_initiated' }, ROLLBACK).world;
-    world = applyTrancheEvent(world, TRANCHE, { type: 'payout_result', outcome: 'settled' }, ROLLBACK).world;
+    world = applyTrancheEvent(
+      world,
+      TRANCHE,
+      { type: 'payout_result', outcome: 'settled' },
+      { ...ROLLBACK, payoutResponse: BANK_RESPONSE_SOURCE },
+    ).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('refunded');
     world = applyDealEvent(world, DEAL, { type: 'tranches_refunded' }, OPTIONS);
     expect(dealStatusOf(world, DEAL)).toBe('unwound');

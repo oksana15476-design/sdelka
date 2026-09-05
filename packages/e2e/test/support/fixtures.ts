@@ -190,6 +190,14 @@ export const BANK_RESPONSE_SOURCE = rawSource(3, 'payment_provider_response', 'b
 export const BANK_REFUND_SOURCE = rawSource(4, 'payment_provider_response', 'bank.partner');
 export const STATEMENT_SOURCE = rawSource(5, 'bank_statement', 'bank.partner');
 export const SCREENING_SOURCE = rawSource(6, 'screening_response', 'screening.provider');
+/**
+ * Служебная записка оператора — основание исправления записи журнала.
+ *
+ * Вид `operator_note` заведён в `RAW_SOURCE_KINDS` ровно под такой случай:
+ * основание у исправления обязательно типом, и «основания не бывает» — не
+ * случай, а пропуск (`packages/audit/src/record.ts`, `CorrectionBody`).
+ */
+export const OPERATOR_NOTE_SOURCE = rawSource(7, 'operator_note', 'sdelka.console');
 
 /* ------------------------------------------------------------------------- */
 /* Акт получателя об условии                                                 */

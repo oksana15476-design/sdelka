@@ -15,7 +15,7 @@ import type { CurrencyCode, Money } from '@sdelka/money';
 import { type ConditionAct, conditionActsEqual } from './condition-act';
 import type { FreezeReason, UnfreezeTarget } from './freeze';
 import { type GuardId, type GuardInput, type TrancheFacts, evaluateGuard } from './guards';
-import { payoutIdempotencyKey } from './ids';
+import { payoutIdempotencyKey, refundIdempotencyKey } from './ids';
 import {
   type Deadline,
   type DurationMs,
@@ -546,7 +546,28 @@ export const TRANCHE_TRANSITIONS: readonly TrancheTransition[] = Object.freeze([
   ),
   transition('paying_out', 'reconciliation_resolved', 'release_blocked', [], [], 'rejected'),
 
-  transition('refund_pending', 'refund_initiated', 'refunding', ['g_source_account_known']),
+  /**
+   * ⚠ `g_no_active_payout` стоит здесь по той же причине, по которой стоит на
+   * `release_pending → paying_out`: **второго поручения в полёте не бывает**
+   * (красная линия №8, §2.2).
+   *
+   * Случай не выдуман. Ответ банка по расчёту потерян — выплата в `unknown`,
+   * то есть деньги, возможно, уже у получателя. Транш вытаскивают из
+   * `paying_out` заморозкой (единственный выход оттуда мимо ответа), разморозка
+   * приводит его в `release_blocked`, оттуда — `refund_requested`. Без guard'а
+   * возврат уходил бы в банк поверх невыясненного расчёта: на номинальном
+   * счёте одни и те же деньги ушли бы дважды, и обнаружилось бы это только
+   * покрытием на конец дня (красная линия №3).
+   *
+   * Отказ оставляет транш в `refund_pending` — состоянии с часами эскалации, а
+   * не в тупике: сначала сверка закрывает расчёт, потом открывается возврат.
+   * Чем закрывается расчёт у транша, уже покинувшего `paying_out`, — см.
+   * пометку [открыто] в `STATE-MACHINES.md` §2.2.
+   */
+  transition('refund_pending', 'refund_initiated', 'refunding', [
+    'g_source_account_known',
+    'g_no_active_payout',
+  ]),
   transition('refund_pending', 'refund_initiated', 'release_blocked', [], ['g_source_account_known']),
 
   transition('refunding', 'payout_result', 'refunded', [], [], 'settled'),
@@ -626,21 +647,68 @@ function moneyForTemplate(
   }
 }
 
+/**
+ * **Периметр резерва** — состояния, в которых реквизиты получателя заперты
+ * (`CORE.md` Ф15, STATE-MACHINES.md §1.5).
+ *
+ * Правило одно и выражено **принадлежностью периметру**, а не перечнем
+ * разрешённых целей у одного ребра: блокировка ставится на входе в `reserved`
+ * и снимается ровно тогда, когда резерв кончается, — то есть когда транш
+ * уходит из периметра наружу.
+ *
+ * `frozen` внутри периметра с самого начала и намеренно: заморозка — не уход
+ * из резерва, а его приостановка, и без этого `reserved → frozen` снимал бы
+ * блокировку на всё время расследования — заморозка стала бы способом сбросить
+ * периметр Ф15, то есть защита превратилась бы в дыру.
+ *
+ * **`release_blocked` внутри периметра по той же причине, и это исправление.**
+ * Прежде правило звучало «снимаем, если уходим не в выплату и не в заморозку»
+ * (STATE-MACHINES.md §1.5), и разбор расхождения снимал блокировку. Разбор —
+ * такая же приостановка резерва, как заморозка: деньги остаются запертыми в
+ * файле транша (расфиксации на этом ребре нет), транш остаётся на пути
+ * выплаты и возвращается с него в `release_pending` штатным
+ * `approval_added ∧ расхождение снято` (§1.4). Снятие блокировки стоило двух
+ * бед сразу:
+ *
+ *  1. **Задокументированный выход становился недостижимым.** На ребре
+ *     `release_pending --release_authorized--> paying_out` стоит
+ *     `g_beneficiary_locked`, а запереть реквизиты обратно нечем: единственное
+ *     намерение `lock_beneficiary` — вход в `reserved`, а вернуться туда из
+ *     `release_blocked` можно только через `collected` по `reserve_expired`,
+ *     чьи часы для `release_blocked` молчат (`schedule.ts`,
+ *     `DUE_TRANCHE_EVENTS.release_blocked = null`). Транш с полным файлом
+ *     доказательств и снятым расхождением упирался в один-единственный
+ *     провалившийся guard, и довести его до выплаты можно было только
+ *     `patchFacts` — чёрным ходом, который `ACTORS.md` §5.1 требует убрать.
+ *  2. **Периметр Ф15 открывался на всё время разбора.** Пока реквизиты не
+ *     заперты, `applyBeneficiaryChange` (`packages/compliance`) не требует ни
+ *     охлаждения, ни уведомления сторон, ни второго утверждения — то есть
+ *     разбор расхождения оказывался самым дешёвым способом сменить реквизиты
+ *     профинансированной сделки. Это ровно та же дыра, которую §1.5 уже
+ *     закрыл у заморозки.
+ *
+ * Обратная сторона правила: уход из `release_blocked` **наружу** периметра —
+ * в `collected` по откату резерва, в `refund_pending`, в `written_off` — теперь
+ * блокировку снимает, чего прежде не делал ни один из этих переходов. Резерва
+ * после них нет, держать периметр не за что.
+ */
+const BENEFICIARY_LOCK_PERIMETER: readonly TrancheStatus[] = Object.freeze([
+  'reserved',
+  'release_blocked',
+  'release_pending',
+  'paying_out',
+  'paid_out',
+  'frozen',
+]);
+
 function exitIntents(from: TrancheStatus, to: TrancheStatus): readonly Intent[] {
-  // §1.5: блокировка реквизитов снимается, только если уходим не в выплату.
-  //
-  // `frozen` в списке «блокировка сохраняется» намеренно. Заморозка — не уход
-  // из резерва, а его приостановка, и без этой строки переход
-  // `reserved → frozen` снимал бы блокировку реквизитов на всё время
-  // расследования: заморозка стала бы способом сбросить периметр Ф15, то есть
-  // защита превратилась бы в дыру.
-  const keepsBeneficiaryLock: readonly TrancheStatus[] = [
-    'release_pending',
-    'paying_out',
-    'paid_out',
-    'frozen',
-  ];
-  if (from === 'reserved' && !keepsBeneficiaryLock.includes(to)) {
+  // ⚠ Разморозка сюда не доходит: её ветка в редьюсере возвращает одно
+  // намерение восстановления часов и намерения перехода отбрасывает (§1.4.1,
+  // «разморозка не порождает намерений входа целевого состояния»). Поэтому
+  // выход `frozen → refund_pending` блокировку не снимает — как и до этой
+  // правки. Оставшаяся запертой блокировка ужесточает, а не ослабляет, и
+  // менять поведение разморозки этим батчем мы не стали.
+  if (BENEFICIARY_LOCK_PERIMETER.includes(from) && !BENEFICIARY_LOCK_PERIMETER.includes(to)) {
     return [{ type: 'unlock_beneficiary' }];
   }
   return [];
@@ -817,6 +885,32 @@ function entryIntents(
         { type: 'close_tranche' },
       ];
     }
+    /**
+     * Возврат отправлен в банк — и у него, как у расчёта, есть **своё
+     * поручение со своим ключом**.
+     *
+     * Ветки здесь не было вовсе, и это была не забытая мелочь, а отсутствие
+     * дороги к уже построенному механизму. Таблица переходов ребро
+     * `refunding --payout_result(settled)--> refunded` требует, `STATE-MACHINES.md`
+     * §2.2 требует буквально, а положить ответ банка приложению было некуда:
+     * записи поручения у возврата не существовало, и исход уезжал последней
+     * выплате транша. Если та уже терминальна (банк отклонил расчёт — ровно тот
+     * путь, которым транш и попадает в возврат), подтверждение возврата
+     * отвергалось как `domain.state.terminal`, и транш оставался в `refunding`
+     * навсегда: деньги покупателя не уходили ни ему, ни куда-либо ещё.
+     *
+     * Ключ — `refundIdempotencyKey`, а не `payoutIdempotencyKey`: это другой
+     * перевод другому получателю, и общий с расчётом ключ дал бы банку право
+     * погасить его как повтор (`ids.ts`).
+     *
+     * Само движение денег остаётся на входе в `refunded`, двумя записями
+     * (`refund_unlock` и `refund_external`): до ответа банка неизвестно, ушли
+     * ли деньги, и отвергнутый возврат не оставляет в журнале ничего.
+     */
+    case 'refunding':
+      return [
+        { type: 'enqueue_outbound_refund', idempotencyKey: refundIdempotencyKey(context.trancheId) },
+      ];
     case 'refunded':
       return [
         /**

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { toBeneficiaryLock } from '@sdelka/compliance';
 import { accountBalance, bankNominal, clientFreeAccount, clientLockedAccount } from '@sdelka/ledger';
 import { STAFF } from './support/actors';
 import {
@@ -79,13 +78,11 @@ describe('пакет доказательств', () => {
     world = applyTrancheEvent(world, TRANCHE, { type: 'approval_added', userId: 'approver-1' }, OPTIONS).world;
     expect(trancheStatusOf(world, TRANCHE)).toBe('release_pending');
 
-    // Уход из резерва снял блокировку реквизитов — правило соседнее и здесь ни
-    // при чём; реквизиты запираются обратно, чтобы отказ остался ровно один и
-    // именно про выписку. Утверждения набираются по той же причине.
-    const beneficiary = trancheOf(world, TRANCHE).beneficiary;
-    world = patchFacts(world, TRANCHE, {
-      beneficiary: toBeneficiaryLock({ ...beneficiary, locked: true }),
-    });
+    // Разбор блокировку реквизитов не снимает (§1.5: `release_blocked` внутри
+    // периметра резерва), поэтому отказ остаётся ровно один и именно про
+    // выписку — без восстановления блокировки чёрным ходом, которое стояло
+    // здесь прежде. Утверждения набираются по той же причине.
+    expect(trancheOf(world, TRANCHE).beneficiary.locked).toBe(true);
     world = approve(world, TRANCHE, STAFF.controller);
     world = approve(world, TRANCHE, STAFF.head);
     const refusedAgain = rejectTrancheEvent(world, TRANCHE, { type: 'release_authorized' });
