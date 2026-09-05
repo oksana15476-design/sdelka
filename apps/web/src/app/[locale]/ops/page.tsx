@@ -97,8 +97,10 @@ export default async function OpsPage({
           <Eyebrow l={l} labelKey="ops.metric.withoutHuman" />
           <span className="metric__value metric__value--ok">{formatPercent(locale, ops.automatedShare)}</span>
           <span className="metric__note">
-            {t(l.dict, 'ops.metric.withoutHuman.note', {
-              of: formatNumber(locale, ops.automatedOf),
+            {/* Существительное согласуется с первым числом, а не стоит в
+                одной форме навсегда: «1 сделки из 12» — не сокращение, а
+                ошибка. Форму выбирает `Intl.PluralRules`. */}
+            {plural(l.dict, locale, 'ops.metric.withoutHuman.note', ops.automatedOf, {
               total: formatNumber(locale, ops.automatedTotal),
             })}
           </span>

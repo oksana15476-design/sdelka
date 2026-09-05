@@ -184,6 +184,35 @@ export function formatBasisPoints(locale: Locale, bp: number): string {
   }).format(bp / 10_000);
 }
 
+/**
+ * Площадь объекта из выписки реестра.
+ *
+ * Приходит десятичной **строкой** и строкой же уходит в `Intl`: числом её
+ * форматировать нельзя по той же причине, по которой нельзя деньги, — выписка
+ * различает `92.0` и `92`, а `Number` их склеивает. Печаталась она до этого без
+ * `Intl` вовсе, и на карточке сходились два десятичных разделителя: площадь с
+ * точкой рядом с суммой, у которой запятая.
+ *
+ * Единицы измерения `Intl` здесь не даёт: квадратного метра нет в перечне
+ * допустимых единиц `Intl.NumberFormat` (`Intl.supportedValuesOf('unit')` знает
+ * только `meter`, `centimeter`, `kilometer`, `millimeter`). Поэтому
+ * форматируется одно число, а обозначение единицы — вопрос подписи поля и
+ * решается словарём, а не подстановкой в код.
+ *
+ * Два знака — потолок, один — пол: выписка даёт площадь с одним знаком после
+ * запятой, и `92,0` обязано остаться `92,0`, иначе расхождение `92.0` против
+ * `89.6` печатается как «92» против «89,6» и читается опечаткой.
+ */
+export function formatArea(locale: Locale, area: string): string {
+  return formatDecimalString(
+    new Intl.NumberFormat(LOCALE_TAG[locale], {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 2,
+    }),
+    area,
+  );
+}
+
 /** Месяц периода — названием, как его печатает локаль, а не номером. */
 export function formatMonth(locale: Locale, at: number): string {
   return new Intl.DateTimeFormat(LOCALE_TAG[locale], {

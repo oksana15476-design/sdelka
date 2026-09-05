@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { notFound } from 'next/navigation';
 import { isLocale } from '@/i18n/locales';
-import { dictionaryOf, t } from '@/i18n/translate';
+import { dictionaryOf, plural, t } from '@/i18n/translate';
 import { formatNumber, formatRatio } from '@/i18n/format';
 import { getOpsQueue, now } from '@/fixtures/store';
 import { getReconciliation } from '@/fixtures/screens';
@@ -118,7 +118,12 @@ export default async function DutyPage({
             {formatNumber(locale, ops.withoutDeadline)}
           </span>
           <span className="metric__note">
-            {t(l.dict, 'ops.duty.withoutDeadline.note', { total: formatNumber(locale, ops.liveDeals) })}
+            {/* Подпись согласуется с числом, которое стоит над ней в
+                `.metric__value`: «1 сделок без дедлайна» — то самое место, где
+                число и слово живут в разных узлах и расходятся молча. */}
+            {plural(l.dict, locale, 'ops.duty.withoutDeadline.note', ops.withoutDeadline, {
+              total: formatNumber(locale, ops.liveDeals),
+            })}
           </span>
         </div>
       </div>

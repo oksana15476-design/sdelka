@@ -33,3 +33,21 @@ export const LOCALE_DIRECTION: Readonly<Record<Locale, 'ltr' | 'rtl'>> = Object.
 export function isLocale(value: string): value is Locale {
   return (LOCALES as readonly string[]).includes(value);
 }
+
+/**
+ * Тот же экран на другом языке.
+ *
+ * Переключатель обязан менять **язык**, а не место: клиент, стоящий на разборе
+ * расхождения по своей сделке, после смены языка обязан остаться на нём.
+ * Прежняя ссылка вела на `/{язык}` и выбрасывала на список сделок — то есть
+ * переключатель работал ещё и кнопкой «домой», о чём нигде не сказано.
+ *
+ * Язык живёт первым сегментом маршрута (`middleware.ts`), поэтому подмена —
+ * это подмена одного сегмента. Если первого сегмента нет или он не язык, вести
+ * некуда, кроме корня: путь без языка до каркаса не доходит вовсе.
+ */
+export function localePath(path: string, locale: Locale): string {
+  const first = path.split('/')[1] ?? '';
+  if (!isLocale(first)) return `/${locale}`;
+  return `/${locale}${path.slice(first.length + 1)}`;
+}

@@ -10,6 +10,7 @@ import { type CurrencyCode, type Money, money } from '@sdelka/money';
 import { FIXTURE_NOW } from './engine';
 import { type DealSnapshot, getDeal } from './store';
 import { FIXTURE_DATA } from './scenarios';
+import type { LabelledGuardId } from '@/ui/guards';
 
 /**
  * Данные экранов, которых нет в автоматах домена: пополнение, вывод, документы,
@@ -353,9 +354,15 @@ export interface DecisionView {
   readonly approvalsRequired: number;
   readonly approvalsCollected: number;
   readonly preparedBySelf: boolean;
-  /** Имена guard'ов из `packages/domain/src/guards.ts`, буква в букву. */
-  readonly failedGuards: readonly string[];
-  readonly passedGuards: readonly string[];
+  /**
+   * Имена guard'ов из `packages/domain/src/guards.ts`, буква в букву.
+   *
+   * Тип — объединение домена, а не `string`: экран подписывает каждое имя из
+   * словаря, и имя, которого словарь не знает, обязано ловиться сборкой, а не
+   * печататься оператору меткой `[ops.guard.…]`.
+   */
+  readonly failedGuards: readonly LabelledGuardId[];
+  readonly passedGuards: readonly LabelledGuardId[];
 }
 
 export async function getDecision(): Promise<DecisionView | null> {

@@ -4,7 +4,7 @@ import { money } from '@sdelka/money';
 import type { DealSnapshot } from '@/fixtures/store';
 import { type RequiredAction, requiredAction } from '@/view/action';
 import { buildTimeline, stateDate } from '@/view/timeline';
-import { formatDate, formatDateTime, formatMoney, formatRate } from '@/i18n/format';
+import { formatArea, formatDate, formatDateTime, formatMoney, formatNumber, formatRate } from '@/i18n/format';
 import { t } from '@/i18n/translate';
 import type { L10n } from './l10n';
 import {
@@ -560,7 +560,7 @@ export function PropertyAndParties({ l, deal, viewerZone }: DealProps): ReactNod
               <span className="mono">{deal.property.cadastral}</span>
             </Row>
             <Row l={l} labelKey="deal.property.area">
-              <span className="mono">{deal.property.areaRegistry}</span>
+              <span className="mono">{formatArea(l.locale, deal.property.areaRegistry)}</span>
             </Row>
             <Row l={l} labelKey="deal.property.owner">
               <span>{deal.property.ownerRegistry}</span>
@@ -608,8 +608,8 @@ export function PropertyAndParties({ l, deal, viewerZone }: DealProps): ReactNod
             <tbody>
               <tr>
                 <th scope="row">{t(l.dict, 'deal.property.area')}</th>
-                <td>{deal.property.areaContract}</td>
-                <td className="compare__mismatch">{deal.property.areaRegistry}</td>
+                <td className="mono">{formatArea(l.locale, deal.property.areaContract)}</td>
+                <td className="mono compare__mismatch">{formatArea(l.locale, deal.property.areaRegistry)}</td>
               </tr>
             </tbody>
           </table>
@@ -641,8 +641,8 @@ export function AssuranceLadder({ l, deal }: { readonly l: L10n; readonly deal: 
       </div>
       <p className="visually-hidden">
         {t(l.dict, 'assurance.ladder.a11y', {
-          level: String(currentIndex),
-          total: String(levels.length - 1),
+          level: formatNumber(l.locale, currentIndex),
+          total: formatNumber(l.locale, levels.length - 1),
           name: t(l.dict, `assurance.level.${deal.assurance}`),
         })}
       </p>
@@ -663,8 +663,8 @@ export function AssuranceLadder({ l, deal }: { readonly l: L10n; readonly deal: 
       </p>
       <p className="faint" style={{ marginBlockStart: 'var(--s-2)' }}>
         {t(l.dict, 'assurance.ladder.note', {
-          level: String(currentIndex),
-          total: String(levels.length - 1),
+          level: formatNumber(l.locale, currentIndex),
+          total: formatNumber(l.locale, levels.length - 1),
         })}
       </p>
     </section>

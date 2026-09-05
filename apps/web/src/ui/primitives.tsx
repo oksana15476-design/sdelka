@@ -9,7 +9,7 @@ import {
   formatSignedMoney,
   formatZoneName,
 } from '@/i18n/format';
-import { t } from '@/i18n/translate';
+import { type MessageParams, plural, t } from '@/i18n/translate';
 import type { L10n } from './l10n';
 import type { DeadlineView } from '@/fixtures/store';
 
@@ -98,16 +98,32 @@ export function Row({
   children,
   total = false,
   params,
+  labelCount,
 }: {
   readonly labelKey: string;
   readonly l: L10n;
   readonly children: ReactNode;
   readonly total?: boolean;
-  readonly params?: Readonly<Record<string, string | number>>;
+  readonly params?: MessageParams;
+  /**
+   * Число, с которым согласуется подпись строки. Задано — подпись берётся
+   * формой множественного числа (`plural`), то есть у ключа существуют
+   * варианты `.one/.few/.many/.other`, и выбирает их `Intl.PluralRules`.
+   *
+   * Понадобилось это ровно там, где подпись содержит счётное существительное:
+   * «Средний чек по {count} завершённым» на единице читается «по 1
+   * завершённым». В русском форм четыре, в грузинском одна, и выбирать их
+   * условием в коде запрещено (`CLAUDE.md`, «Три языка»).
+   */
+  readonly labelCount?: number;
 }): ReactNode {
+  const label =
+    labelCount === undefined
+      ? t(l.dict, labelKey, params)
+      : plural(l.dict, l.locale, labelKey, labelCount, params);
   return (
     <div className={`row${total ? ' row--total' : ''}`}>
-      <span className="row__key">{t(l.dict, labelKey, params)}</span>
+      <span className="row__key">{label}</span>
       <span className="row__value">{children}</span>
     </div>
   );
@@ -167,7 +183,7 @@ export function LegalSlot({
   readonly l: L10n;
   readonly bodyKey: string;
   readonly labelKey?: string;
-  readonly params?: Readonly<Record<string, string | number>>;
+  readonly params?: MessageParams;
 }): ReactNode {
   // Второй рубеж: слот без строки в словаре молчит, а не печатает `[ключ]`.
   if (legalSlotPending(bodyKey) || l.dict[bodyKey] === undefined) return null;
@@ -251,7 +267,7 @@ export function Banner({
   readonly titleKey: string;
   readonly bodyKey: string;
   readonly l: L10n;
-  readonly params?: Readonly<Record<string, string | number>>;
+  readonly params?: MessageParams;
 }): ReactNode {
   const dotTone: StateTone = tone === 'critical' ? 'danger' : tone === 'warn' ? 'warn' : 'info';
   return (
@@ -363,7 +379,7 @@ export function BlockedAction({
   readonly l: L10n;
   readonly labelKey: string;
   readonly reasonKey: string;
-  readonly params?: Readonly<Record<string, string | number>>;
+  readonly params?: MessageParams;
 }): ReactNode {
   return (
     <div className="blocked">

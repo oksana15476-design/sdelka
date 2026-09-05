@@ -112,11 +112,10 @@ export default async function OwnerSummaryPage({
                   <Amount l={l} value={slice.margin} size="lead" signed />
                 </>
               </Row>
-              <Row
-                labelKey="owner.row.averageDeal"
-                l={l}
-                params={{ count: formatNumber(locale, slice.settledDeals) }}
-              >
+              {/* Форму подписи выбирает локаль, а не код: «по 1 завершённой»,
+                  «по 2 завершённым», «по 5 завершённым» — три разные формы в
+                  русском и одна в грузинском. */}
+              <Row labelKey="owner.row.averageDeal" l={l} labelCount={slice.settledDeals}>
                 {slice.averageDeal === null ? (
                   <span className="muted">{t(l.dict, 'owner.averageDeal.none')}</span>
                 ) : (

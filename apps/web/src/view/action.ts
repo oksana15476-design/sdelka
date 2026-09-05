@@ -34,7 +34,13 @@ export function requiredAction(deal: DealSnapshot): RequiredAction {
     return {
       kind: 'blocked',
       titleKey: key(deal, 'mismatch.title'),
-      ctaKey: key(deal, 'topup.cta'),
+      // Заперто **своё** действие роли, а не чужое. Ветка расхождения роль не
+      // различала, и у получающей стороны подпись собиралась ключом
+      // `deal.receiving.action.topup.cta`, которого нет ни в одном из трёх
+      // словарей: на экране печаталась метка `[deal.receiving.action.topup.cta]`.
+      // Пополнения получающая сторона не делает вовсе — её действие здесь одно
+      // и то же во всех состояниях: подача документов на регистрацию.
+      ctaKey: key(deal, paying ? 'topup.cta' : 'submitDocuments.cta'),
       secondaryCtaKey: null,
       reasonKey: key(deal, 'mismatch.reason'),
     };

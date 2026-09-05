@@ -402,13 +402,46 @@ export interface AccountRecord {
 /** Состояния кнопки вывода `W-01…W-07` (`SCREENS.md` §3.5). */
 export type WithdrawState = 'W-01' | 'W-02' | 'W-03' | 'W-04' | 'W-05' | 'W-06';
 
+/**
+ * Вид записи журнала → подпись движения в выписке.
+ *
+ * ## Что здесь обязано быть, а что не может
+ *
+ * Выписка показывает движение **по счёту клиента**: ниже по коду запись
+ * попадает в неё, только если у неё есть проводка по `client:{клиент}:free`
+ * или `client:{клиент}:tranche:…`. Значит, полнота карты меряется не числом
+ * видов записей в `packages/ledger/src/entries.ts` (их восемнадцать), а числом
+ * тех из них, у которых такая проводка есть. Их одиннадцать, и все
+ * одиннадцать перечислены здесь.
+ *
+ * Прежде их было шесть, а пять — `overpayment`, `tranche_settlement_reversed`,
+ * `unclaimed`, `fx_executed`, `shortfall_absorbed` — падали в `account.op.other`
+ * («Движение по счёту»). Среди них две записи, которые клиент обязан узнать
+ * поимённо: отмена уже показанного расчёта и списание невостребованных средств.
+ * Строка «Движение по счёту» на месте списания — это деньги, ушедшие со счёта
+ * без названной причины.
+ *
+ * Семь оставшихся видов до выписки не доходят по построению и подписи не
+ * требуют: `fx_sent_for_conversion` и `fx_received` двигают счёт расчётов по
+ * обмену и кастодиана, `shortfall_funded` — деньги платформы, `write_off_transit_arrived`
+ * — транзит, `fee_accrued`, `fee_accrual_reversed` и `fee_received` — счета
+ * комиссии (красная линия №2: комиссия на клиентских средствах не лежит).
+ *
+ * `account.op.other` остаётся, но теперь это ветка «журнал научился новому
+ * виду записи», а не половина выписки.
+ */
 const MEMO_LABEL: Readonly<Record<string, string>> = Object.freeze({
   'ledger.entry.client_top_up': 'account.op.topup',
+  'ledger.entry.suspense_identified': 'account.op.identified',
   'ledger.entry.locked_for_tranche': 'account.op.reserve',
   'ledger.entry.unlocked_to_client': 'account.op.unreserve',
+  'ledger.entry.overpayment': 'account.op.overpayment',
   'ledger.entry.tranche_settled': 'account.op.settle',
+  'ledger.entry.tranche_settlement_reversed': 'account.op.settleReversed',
   'ledger.entry.refund_to_source': 'account.op.withdraw',
-  'ledger.entry.suspense_identified': 'account.op.identified',
+  'ledger.entry.unclaimed': 'account.op.unclaimed',
+  'ledger.entry.fx_executed': 'account.op.converted',
+  'ledger.entry.shortfall_absorbed': 'account.op.shortfallCovered',
 });
 
 export async function getAccount(): Promise<AccountView> {

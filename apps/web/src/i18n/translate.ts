@@ -20,7 +20,16 @@ export function dictionaryOf(locale: Locale): Dictionary {
   return DICTIONARIES[locale];
 }
 
-export type MessageParams = Readonly<Record<string, string | number>>;
+/**
+ * Значения подстановки — **только строки**.
+ *
+ * Число здесь запрещено типом, а не договорённостью: `String(1000)` даёт
+ * `1000` на всех трёх языках, тогда как разряды в них группируются
+ * по-разному, а грузинская локаль ниже пяти знаков не группирует вовсе. Любое
+ * число обязано пройти через `i18n/format.ts` до подстановки — там `Intl`, и
+ * другого места для форматирования в проекте нет.
+ */
+export type MessageParams = Readonly<Record<string, string>>;
 
 /**
  * Подстановка значений в строку словаря.
@@ -59,5 +68,11 @@ export function plural(
   const category = new Intl.PluralRules(LOCALE_TAG[locale]).select(count);
   const exact = `${key}.${category}`;
   const chosen = dict[exact] === undefined ? `${key}.other` : exact;
-  return t(dict, chosen, { ...params, count });
+  // Форму выбирает `Intl.PluralRules`, а само число печатает
+  // `Intl.NumberFormat`: подставлять его приведением к строке значило бы
+  // выбрать форму по правилам локали и тут же напечатать число мимо них.
+  return t(dict, chosen, {
+    ...params,
+    count: new Intl.NumberFormat(LOCALE_TAG[locale]).format(count),
+  });
 }

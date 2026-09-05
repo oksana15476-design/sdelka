@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
+import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import { notFound } from 'next/navigation';
-import { type Locale, LOCALE_DIRECTION, LOCALES, isLocale } from '@/i18n/locales';
-import { dictionaryOf } from '@/i18n/translate';
+import { type Locale, DEFAULT_LOCALE, LOCALE_DIRECTION, LOCALES, isLocale } from '@/i18n/locales';
+import { dictionaryOf, t } from '@/i18n/translate';
 import { AppShell } from '@/ui/chrome';
 import { viewerCard } from '@/fixtures/store';
 import { getNotifications, unreadCount } from '@/fixtures/screens';
@@ -12,9 +13,27 @@ export function generateStaticParams(): { locale: Locale }[] {
   return LOCALES.map((locale) => ({ locale }));
 }
 
-export const metadata = {
-  title: 'Reestra',
-};
+/**
+ * Заголовок вкладки — из словаря, а не из литерала.
+ *
+ * Он печатается в четырёх местах, которые язык обязан различать: вкладка
+ * браузера, закладка, история и превью при отправке ссылки. Литерал `Reestra`
+ * давал латиницу и на грузинской версии, хотя в словаре у `app.brand` стоит
+ * `რეესტრა`. Правило «ни одной строки текста в коде» на `metadata`
+ * распространяется ровно так же, как на разметку.
+ */
+export async function generateMetadata({
+  params,
+}: {
+  readonly params: Promise<{ readonly locale: string }>;
+}): Promise<Metadata> {
+  const { locale } = await params;
+  const dict = dictionaryOf(isLocale(locale) ? locale : DEFAULT_LOCALE);
+  return {
+    title: { default: t(dict, 'app.brand'), template: `%s · ${t(dict, 'app.brand')}` },
+    description: t(dict, 'app.tagline'),
+  };
+}
 
 /**
  * Корневой каркас. Один кабинет на клиента: ни списка режимов, ни выбора роли —

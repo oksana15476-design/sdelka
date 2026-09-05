@@ -147,4 +147,22 @@
    */
   --font-sans: 'Manrope', 'DejaVu Sans', 'Noto Sans', 'Noto Sans Georgian', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', 'DejaVu Sans Mono', 'Noto Sans Georgian', ui-monospace, monospace;
+
+  /*
+   * Знак направления письма: `1` при письме слева направо, `-1` — справа
+   * налево. Единственный токен, ради которого он существует, — `transform`.
+   *
+   * Отступы, границы и выравнивание в этом проекте заданы логическими
+   * свойствами (`inset-inline-*`, `padding-inline`, `border-inline-end`,
+   * `text-align: start`), и направление они разворачивают сами. У `transform`
+   * логического аналога в CSS нет ни одного: `translateX` всегда физический,
+   * поэтому направление сдвига выражено множителем, а не переписанным
+   * значением. Так задел под правостороннее письмо остаётся значением, как и
+   * `LOCALE_DIRECTION` в `i18n/locales.ts`, а не обещанием в комментарии.
+   */
+  --dir: 1;
+}
+
+[dir='rtl'] {
+  --dir: -1;
 }

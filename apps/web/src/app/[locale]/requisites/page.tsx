@@ -2,11 +2,18 @@ import type { ReactNode } from 'react';
 import { notFound } from 'next/navigation';
 import { isLocale } from '@/i18n/locales';
 import { dictionaryOf, t } from '@/i18n/translate';
-import { formatDate, formatDateTime, formatRemaining } from '@/i18n/format';
+import { formatDate, formatDateTime, formatNumber, formatRemaining } from '@/i18n/format';
 import { type PerimeterState, PERIMETER_STATES, getRequisites, now, viewerTimeZone } from '@/fixtures/store';
 import { beneficiaryFacts } from '@/fixtures/screens';
 import { OPERATIONS_TIME_ZONE } from '@/fixtures/engine';
 import { Badge, BlockedAction, Eyebrow, Row, SecurityBlock, StatusDot } from '@/ui/primitives';
+
+/**
+ * Окно ожидания при смене реквизитов, часами. Числом в разметке оно стояло
+ * литералом `48`; здесь у него есть имя, но не источник: доменной константы
+ * под это окно в дереве нет ни одной (см. отчёт, пометка [открыто]).
+ */
+const REQUISITE_CHANGE_DELAY_HOURS = 48;
 
 function perimeterOf(value: string | undefined): PerimeterState {
   return PERIMETER_STATES.find((state) => state === value) ?? 'P-07';
@@ -81,7 +88,7 @@ export default async function RequisitesPage({
           <p className="state-card__body">
             {t(l.dict, `requisites.state.${state}.body`, {
               deal: view.lockedByDealRef ?? '',
-              attempts: view.attemptsLeft,
+              attempts: formatNumber(locale, view.attemptsLeft),
             })}
           </p>
         </div>
@@ -121,7 +128,7 @@ export default async function RequisitesPage({
           {t(l.dict, 'requisites.why.body')}
         </p>
         <p className="muted" style={{ marginBlockStart: 'var(--s-2)' }}>
-          {t(l.dict, 'requisites.why.symmetry', { hours: 48 })}
+          {t(l.dict, 'requisites.why.symmetry', { hours: formatNumber(locale, REQUISITE_CHANGE_DELAY_HOURS) })}
         </p>
         <p className="faint" style={{ marginBlockStart: 'var(--s-2)' }}>
           {t(l.dict, 'requisites.why.note')}
@@ -194,7 +201,7 @@ export default async function RequisitesPage({
             <li className="muted">{t(l.dict, 'requisites.test.step.enter')}</li>
           </ol>
           <p className="faint" aria-live="polite" style={{ marginBlockStart: 'var(--s-3)' }}>
-            {t(l.dict, 'requisites.test.attemptsLeft', { attempts: view.attemptsLeft })}
+            {t(l.dict, 'requisites.test.attemptsLeft', { attempts: formatNumber(locale, view.attemptsLeft) })}
           </p>
           <p className="muted" style={{ marginBlockStart: 'var(--s-2)' }}>
             {t(l.dict, 'requisites.test.notArrived')}

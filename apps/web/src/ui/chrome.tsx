@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { LOCALES } from '@/i18n/locales';
+import { LOCALES, localePath } from '@/i18n/locales';
+import { formatNumber } from '@/i18n/format';
 import { t } from '@/i18n/translate';
 import type { L10n } from './l10n';
 
@@ -152,14 +153,19 @@ export function AppShell({
               >
                 <span>{t(l.dict, item.key)}</span>
                 {item.key === 'nav.notifications' && unread > 0 ? (
-                  <span className="nav__count">{unread}</span>
+                  // Число — через локаль, а не через приведение к строке:
+                  // разряды у трёх языков группируются по-разному.
+                  <span className="nav__count">{formatNumber(l.locale, unread)}</span>
                 ) : null}
               </a>
             ))}
           </div>
 
           <div className="side__foot">
-            <div className="langs">
+            {/* Группа с подписью, а не три ссылки подряд: `aria-labelledby`
+                без роли не подписывает ничего, и скрытая подпись «Язык
+                интерфейса» до сих пор существовала только в разметке. */}
+            <div className="langs" role="group" aria-labelledby="lang-label">
               <span className="visually-hidden" id="lang-label">
                 {t(l.dict, 'app.language')}
               </span>
@@ -167,7 +173,7 @@ export function AppShell({
                 <a
                   className="langs__item"
                   key={locale}
-                  href={`/${locale}`}
+                  href={localePath(path, locale)}
                   hrefLang={locale}
                   aria-current={locale === l.locale ? 'true' : undefined}
                 >

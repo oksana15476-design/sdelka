@@ -8,6 +8,7 @@ import {
   formatRemaining,
 } from '@/i18n/format';
 import { t } from '@/i18n/translate';
+import { GUARD_LABEL_KEY, type LabelledGuardId } from './guards';
 import type { CaseFact, DeadlineView, OpsTask } from '@/fixtures/store';
 import type { BreakItem, FieldMatch } from '@/fixtures/screens';
 import { type StateTone, MONEY_STATE_TONE } from '@/view/money-state';
@@ -182,7 +183,7 @@ export function QueueShelf({
         {/* Счётчик — только на широком экране. На телефоне консоль показывает
             одну задачу из полки (утверждение выплаты), и число «шесть» над
             одной карточкой было бы неправдой, а не сокращением. */}
-        <span className="mono faint wide-only">{count}</span>
+        <span className="mono faint wide-only">{formatNumber(l.locale, count)}</span>
       </div>
       <p className="muted">{t(l.dict, noteKey)}</p>
       <ul className="ops-grid">{children}</ul>
@@ -489,6 +490,21 @@ export function EvidencePackage({
  * Чего не хватает, чтобы задачу закрыть. Причины названы именами проверок из
  * `packages/domain/src/guards.ts`: оператор ищет не «почему серо», а какое
  * условие не проходит.
+ *
+ * ## Подпись — **имя условия**, а не приговор
+ *
+ * Один и тот же ключ подписывает пункт и в пройденных, и в непройденных: список
+ * здесь один, разведён он точкой состояния. Подпись, написанная отрицанием
+ * («Второе утверждение не набрано»), в пройденных читается наоборот — зелёная
+ * точка рядом с «не набрано». Поэтому все подписи — нейтральные названия
+ * условия, а исход несут точка и её текстовая пара.
+ *
+ * ## Исход — не одним цветом
+ *
+ * `StatusDot` объявлен `aria-hidden`, то есть до правки пройденное от
+ * непройденного отличалось **только цветом**: ни текста, ни формы. Рядом с
+ * каждой точкой теперь стоит скрытая подпись исхода — то же правило, по
+ * которому статус нигде в проекте не передаётся одним цветом (`tokens.css`).
  */
 export function GuardList({
   l,
@@ -496,27 +512,24 @@ export function GuardList({
   passed,
 }: {
   readonly l: L10n;
-  readonly failed: readonly string[];
-  readonly passed: readonly string[];
+  readonly failed: readonly LabelledGuardId[];
+  readonly passed: readonly LabelledGuardId[];
 }): ReactNode {
+  const item = (guard: LabelledGuardId, ok: boolean): ReactNode => (
+    <p className="security__item" key={guard}>
+      <StatusDot tone={ok ? 'ok' : 'danger'} />
+      <span>
+        <span className="visually-hidden">
+          {t(l.dict, ok ? 'ops.guard.state.passed' : 'ops.guard.state.failed')}
+        </span>
+        {t(l.dict, GUARD_LABEL_KEY[guard])} <span className="mono">{guard}</span>
+      </span>
+    </p>
+  );
   return (
     <div className="security__list">
-      {failed.map((guard) => (
-        <p className="security__item" key={guard}>
-          <StatusDot tone="danger" />
-          <span>
-            {t(l.dict, `ops.guard.${guard}`)} <span className="mono">{guard}</span>
-          </span>
-        </p>
-      ))}
-      {passed.map((guard) => (
-        <p className="security__item" key={guard}>
-          <StatusDot tone="ok" />
-          <span>
-            {t(l.dict, `ops.guard.${guard}`)} <span className="mono">{guard}</span>
-          </span>
-        </p>
-      ))}
+      {failed.map((guard) => item(guard, false))}
+      {passed.map((guard) => item(guard, true))}
     </div>
   );
 }
