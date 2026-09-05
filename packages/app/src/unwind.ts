@@ -141,15 +141,20 @@ function unwindEvent(review: UnwindReview): DealEvent {
  * Деньги не двигаются, состояние сделки не меняется: заявка — это заявление о
  * намерении, а не переход. Шаг всё равно запечатывается: «инварианты после
  * каждого шага» не знает исключений.
+ *
+ * Полномочие — `prepare_settlement` (`ACTORS.md` §5.1.1, Ф9): поднять разбор
+ * значит **подготовить** откат, а не разрешить его. Разрешают двое и другим
+ * полномочием — `approve_lift_block`, связанным Н1, Н4, Н5 и Н6 сразу, и
+ * заявитель среди них быть не может.
  */
 export function requestUnwind(
   world: World,
   dealId: string,
   request: UnwindRequest,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'prepare_settlement'>,
   options: TrancheEventOptions,
 ): World {
-  assertOrigin(['create_deal'], authority, 'unwind.request');
+  assertOrigin(['prepare_settlement'], authority, 'unwind.request');
   const deal = dealOf(world, dealId);
   if (deal.unwindReview !== null) {
     // Вторая заявка по той же сделке — это не второй разбор, а потерянный

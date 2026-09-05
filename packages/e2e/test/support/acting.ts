@@ -147,7 +147,7 @@ export function patchFacts(
   patch: Partial<TrancheFacts>,
   as: Actor = STAFF.operator,
 ): World {
-  const step = acting(world, 'create_deal', subjectOfTranche(world, trancheId), as);
+  const step = acting(world, 'patch_tranche_facts', subjectOfTranche(world, trancheId), as);
   return appPatchFacts(step.world, trancheId, patch, step.authority);
 }
 
@@ -160,11 +160,18 @@ export function approve(world: World, trancheId: string, as: Actor = STAFF.contr
 /* Деньги помимо автомата                                                    */
 /* ------------------------------------------------------------------------- */
 
-function platform(world: World, as: Actor): { world: World; authority: ReturnType<typeof acting<'create_deal'>>['authority'] } {
-  // Предмет «платформа»: шаг не привязан ни к сделке, ни к траншу. Фактов у
-  // него нет, и полномочие, связанное несовместимостью на фактах, с таким
-  // предметом не выдалось бы вовсе — `create_deal` ни одной не связан.
-  return acting(world, 'create_deal', PLATFORM_SUBJECT, as);
+/**
+ * Шаг с предметом «платформа»: он не привязан ни к сделке, ни к траншу. Фактов
+ * у такого предмета нет, и полномочие, связанное несовместимостью **на
+ * фактах**, с ним не выдалось бы вовсе — поэтому ни у одного из пяти полномочий
+ * механики расчёта таких несовместимостей нет (`ACTORS.md` §5.1.1).
+ */
+function platform<C extends Capability>(
+  world: World,
+  capability: C,
+  as: Actor,
+): { world: World; authority: Authority<C> } {
+  return acting(world, capability, PLATFORM_SUBJECT, as);
 }
 
 export function receiveExternalPayment(
@@ -173,7 +180,7 @@ export function receiveExternalPayment(
   amount: Money<CurrencyCode>,
   as: Actor = STAFF.operator,
 ): World {
-  const step = platform(world, as);
+  const step = platform(world, 'record_bank_outcome', as);
   return appReceiveExternalPayment(step.world, owner, amount, step.authority);
 }
 
@@ -182,7 +189,7 @@ export function holdThirdPartyPayment(
   amount: Money<CurrencyCode>,
   as: Actor = STAFF.operator,
 ): World {
-  const step = platform(world, as);
+  const step = platform(world, 'record_bank_outcome', as);
   return appHoldThirdPartyPayment(step.world, amount, step.authority);
 }
 
@@ -191,7 +198,7 @@ export function returnHeldPayment(
   amount: Money<CurrencyCode>,
   as: Actor = STAFF.operator,
 ): World {
-  const step = platform(world, as);
+  const step = platform(world, 'record_bank_outcome', as);
   return appReturnHeldPayment(step.world, amount, step.authority);
 }
 
@@ -200,7 +207,7 @@ export function receiveWriteOffTransit(
   amount: Money<CurrencyCode>,
   as: Actor = STAFF.operator,
 ): World {
-  const step = platform(world, as);
+  const step = platform(world, 'record_bank_outcome', as);
   return appReceiveWriteOffTransit(step.world, amount, step.authority);
 }
 
@@ -209,18 +216,18 @@ export function absorbIncomingShortfall(
   owner: ClientKey,
   received: Money<CurrencyCode>,
   shortfall: Money<CurrencyCode>,
-  as: Actor = STAFF.operator,
+  as: Actor = STAFF.controller,
 ): ShortfallRecognition {
-  const step = platform(world, as);
+  const step = platform(world, 'operate_treasury', as);
   return appAbsorbIncomingShortfall(step.world, owner, received, shortfall, step.authority);
 }
 
 export function fundIncomingShortfall(
   world: World,
   recognised: RecognisedShortfall,
-  as: Actor = STAFF.operator,
+  as: Actor = STAFF.controller,
 ): World {
-  const step = platform(world, as);
+  const step = platform(world, 'operate_treasury', as);
   return appFundIncomingShortfall(step.world, recognised, step.authority);
 }
 
@@ -229,9 +236,12 @@ export function receiveTrancheFee(
   dealId: string,
   trancheId: string,
   amount: Money<CurrencyCode>,
-  as: Actor = STAFF.operator,
+  as: Actor = STAFF.controller,
 ): World {
-  const step = acting(world, 'create_deal', subjectOfTranche(world, trancheId), as);
+  // Предмет — транш, а не платформа: комиссия приходит по конкретному траншу, и
+  // фактов у него хватает. Полномочие всё равно казначейское — деньги идут на
+  // операционный счёт, то есть это наши деньги, а не ведение сделки.
+  const step = acting(world, 'operate_treasury', subjectOfTranche(world, trancheId), as);
   return appReceiveTrancheFee(step.world, dealId, trancheId, amount, step.authority);
 }
 
@@ -239,9 +249,9 @@ export function sendBalanceForConversion(
   world: World,
   owner: ClientKey,
   execution: FxExecution,
-  as: Actor = STAFF.operator,
+  as: Actor = STAFF.controller,
 ): World {
-  const step = platform(world, as);
+  const step = platform(world, 'operate_treasury', as);
   return appSendBalanceForConversion(step.world, owner, execution, step.authority);
 }
 
@@ -249,9 +259,9 @@ export function executeBalanceConversion(
   world: World,
   owner: ClientKey,
   execution: FxExecution,
-  as: Actor = STAFF.operator,
+  as: Actor = STAFF.controller,
 ): World {
-  const step = platform(world, as);
+  const step = platform(world, 'operate_treasury', as);
   return appExecuteBalanceConversion(step.world, owner, execution, step.authority);
 }
 
@@ -260,9 +270,9 @@ export function receiveConvertedBalance(
   owner: ClientKey,
   execution: FxExecution,
   spread: Parameters<typeof appReceiveConvertedBalance>[3],
-  as: Actor = STAFF.operator,
+  as: Actor = STAFF.controller,
 ): World {
-  const step = platform(world, as);
+  const step = platform(world, 'operate_treasury', as);
   return appReceiveConvertedBalance(step.world, owner, execution, spread, step.authority);
 }
 
@@ -273,9 +283,9 @@ export function convertBalance(
   source: Money<CurrencyCode>,
   rates: FxRates,
   asOf: IsoDate,
-  as: Actor = STAFF.operator,
+  as: Actor = STAFF.controller,
 ): ConversionResult {
-  const step = platform(world, as);
+  const step = platform(world, 'operate_treasury', as);
   return appConvertBalance(step.world, owner, conversionId, source, rates, asOf, step.authority);
 }
 
@@ -439,7 +449,7 @@ export function requestUnwind(
   options: TrancheEventOptions,
   as: Actor = STAFF.operator,
 ): World {
-  const step = acting(world, 'create_deal', subjectOfDeal(dealId), as);
+  const step = acting(world, 'prepare_settlement', subjectOfDeal(dealId), as);
   return appRequestUnwind(step.world, dealId, request, step.authority, options);
 }
 
@@ -476,7 +486,7 @@ export function requestWithdrawal(
   spec: WithdrawalSpec,
   as: Actor = STAFF.operator,
 ): WithdrawalWorld {
-  const step = acting(scene.world, 'create_deal', PLATFORM_SUBJECT, as);
+  const step = acting(scene.world, 'conduct_withdrawal', PLATFORM_SUBJECT, as);
   return appRequestWithdrawal(inScene(scene, step.world), spec, step.authority);
 }
 

@@ -565,6 +565,71 @@ suite.run(suite.title, () => {
     });
   });
 
+  it('механика расчёта: база отвечает так же, как код (ACTORS.md §5.1.1)', async () => {
+    if (pool === null) return;
+    await withRollback(pool, async (client) => {
+      await seedAccounts(client);
+      const operator = {
+        sessionId: 'ses-op',
+        accountId: 'acc-op',
+        personId: 'per-op',
+        roleId: 'operator',
+      } as const;
+      await openSession(client, operator);
+      await openSession(client);
+
+      // Носителей два, и база это знает: казначейство — ФК, подготовка расчёта
+      // и внешний факт платежа — ОП. Строка, отставшая от кода, означала бы
+      // либо грант вопреки коду, либо отказ там, где код разрешает.
+      await refuses(
+        client,
+        'operate_treasury оператору',
+        grantStatement(),
+        grantParams({ ...operator, capability: 'operate_treasury' }),
+        { state: '23514', key: 'auth.capability.not_granted' },
+      );
+      await refuses(
+        client,
+        'prepare_settlement финансовому контролёру',
+        grantStatement(),
+        grantParams({ capability: 'prepare_settlement' }),
+        { state: '23514', key: 'auth.capability.not_granted' },
+      );
+      await refuses(
+        client,
+        'record_bank_outcome финансовому контролёру',
+        grantStatement(),
+        grantParams({ capability: 'record_bank_outcome' }),
+        { state: '23514', key: 'auth.capability.not_granted' },
+      );
+
+      // Второй фактор: у внешнего факта платежа он обязателен, у подготовки
+      // расчёта — нет, и разница видна без единой строки кода приложения.
+      await refuses(
+        client,
+        'record_bank_outcome без подтверждённого фактора',
+        grantStatement(),
+        grantParams({ ...operator, capability: 'record_bank_outcome' }),
+        { state: '23514', key: 'auth.second_factor.missing' },
+      );
+      await issueGrant(client, { ...operator, capability: 'prepare_settlement' });
+
+      await verifyFactor(client, { sessionId: 'ses-op', challengeId: 'ch-op' });
+      await issueGrant(client, { ...operator, capability: 'record_bank_outcome' });
+      await verifyFactor(client);
+      await issueGrant(client, { capability: 'operate_treasury' });
+
+      const rows = await client.query<{ capability: string }>(
+        `SELECT capability FROM sdelka.auth_grant ORDER BY capability::text`,
+      );
+      expect(rows.rows.map((row) => row.capability)).toEqual([
+        'operate_treasury',
+        'prepare_settlement',
+        'record_bank_outcome',
+      ]);
+    });
+  });
+
   it('дежурное полномочие требует дежурства', async () => {
     if (pool === null) return;
     await withRollback(pool, async (client) => {

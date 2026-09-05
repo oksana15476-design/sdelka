@@ -201,6 +201,17 @@ const DEFAULT_STAFF: Partial<Record<Capability, Actor>> = Object.freeze({
   approve_payout: STAFF.controller,
   approve_lift_block: STAFF.controller,
   lift_block: STAFF.analyst2,
+  /*
+   * Механика расчёта — `ACTORS.md` §5.1.1. Носителей два, и умолчания это
+   * повторяют: ОП готовит расчёт, вносит внешний факт платежа и ведёт заявку на
+   * вывод; ФК двигает деньги платформы. Подставить сюда одно лицо на все пять
+   * значило бы проверять сценариями ровно то устройство, от которого уходили.
+   */
+  prepare_settlement: STAFF.operator,
+  record_bank_outcome: STAFF.operator,
+  conduct_withdrawal: STAFF.operator,
+  patch_tranche_facts: STAFF.operator,
+  operate_treasury: STAFF.controller,
 });
 
 export function staffFor(capability: Capability): Actor {

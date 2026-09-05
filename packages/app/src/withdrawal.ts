@@ -345,16 +345,18 @@ export const FOREIGN_SOURCE_ACCOUNT: SourceAccountRef = Object.freeze({
  * Свободное поле здесь означало, что готовившим можно назвать кого угодно, — то
  * есть подписать собственную заявку, назвавшись чужим именем.
  *
- * ⚠ **[открыто]** Полномочия «запросить вывод остатка» в `ACTORS.md` §5.1 нет;
- * взято самое узкое существующее — `create_deal` (одна роль-носитель, класс
- * `prepare`). См. оговорку в `flow.ts` у денежных шагов учёта.
+ * Полномочие — `conduct_withdrawal` (`ACTORS.md` §5.1.1, Ф14): завести заявку,
+ * отправить поручение после подписей, отменить. Прежде здесь стояло чужое
+ * `create_deal`, взятое как самое узкое существующее, потому что полномочия
+ * «запросить вывод остатка» в перечне не было вовсе. Второй фактор обязателен:
+ * заявка называет сумму и счёт-источник.
  */
 export function requestWithdrawal(
   scene: WithdrawalWorld,
   spec: WithdrawalSpec,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'conduct_withdrawal'>,
 ): WithdrawalWorld {
-  assertOrigin(['create_deal'], authority, 'withdrawal.requested');
+  assertOrigin(['conduct_withdrawal'], authority, 'withdrawal.requested');
   if (scene.withdrawals.has(spec.withdrawalId)) {
     throw new Error(`app.withdrawal.duplicate:${spec.withdrawalId}`);
   }

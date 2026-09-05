@@ -145,6 +145,71 @@ describe('дежурство', () => {
   });
 });
 
+describe('операционная механика расчёта — ACTORS.md §5.1.1', () => {
+  const SETTLEMENT = [
+    'prepare_settlement',
+    'record_bank_outcome',
+    'operate_treasury',
+    'conduct_withdrawal',
+    'patch_tranche_facts',
+  ] as const;
+
+  it('оператор готовит расчёт, вносит внешний факт, ведёт вывод и правит факты', () => {
+    for (const capability of [
+      'prepare_settlement',
+      'record_bank_outcome',
+      'conduct_withdrawal',
+      'patch_tranche_facts',
+    ] as const) {
+      expect(roleHasCapability('operator', capability)).toBe(true);
+    }
+  });
+
+  it('казначейство — у ФК, и больше ни у кого', () => {
+    // §6.7: ежедневная сверка, покрытие, пофайловое обеспечение. Конвертация,
+    // довнесение недостачи и получение комиссии — это они и есть.
+    const holders = ROLE_IDS.filter((roleId) => roleHasCapability(roleId, 'operate_treasury'));
+    expect(holders).toEqual(['financial_controller']);
+  });
+
+  it('оператор не двигает деньги платформы, ФК не готовит расчёт', () => {
+    // Разделение обязанностей выражено **перечнем**, а не дисциплиной: одна
+    // учётная запись между обязательством и его покрытием — это и есть то, что
+    // §6.7 запрещает ФК прозой («готовить операцию, которую утверждает»).
+    expect(roleHasCapability('operator', 'operate_treasury')).toBe(false);
+    for (const capability of [
+      'prepare_settlement',
+      'record_bank_outcome',
+      'conduct_withdrawal',
+      'patch_tranche_facts',
+    ] as const) {
+      expect(roleHasCapability('financial_controller', capability)).toBe(false);
+    }
+  });
+
+  it('ни одно из пяти не достаётся владельцу, стороне, поддержке и аудитору', () => {
+    // Н6 для владельца проверяется классом действия (`roleInvariantViolations`),
+    // здесь — поимённо и для остальных: полномочие механики расчёта у стороны
+    // означало бы, что клиент зачисляет себе деньги по выписке.
+    for (const roleId of ['principal', 'party', 'support', 'auditor', 'client_counsel'] as const) {
+      for (const capability of SETTLEMENT) {
+        expect(roleHasCapability(roleId, capability), `${roleId}:${capability}`).toBe(false);
+      }
+    }
+  });
+
+  it('дежурство ни одного из пяти не добавляет', () => {
+    // §7.3: дежурство добавляет только сужающие. Все пять — `prepare` и
+    // `release`, то есть в ночную смену с чужого телефона их не появляется.
+    const onDuty = effectiveCapabilities('financial_controller', true);
+    const base = ROLE_CAPABILITIES.financial_controller;
+    for (const capability of SETTLEMENT) {
+      if (base.includes(capability)) continue;
+      expect(onDuty).not.toContain(capability);
+    }
+  });
+});
+
 describe('стоп-кран и заморозка участия — разные механизмы', () => {
   it('сторона останавливает своё участие и не останавливает платформу', () => {
     expect(roleHasCapability('party', 'freeze_participation')).toBe(true);

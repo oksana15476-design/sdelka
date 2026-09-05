@@ -16,25 +16,32 @@ import type { StepOrigin } from './authority';
  * оракула). Перечень из двух — это факт о событии, а не поблажка: там, где
  * машины быть не может, в перечне её нет.
  *
- * ## ⚠ Что здесь **[открыто]**
+ * ## Полномочия механики расчёта
  *
- * Перечень полномочий `ACTORS.md` §5.1 закрыт (28 значений) и **не покрывает
- * операционную механику расчёта**: «выдать инструкции на оплату», «отнести
- * поступление на транш», «внести исход провайдера», «зачислить по банковской
- * выписке», «запросить вывод остатка» — таких полномочий в документе нет.
- * Добавить их здесь нельзя: перечень зеркалится в `sdelka.capability`
- * (`packages/db`, `0010`), и односторонняя правда развалила бы гранты базы.
+ * Пять из них — `prepare_settlement`, `record_bank_outcome`, `operate_treasury`,
+ * `conduct_withdrawal`, `patch_tranche_facts` — заведены `ACTORS.md` §5.1.1 этим
+ * батчем. До него семь шагов сидели на **чужом** полномочии `create_deal`: своего
+ * у них не было ни в документе, ни в `sdelka.capability`, и односторонняя правка
+ * развалила бы гранты базы. Заплатка снята целиком; что осталось `create_deal` —
+ * ниже, и там это по другой причине.
  *
- * Поэтому такие шаги разрешены **самым узким из существующих** полномочий —
- * `create_deal`: им владеет ровно одна роль (`operator`), он класса `prepare`
- * (готовит, не разрешает движение), и никакая несовместимость его не
- * связывает — то есть шире, чем «оператор ведёт сделку», он ничего не
- * открывает. Развилка названа в отчёте: полномочие «вести расчёт» нужно
- * завести в `ACTORS.md` §5.1 и в `sdelka.capability` одним изменением.
+ * Разведены по смыслу, а не собраны в одно «вести расчёт»: одно полномочие
+ * склеило бы того, кто **готовит** операцию, с тем, кто **вносит внешний факт**
+ * о ней, и с тем, кто **двигает деньги платформы**. Носителей два — ОП и ФК.
  */
 
-/** Оператор ведёт сделку. См. оговорку [открыто] в заголовке файла. */
-const CONDUCT = ['create_deal'] as const;
+/**
+ * Подготовка расчёта: инструкции, отнесение поступления, резерв, возврат,
+ * отметка резервирования и расчёта на уровне сделки. Носитель — ОП.
+ */
+const PREPARE = ['prepare_settlement'] as const;
+/**
+ * Внешний факт платежа: ответ провайдера и банковская выписка. Носитель — ОП.
+ * Класс `prepare`: шаг записывает, что сделал банк, и сам ничего не разрешает.
+ */
+const BANK = ['record_bank_outcome'] as const;
+/** Заявка на вывод остатка: завести, отправить после подписей, отменить. */
+const WITHDRAW = ['conduct_withdrawal'] as const;
 /** Проверка стороны и разбор расхождения: оператор, аналитик, офицер. */
 const CHECK = ['run_screening'] as const;
 /** Утверждение с денежным эффектом: только ФК (уровень 1) и РО (уровень 2). */
@@ -53,14 +60,15 @@ const OBSERVE = ['record_observation'] as const;
 /* ------------------------------------------------------------------------- */
 
 export const TRANCHE_EVENT_ORIGINS = {
-  /** Инструкции на оплату выдаёт оператор. [открыто] — см. заголовок. */
-  instructions_issued: CONDUCT,
+  /** Инструкции на оплату выдаёт оператор: подготовка расчёта, Ф6. */
+  instructions_issued: PREPARE,
   /**
-   * Отнесение поступления на транш. Деньги в учёт зачисляет отдельный шаг; это
-   * событие связывает их со сделкой. [открыто] — см. заголовок.
+   * Отнесение поступления на транш. Деньги в учёт зачисляет отдельный шаг под
+   * `record_bank_outcome`; это событие связывает их со сделкой — то есть
+   * подготовка, а не внешний факт, и полномочия у них разные намеренно.
    */
-  funds_received: CONDUCT,
-  reserve_requested: CONDUCT,
+  funds_received: PREPARE,
+  reserve_requested: PREPARE,
   /** Срок резерва истёк. Породить это может только `tick`. */
   reserve_expired: CLOCK,
   /**
@@ -91,12 +99,17 @@ export const TRANCHE_EVENT_ORIGINS = {
   approval_added: APPROVE,
   operator_blocked: CHECK,
   release_authorized: APPROVE,
-  refund_initiated: CONDUCT,
-  /** Исход провайдера вносится в мир человеком по ответу банка. [открыто] */
-  payout_result: CONDUCT,
-  reconciliation_resolved: CONDUCT,
+  refund_initiated: PREPARE,
+  /** Исход провайдера вносится в мир человеком по ответу банка: внешний факт. */
+  payout_result: BANK,
+  /**
+   * Разбор расхождения сверки. «Неизвестно» у выплаты — легальное состояние
+   * (красная линия №8), и выйти из него можно только через сверку: то же
+   * полномочие, что и у внесения исхода, — оно и есть работа с выпиской.
+   */
+  reconciliation_resolved: BANK,
   deadline_reached: CLOCK,
-  refund_requested: CONDUCT,
+  refund_requested: PREPARE,
   /** Списание невостребованного — утверждение с денежным эффектом. */
   write_off_approved: APPROVE,
   /** Новая редакция акта об условии — акт сторон, полномочие стороны. */
@@ -122,8 +135,8 @@ export const DEAL_EVENT_ORIGINS = {
   parties_verified: CHECK,
   /** Проверка объекта — своё полномочие, `ACTORS.md` §5.1 (Ф3). */
   property_verified: ['verify_property'],
-  funds_received: CONDUCT,
-  tranches_reserved: CONDUCT,
+  funds_received: PREPARE,
+  tranches_reserved: PREPARE,
   /**
    * Регистрация заявления и отметка сделки об условии.
    *
@@ -166,12 +179,12 @@ export const DEAL_EVENT_ORIGINS = {
    * реквизиты и не вызывал расхождение.
    */
   unwind_authorized: ['approve_lift_block'],
-  tranches_settled: CONDUCT,
-  tranches_refunded: CONDUCT,
+  tranches_settled: PREPARE,
+  tranches_refunded: PREPARE,
   compliance_hold: CHECK,
   dispute_raised: CHECK,
   unfreeze: LIFT,
-  cancellation_requested: CONDUCT,
+  cancellation_requested: PREPARE,
 } as const satisfies Record<DealEventType, readonly StepOrigin[]>;
 
 export type DealOrigin<E extends DealEvent> = (typeof DEAL_EVENT_ORIGINS)[E['type']][number];
@@ -212,10 +225,15 @@ export const WITHDRAWAL_EVENT_ORIGINS = {
   /** Подпись под выводом — то же утверждение с денежным эффектом, что у транша. */
   withdrawal_approved: APPROVE,
   withdrawal_blocked: CHECK,
-  withdrawal_dispatched: CONDUCT,
-  withdrawal_cancelled: CONDUCT,
-  payout_result: CONDUCT,
-  reconciliation_resolved: CONDUCT,
+  /**
+   * Отправка поручения в банк и отмена заявки — то же полномочие, что и её
+   * заведение. Подписи собраны раньше (`withdrawal_approved`, кворум §5.2), и
+   * отправляет заявитель: развилка названа в `ACTORS.md` §5.1.1 п.3.
+   */
+  withdrawal_dispatched: WITHDRAW,
+  withdrawal_cancelled: WITHDRAW,
+  payout_result: BANK,
+  reconciliation_resolved: BANK,
 } as const satisfies Record<WithdrawalEventType, readonly StepOrigin[]>;
 
 export type WithdrawalOrigin<E extends WithdrawalEvent> =

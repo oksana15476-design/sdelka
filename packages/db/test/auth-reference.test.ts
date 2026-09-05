@@ -28,21 +28,33 @@ interface SeedRow {
   readonly values: readonly string[];
 }
 
-/** Строки засева справочника: `('ключ', значение, …)` до первой `;`. */
+/**
+ * Строки засева справочника: `('ключ', значение, …)` до `;`.
+ *
+ * Читаются **все** вставки в таблицу, а не первая. Применённая миграция не
+ * правится (контрольная сумма, `src/migrate.ts`), поэтому справочник, у
+ * которого появилось новое значение, дописывается следующей миграцией — и
+ * разборщик, видящий только первую вставку, показал бы старый список: сверка
+ * упала бы на верном коде. Ошибка в сторону ложной тревоги тоже ошибка — такой
+ * тест на второй раз начинают «чинить» ослаблением. Тот же довод стоит у
+ * `parseEnums` про `ALTER TYPE … ADD VALUE`.
+ */
 function parseSeed(table: string): readonly SeedRow[] {
-  const start = CODE_SQL.indexOf(`INSERT INTO sdelka.${table}`);
-  expect(start, `засев справочника ${table} не найден`).toBeGreaterThan(-1);
-  const end = CODE_SQL.indexOf(';', start);
-  const body = CODE_SQL.slice(start, end);
+  const statements = [
+    ...CODE_SQL.matchAll(new RegExp(`INSERT INTO sdelka\\.${table}[^;]*;`, 'gu')),
+  ].map((match) => match[0]);
+  expect(statements.length, `засев справочника ${table} не найден`).toBeGreaterThan(0);
   // Перечень колонок тоже в скобках, поэтому строка обязана начинаться с
   // ключа в кавычках: иначе разборщик прочитал бы заголовок как данные.
-  return [...body.matchAll(/\(\s*'([a-z_.]+)',([^)]*)\)/gu)].map((match) => ({
-    key: match[1] ?? '',
-    values: (match[2] ?? '')
-      .split(',')
-      .map((item) => item.trim())
-      .map((item) => item.replace(/^'|'$/gu, '')),
-  }));
+  return statements.flatMap((body) =>
+    [...body.matchAll(/\(\s*'([a-z_.]+)',([^)]*)\)/gu)].map((match) => ({
+      key: match[1] ?? '',
+      values: (match[2] ?? '')
+        .split(',')
+        .map((item) => item.trim())
+        .map((item) => item.replace(/^'|'$/gu, '')),
+    })),
+  );
 }
 
 describe('sdelka.auth_role — зеркало ROLE_SPECS', () => {

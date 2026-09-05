@@ -540,30 +540,32 @@ function appendJournal(world: World, entry: JournalEntry): Journal {
 }
 
 /**
- * ⚠ **Полномочия «вести расчёт» в `ACTORS.md` §5.1 нет — [открыто].**
+ * Деньги в учёте по банковской выписке — **два полномочия, а не одно**.
  *
- * Шаги ниже двигают деньги в учёте по банковской выписке: зачисление на счёт
- * клиента, невыясненное поступление и его возврат, приход списанного, признание
- * и покрытие недостачи корреспондента, получение комиссии, три момента
- * конвертации. До этой правки каждый из них выполнялся **вообще без проверки
- * полномочия**: подписи `receiveExternalPayment(world, owner, amount)` хватало,
- * чтобы завести обязательство перед клиентом.
+ * Шаги ниже делятся ровно надвое, и деление это `ACTORS.md` §5.1.1, а не вкус:
  *
- * Полномочия, называющего это действие, в перечне нет, а завести его здесь
- * нельзя: перечень зеркалится в `sdelka.capability` (`packages/db`, `0010`), и
- * односторонняя правка развалила бы гранты базы. Поэтому взят **самый узкий из
- * существующих** — `create_deal`: одна роль-носитель (`operator`), класс
- * `prepare`, ни одной несовместимости. Он не разрешает ничего сверх «оператор
- * ведёт сделку», и в записи журнала стоит именно он, а не похожее по звучанию
- * `approve_payout`. Развилка — в отчёте.
+ * - `record_bank_outcome` — то, что **сделал банк**: зачисление на счёт клиента,
+ *   удержание неопознанного платежа и его возврат, приход списанного. Человек
+ *   здесь переносит факт из выписки, а не принимает решение;
+ * - `operate_treasury` — то, что делаем **мы своими деньгами**: признание и
+ *   покрытие недостачи корреспондента, получение комиссии на операционный счёт,
+ *   три момента конвертации. Это единственный класс `release` из пяти, и
+ *   носитель у него другой — ФК, а не ОП (§6.7: покрытие и пофайловое
+ *   обеспечение).
+ *
+ * До этой правки все они выполнялись под чужим `create_deal` — полномочием
+ * «завести сделку», взятым как самое узкое существующее, потому что своего у
+ * них не было вовсе. Ещё раньше — вообще без проверки: подписи
+ * `receiveExternalPayment(world, owner, amount)` хватало, чтобы завести
+ * обязательство перед клиентом.
  */
 export function receiveExternalPayment(
   world: World,
   owner: ClientKey,
   amount: Money<CurrencyCode>,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'record_bank_outcome'>,
 ): World {
-  assertOrigin(['create_deal'], authority, 'ledger.top_up');
+  assertOrigin(['record_bank_outcome'], authority, 'ledger.top_up');
   const { meta, seq } = nextMeta(world, 'top-up');
   return sealed({
     ...world,
@@ -577,9 +579,9 @@ export function receiveExternalPayment(
 export function holdThirdPartyPayment(
   world: World,
   amount: Money<CurrencyCode>,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'record_bank_outcome'>,
 ): World {
-  assertOrigin(['create_deal'], authority, 'ledger.suspense');
+  assertOrigin(['record_bank_outcome'], authority, 'ledger.suspense');
   const { meta, seq } = nextMeta(world, 'suspense');
   return sealed({
     ...world,
@@ -592,9 +594,9 @@ export function holdThirdPartyPayment(
 export function returnHeldPayment(
   world: World,
   amount: Money<CurrencyCode>,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'record_bank_outcome'>,
 ): World {
-  assertOrigin(['create_deal'], authority, 'ledger.suspense_return');
+  assertOrigin(['record_bank_outcome'], authority, 'ledger.suspense_return');
   const { meta, seq } = nextMeta(world, 'suspense-return');
   return sealed({
     ...world,
@@ -615,9 +617,9 @@ export function returnHeldPayment(
 export function receiveWriteOffTransit(
   world: World,
   amount: Money<CurrencyCode>,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'record_bank_outcome'>,
 ): World {
-  assertOrigin(['create_deal'], authority, 'ledger.write_off_transit');
+  assertOrigin(['record_bank_outcome'], authority, 'ledger.write_off_transit');
   const { meta, seq } = nextMeta(world, 'write-off-transit');
   return sealed({
     ...world,
@@ -671,9 +673,9 @@ export function absorbIncomingShortfall(
   owner: ClientKey,
   received: Money<CurrencyCode>,
   shortfall: Money<CurrencyCode>,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'operate_treasury'>,
 ): ShortfallRecognition {
-  assertOrigin(['create_deal'], authority, 'ledger.shortfall_absorbed');
+  assertOrigin(['operate_treasury'], authority, 'ledger.shortfall_absorbed');
   const { meta, seq } = nextMeta(world, 'shortfall-absorbed');
   const recognised = absorbShortfall(meta, owner, received, shortfall);
   const step = recorded(
@@ -709,9 +711,9 @@ export function absorbIncomingShortfall(
 export function fundIncomingShortfall(
   world: World,
   recognised: RecognisedShortfall,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'operate_treasury'>,
 ): World {
-  assertOrigin(['create_deal'], authority, 'ledger.shortfall_funded');
+  assertOrigin(['operate_treasury'], authority, 'ledger.shortfall_funded');
   const { meta, seq } = nextMeta(world, 'shortfall-funded');
   return sealed({
     ...world,
@@ -736,9 +738,9 @@ export function receiveTrancheFee(
   dealId: string,
   trancheId: string,
   amount: Money<CurrencyCode>,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'operate_treasury'>,
 ): World {
-  assertOrigin(['create_deal'], authority, 'ledger.fee_received');
+  assertOrigin(['operate_treasury'], authority, 'ledger.fee_received');
   const { meta, seq } = nextMeta(world, 'fee-received');
   return sealed({
     ...world,
@@ -769,9 +771,9 @@ export function sendBalanceForConversion(
   world: World,
   owner: ClientKey,
   execution: FxExecution,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'operate_treasury'>,
 ): World {
-  assertOrigin(['create_deal'], authority, 'ledger.fx_sent');
+  assertOrigin(['operate_treasury'], authority, 'ledger.fx_sent');
   const { meta, seq } = nextMeta(world, 'fx-sent');
   return sealed({
     ...world,
@@ -796,9 +798,9 @@ export function executeBalanceConversion(
   world: World,
   owner: ClientKey,
   execution: FxExecution,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'operate_treasury'>,
 ): World {
-  assertOrigin(['create_deal'], authority, 'ledger.fx_executed');
+  assertOrigin(['operate_treasury'], authority, 'ledger.fx_executed');
   const { meta, seq } = nextMeta(world, 'fx-executed');
   return sealed({
     ...world,
@@ -821,9 +823,9 @@ export function receiveConvertedBalance(
   owner: ClientKey,
   execution: FxExecution,
   spread: PlatformSpread<CurrencyCode>,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'operate_treasury'>,
 ): World {
-  assertOrigin(['create_deal'], authority, 'ledger.fx_received');
+  assertOrigin(['operate_treasury'], authority, 'ledger.fx_received');
   const { meta, seq } = nextMeta(world, 'fx-received');
   return sealed({
     ...world,
@@ -849,7 +851,7 @@ export function convertBalance(
   source: Money<CurrencyCode>,
   rates: FxRates,
   asOf: IsoDate,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'operate_treasury'>,
 ): ConversionResult {
   const converted = convert(source, rates, asOf, 'trunc');
   const spread = platformSpread(converted, 'trunc');
@@ -907,17 +909,22 @@ export function feeForTranche(world: World, trancheId: string, gross: Money<Curr
  *
  * ⚠ **Чёрный ход, и он назван.** Функция ставит любое поле фактов, включая
  * денежные, минуя автомат. Убрать её этим батчем нельзя — на ней стоят сценарии
- * guard'ов, — но выполнить её теперь можно только под тем же полномочием, что и
- * прочие шаги оператора. Развилка «убрать вовсе, заменив сценарии на события» —
- * в отчёте.
+ * guard'ов.
+ *
+ * У чёрного хода теперь **собственное имя** — `patch_tranche_facts`
+ * (`ACTORS.md` §5.1.1), а не заимствованное «завести сделку». Разница не
+ * косметическая: под своим именем он виден в перечне полномочий, требует
+ * второго фактора и попадает в журнал отдельной строкой, то есть его
+ * употребление можно посчитать. Развилка «убрать вовсе, заменив сценарии на
+ * события» — в отчёте.
  */
 export function patchFacts(
   world: World,
   trancheId: string,
   patch: Partial<TrancheFacts>,
-  authority: Authority<'create_deal'>,
+  authority: Authority<'patch_tranche_facts'>,
 ): World {
-  assertOrigin(['create_deal'], authority, 'tranche.patch_facts');
+  assertOrigin(['patch_tranche_facts'], authority, 'tranche.patch_facts');
   const runtime = trancheOf(world, trancheId);
   return sealed({
     ...world,

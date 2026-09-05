@@ -125,6 +125,20 @@ const OPERATOR_CAPABILITIES = [
   'verify_property',
   'run_screening',
   'halt_intake',
+  /*
+   * Операционная механика расчёта — `ACTORS.md` §5.1.1. Дописано **в конец**:
+   * порядок этого перечня зеркалится строками `sdelka.role_capability`, и
+   * тест дрейфа сверяет его построчно.
+   *
+   * Казначейства (`operate_treasury`) здесь нет намеренно: движение денег
+   * платформы — не ведение сделки, и §6.7 относит покрытие и пофайловое
+   * обеспечение к ФК. Оператор, который и готовит расчёт, и двигает деньги
+   * платформы, — одна учётная запись между обязательством и его покрытием.
+   */
+  'prepare_settlement',
+  'record_bank_outcome',
+  'conduct_withdrawal',
+  'patch_tranche_facts',
 ] as const satisfies readonly Capability[];
 export type OperatorCapability = (typeof OPERATOR_CAPABILITIES)[number];
 
@@ -212,6 +226,15 @@ const FINANCIAL_CONTROLLER_CAPABILITIES = [
   'lift_block',
   'lift_halt',
   'halt_intake',
+  /*
+   * Казначейство — `ACTORS.md` §5.1.1. Единственный носитель: §6.7 отдаёт ФК
+   * ежедневную сверку, покрытие и пофайловое обеспечение, а конвертация,
+   * довнесение недостачи и получение комиссии — это они и есть.
+   *
+   * Подготовки расчёта (`prepare_settlement`) у ФК нет и не будет: §6.7,
+   * «чего не может никогда ФК — готовить операцию, которую утверждает».
+   */
+  'operate_treasury',
 ] as const satisfies readonly Capability[];
 export type FinancialControllerCapability = (typeof FINANCIAL_CONTROLLER_CAPABILITIES)[number];
 
