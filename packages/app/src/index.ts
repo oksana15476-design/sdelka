@@ -64,6 +64,14 @@ export * from './keys';
 export * from './ledger-app';
 export * from './ports';
 export * from './scheduler';
+/**
+ * ⚠ **`store.ts` вывозится целиком, и это безопасно.**
+ *
+ * Ни одна его функция не собирает мир: `stepWorld` принимает шаг, который
+ * возвращает уже запечатанный `World`, а `restoreWorld` возвращает снимки, а не
+ * мир. Дверью мимо `sealed` хранилище не является ни в одну сторону.
+ */
+export * from './store';
 export * from './unwind';
 export * from './withdrawal';
 /**
@@ -86,11 +94,13 @@ export {
   type ActionFactKind,
   type AppInvariant,
   type DealRuntime,
+  type InvariantSurface,
   type InvariantViolation,
   type MachineOrigin,
   type Notification,
   type ObservationTask,
   type SuppressedEntry,
+  type SurfaceTranche,
   type TrancheRuntime,
   type UnwindApproval,
   type UnwindReview,
@@ -104,5 +114,7 @@ export {
   moneyLabel,
   payerOf,
   recipientOf,
+  surfaceOf,
+  surfaceViolations,
   trancheOf,
 } from './world';

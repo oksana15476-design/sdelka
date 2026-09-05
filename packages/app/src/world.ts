@@ -378,6 +378,43 @@ export interface InvariantViolation {
 }
 
 /**
+ * Поверхность, на которой инварианты вообще проверяемы: журнал учёта, цепочка
+ * аудита и состояния траншей вместе с их поручениями.
+ *
+ * Заведена не ради красоты разбиения, а ради одного вопроса, который иначе
+ * задать нечем: **те же ли инварианты держатся на мире, поднятом из
+ * хранилища.** Мир целиком из базы сегодня не поднимается — фактов приложения
+ * (собранное, реквизиты, наблюдение, подписи) в схеме нет вовсе, — но всё, что
+ * перечислено здесь, база хранит. Проверять поднятое **той же функцией**, а не
+ * её похожей копией, — единственный способ ответить на вопрос честно: копия
+ * разошлась бы с оригиналом на первой же правке, и «инварианты те же» стало бы
+ * утверждением о двух разных проверках.
+ */
+export interface SurfaceTranche {
+  readonly trancheId: string;
+  readonly state: TrancheState;
+  readonly payouts: readonly PayoutState[];
+}
+
+export interface InvariantSurface {
+  readonly journal: Journal;
+  readonly chain: AuditChain;
+  readonly tranches: readonly SurfaceTranche[];
+}
+
+export function surfaceOf(world: World): InvariantSurface {
+  return {
+    journal: world.journal,
+    chain: world.chain,
+    tranches: [...world.tranches.values()].map((tranche) => ({
+      trancheId: tranche.trancheId,
+      state: tranche.state,
+      payouts: tranche.payouts,
+    })),
+  };
+}
+
+/**
  * Проверка после каждого шага.
  *
  * Четыре денежных инварианта здесь проверяются **поимённо**, а не одним вызовом
@@ -386,12 +423,23 @@ export interface InvariantViolation {
  * из домена: одна активная выплата на транш и «нетерминальное состояние несёт
  * дедлайн либо остаток приостановленного дедлайна» (`STATE-MACHINES.md` §5,
  * уточнение E9-10). Седьмой — целостность журнала аудита: он тоже часть шага.
+ *
+ * `claims` — притязания на собранное, единственная проверка, которой нужен не
+ * журнал и не состояние, а факт приложения (`TrancheFacts.collectedAmount`).
+ * Она приходит **аргументом**, а не считается здесь, ровно потому, что
+ * поверхность, поднятая из хранилища, её посчитать не может: собранного в
+ * схеме нет. Пустой список у поднятого мира означает «эта проверка не
+ * проводилась», и `restoreWorld` называет её среди непроверяемого, а не
+ * выдаёт молчание за чистый результат.
  */
-export function invariantViolations(world: World): readonly InvariantViolation[] {
+export function surfaceViolations(
+  surface: InvariantSurface,
+  claims: readonly InvariantViolation[],
+): readonly InvariantViolation[] {
   const out: InvariantViolation[] = [];
 
   // 1. Сумма проводок в записи равна нулю по каждой валюте.
-  for (const entry of world.journal.entries) {
+  for (const entry of surface.journal.entries) {
     for (const [currency, total] of balanceByCurrency(entry.postings)) {
       if (total !== 0n) {
         out.push({ invariant: 'entry_not_zero', subject: entry.id, detail: `${currency}:${total}` });
@@ -400,20 +448,20 @@ export function invariantViolations(world: World): readonly InvariantViolation[]
   }
 
   // 2. Покрытие клиентских средств по портфелю.
-  if (!isFullyCovered(world.journal)) {
+  if (!isFullyCovered(surface.journal)) {
     out.push({ invariant: 'coverage_below_one', subject: 'portfolio', detail: '' });
   }
 
   // 3. Пофайловое обеспечение: по траншу и по счёту клиента.
-  if (!isEveryTrancheCovered(world.journal)) {
+  if (!isEveryTrancheCovered(surface.journal)) {
     out.push({ invariant: 'tranche_uncovered', subject: 'tranche', detail: '' });
   }
-  if (!isEveryFundsSourceCovered(world.journal)) {
+  if (!isEveryFundsSourceCovered(surface.journal)) {
     out.push({ invariant: 'funds_source_uncovered', subject: 'funds_source', detail: '' });
   }
 
   // 4. Неотрицательность остатков клиентских счетов.
-  for (const item of negativeClientBalances(world.journal)) {
+  for (const item of negativeClientBalances(surface.journal)) {
     out.push({
       invariant: 'negative_client_balance',
       subject: item.accountCode,
@@ -422,11 +470,11 @@ export function invariantViolations(world: World): readonly InvariantViolation[]
   }
 
   // 5. Собранное, объявленное приложением, обеспечено учётом.
-  for (const violation of unbackedCollectedClaims(world)) {
+  for (const violation of claims) {
     out.push(violation);
   }
 
-  for (const tranche of world.tranches.values()) {
+  for (const tranche of surface.tranches) {
     if (violatesSingleActivePayout(tranche.payouts, tranche.trancheId)) {
       out.push({ invariant: 'double_active_payout', subject: tranche.trancheId, detail: '' });
     }
@@ -441,18 +489,18 @@ export function invariantViolations(world: World): readonly InvariantViolation[]
     }
   }
 
-  const integrity = verifyChain(world.chain);
+  const integrity = verifyChain(surface.chain);
   if (!integrity.intact) {
     out.push({
       invariant: 'audit_chain_broken',
-      subject: world.chain.chainId,
+      subject: surface.chain.chainId,
       detail: integrity.firstBreak.kind,
     });
   }
 
   // Второй контур: коды учёта. Если он что-то видит, а поимённые проверки нет —
   // расходятся не деньги, а наши представления о них, и это тоже отказ.
-  for (const violation of checkLedgerInvariants(world.journal)) {
+  for (const violation of checkLedgerInvariants(surface.journal)) {
     if (out.some((item) => item.subject === violation.subject)) continue;
     out.push({
       invariant: 'coverage_below_one',
@@ -462,6 +510,14 @@ export function invariantViolations(world: World): readonly InvariantViolation[]
   }
 
   return Object.freeze(out);
+}
+
+/**
+ * Инварианты мира. Та же проверка, что у поднятого состояния, плюс притязание
+ * на собранное — единственное, что видно только в памяти.
+ */
+export function invariantViolations(world: World): readonly InvariantViolation[] {
+  return surfaceViolations(surfaceOf(world), unbackedCollectedClaims(world));
 }
 
 /**
