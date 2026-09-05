@@ -1103,7 +1103,19 @@ async function main() {
   const browser = await chromium.launch({ executablePath: BROWSER_PATH });
   /* Карточки задач добавляются после подъёма сервера: их адреса читаются из
      самой очереди, а не собираются здесь из идентификаторов фикстуры. */
-  const list = [...routes(), ...(await taskRoutes())];
+  /**
+   * `VERIFY_ONLY` — отбор маршрутов по имени регулярным выражением, для
+   * отладки самой проверки. Полный обход идёт четыре минуты, и правка одного
+   * правила не должна стоить четырёх минут: `VERIFY_ONLY=owner-` снимает
+   * кабинет владельца за десять секунд. В обычном прогоне переменной нет, и
+   * обход полный — сузить его молча нельзя, отбор печатается строкой.
+   */
+  const only = process.env.VERIFY_ONLY ?? null;
+  const all = [...routes(), ...(await taskRoutes())];
+  const list = only === null ? all : all.filter((route) => new RegExp(only, 'u').test(route.name));
+  if (only !== null) {
+    process.stdout.write(`⚠ отбор VERIFY_ONLY=${only}: обход неполный, зелёный результат ничего не доказывает\n`);
+  }
   const byName = new Set(list.map((route) => route.name)).size;
   process.stdout.write(
     `Обход: ${list.length} снимков на ${byName} маршрутах (ka и ru, узкая и проектная ширина)\n`,
