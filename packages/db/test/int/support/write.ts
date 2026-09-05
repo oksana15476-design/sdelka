@@ -1,61 +1,36 @@
-import {
-  type Account,
-  type FundsRef,
-  type Journal,
-  type JournalEntry,
-  type Posting,
-  isClientRef,
-} from '@sdelka/ledger';
+import type { Journal, JournalEntry } from '@sdelka/ledger';
 import type { PoolClient } from '../../../src/pool.ts';
 import { toBigInt } from '../../../src/pool.ts';
+import { accountColumns, attributionColumns } from '../../../src/store/journal.ts';
 
 /**
- * Заливка журнала в базу.
+ * Заливка журнала для набора-зеркала.
  *
- * Направление одностороннее: **TS → SQL**. Обратной гидратации `JournalEntry`
- * из строк нет и не будет — `DealPartiesAttestation` держится на ambient-символе,
- * и любая реконструкция потребовала бы приведения типа, то есть уничтожила бы
- * ровно ту защиту, ради которой символ и заведён. Чтение из базы даёт плоские
- * строки, а не доменное значение.
+ * **Почему это не порт хранилища и почему так и должно быть.** Набор
+ * `mirror.int.test.ts` сверяет два независимых воплощения одних и тех же
+ * правил: представления SQL (`v_ledger_invariant_violation`) и
+ * `checkLedgerInvariants` в TS. Ему нужно класть в таблицы **любые** проводки,
+ * включая те, которые порт писать отказывается: расчёт с начислением комиссии,
+ * три записи обмена, довнесение недостачи. Отказ порта на них — не дефект
+ * набора, а честный ответ на то, что в `sdelka.ledger_entry` нет колонок под
+ * объявления `converts`, `accrues` и `funds` (см. `DbErrorCode.
+ * entryDeclarationNotStorable`). Пропустить эти случаи мимо зеркала значило бы
+ * перестать сверять представления там, где они сложнее всего.
+ *
+ * Поэтому здесь остались только `INSERT`ы, а **проекция «счёт и отнесение в
+ * колонки» одна** и берётся из `src/store/journal.ts`. Второй проекции рядом с
+ * настоящей быть не должно: она разъедется, и набор начнёт проверять схему тем
+ * кодом, которым продукт в неё не пишет.
+ *
+ * Прежняя редакция этого файла утверждала, что обратной гидратации
+ * `JournalEntry` «нет и не будет». Теперь она есть — разбор довода в заголовке
+ * `src/store/journal.ts`.
  */
-interface AccountColumns {
-  readonly accountKind: string;
-  readonly accountCurrency: string | null;
-  readonly clientKey: string | null;
-  readonly accountDealId: string | null;
-  readonly accountTrancheId: string | null;
-  readonly conversionId: string | null;
-}
-
-export function accountColumns(account: Account): AccountColumns {
-  return {
-    accountKind: account.kind,
-    accountCurrency: 'currency' in account ? account.currency : null,
-    clientKey: 'clientKey' in account ? account.clientKey : null,
-    accountDealId: 'dealId' in account ? account.dealId : null,
-    accountTrancheId: 'trancheId' in account ? account.trancheId : null,
-    conversionId: 'conversionId' in account ? account.conversionId : null,
-  };
-}
-
-interface AttributionColumns {
-  readonly clientKey: string | null;
-  readonly dealId: string | null;
-  readonly trancheId: string | null;
-}
-
-export function attributionColumns(ref: FundsRef | null): AttributionColumns {
-  if (ref === null) return { clientKey: null, dealId: null, trancheId: null };
-  return isClientRef(ref)
-    ? { clientKey: ref.clientKey, dealId: null, trancheId: null }
-    : { clientKey: null, dealId: ref.dealId, trancheId: ref.trancheId };
-}
-
 async function writePosting(
   client: PoolClient,
   entryId: string,
   ord: number,
-  posting: Posting,
+  posting: JournalEntry['postings'][number],
 ): Promise<void> {
   const account = accountColumns(posting.account);
   const attribution = attributionColumns(posting.attribution);

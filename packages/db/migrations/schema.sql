@@ -3658,8 +3658,10 @@ COMMENT ON VIEW sdelka.v_fee_accrual IS
 --
 -- Сравнение идёт с **любой** другой записью, а не только с более ранней, и
 -- это не строгость ради строгости: проводку можно дописать к уже лежащей
--- записи отдельной транзакцией, и тогда «второй» окажется старая запись.
--- Виновной названа при этом всегда более ранняя — она начислила первой.
+-- записи отдельной транзакцией, и тогда «вторым» окажется начисление старой
+-- записи. В сообщении названы обе — проверяемая (`entry_id`) и встречная
+-- (`accrued_by`); какая из двух легла в журнал первой, видно по `seq`, и
+-- порядок срабатывания отложенных триггеров на это не влияет.
 CREATE FUNCTION sdelka.assert_fee_accrued_once() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -3902,3 +3904,37 @@ ALTER TABLE sdelka.payout ADD CONSTRAINT payout_response_only_when_answered CHEC
 
 COMMENT ON CONSTRAINT payout_response_only_when_answered ON sdelka.payout IS
   'Ссылка на ответ провайдера возможна только в терминальных статусах и не обязательна нигде.';
+
+-- ===== 0019_ledger_truncate.sql =====
+-- 0019 — журнал не опустошается: append-only ловит и `TRUNCATE`.
+--
+-- `0002` ставит два контура: гранты (роль приложения не получает
+-- `UPDATE`/`DELETE`) и триггер `forbid_ledger_mutation`, объявленный как
+-- ловящий «и владельца, который грантом не ограничен». Второй контур этого не
+-- делал: построчный триггер в PostgreSQL на `TRUNCATE` **не срабатывает** —
+-- `TRUNCATE` вызывает только операторные триггеры (`FOR EACH STATEMENT`), а их
+-- в схеме не было ни одного.
+--
+-- Следствие шире, чем «строки исчезли». `TRUNCATE` — единственный путь записи,
+-- обходящий **все** отложенные проверки журнала разом: опустошить
+-- `ledger_posting`, оставив `ledger_entry`, значит получить записи без
+-- проводок, ни одна из которых не пройдёт через `assert_entry_balanced`, — он
+-- вешается на вставку и на изменение строк, а `TRUNCATE` не является ни тем,
+-- ни другим.
+--
+-- Функция та же (`sdelka.forbid_ledger_mutation`): ключ ошибки у нарушения
+-- один, и `TG_OP` в подробностях назовёт `TRUNCATE`.
+--
+-- ⚠ Тот же пробел есть у `sdelka.audit_record` (`0007`), и он **не** закрыт
+-- здесь намеренно: журнал аудита — предмет отдельной находки, и чинить его
+-- заодно значило бы разложить одно правило по двум местам.
+
+SET LOCAL ROLE sdelka_owner;
+
+CREATE TRIGGER forbid_ledger_entry_truncate
+  BEFORE TRUNCATE ON sdelka.ledger_entry
+  FOR EACH STATEMENT EXECUTE FUNCTION sdelka.forbid_ledger_mutation();
+
+CREATE TRIGGER forbid_ledger_posting_truncate
+  BEFORE TRUNCATE ON sdelka.ledger_posting
+  FOR EACH STATEMENT EXECUTE FUNCTION sdelka.forbid_ledger_mutation();

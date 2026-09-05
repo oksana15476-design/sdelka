@@ -24,14 +24,28 @@ import {
   FREEZE_REASONS,
   OBSERVATION_LEVELS,
   OWNER_CHECKS,
+  PAYOUT_LEGS,
   PAYOUT_STATUSES,
   RELEASE_CONDITION_TYPES,
+  TERMINAL_PAYOUT_STATUSES,
   TERMINAL_TRANCHE_STATUSES,
   TERMINAL_WITHDRAWAL_STATUSES,
   TRANCHE_STATUSES,
+  UNFREEZE_TARGETS,
   WITHDRAWAL_STATUSES,
+  isUsableReleaseCondition,
 } from '@sdelka/domain';
 import { ACTIVE_PAYOUT_STATUSES } from '@sdelka/domain';
+import {
+  ACCOUNT_TYPES,
+  DIRECTIONS,
+  FUNDS_FILE_SCOPES,
+  FUNDS_OWNERSHIPS,
+  JOURNAL_ENTRY_KINDS,
+  POOL_DIRECTIONS,
+  PLATFORM_FUNDS_ROLES,
+  STOP_ACCEPTING_INVARIANT_CODES,
+} from '@sdelka/ledger';
 import { CURRENCY_CODES, CURRENCY_EXPONENT } from '@sdelka/money';
 import { describe, expect, it } from 'vitest';
 import { ACCOUNT_KINDS } from '../src/accounts.ts';
@@ -39,8 +53,10 @@ import {
   CODE_SQL,
   MIGRATIONS,
   constraintStatuses,
+  constraintValues,
   parseEnums,
   partialIndexStatuses,
+  viewValues,
 } from './support/sql.ts';
 
 /**
@@ -61,12 +77,27 @@ function enumValues(name: string): readonly string[] {
 
 describe('перечни базы — построчное зеркало массивов из TS', () => {
   const cases: readonly [string, readonly string[]][] = [
+    // packages/ledger: природа счёта и форма проводки. Массивами, а не типами,
+    // они стали ровно ради этой сверки — сверять значение с типом нечем.
+    ['direction', DIRECTIONS],
+    ['journal_entry_kind', JOURNAL_ENTRY_KINDS],
+    ['account_type', ACCOUNT_TYPES],
+    ['funds_ownership', FUNDS_OWNERSHIPS],
+    ['platform_funds_role', PLATFORM_FUNDS_ROLES],
+    ['funds_file_scope', FUNDS_FILE_SCOPES],
+    ['pool_direction', POOL_DIRECTIONS],
     ['tranche_status', TRANCHE_STATUSES],
     ['deal_status', DEAL_STATUSES],
     ['payout_status', PAYOUT_STATUSES],
     ['withdrawal_status', WITHDRAWAL_STATUSES],
+    ['payout_leg', PAYOUT_LEGS],
     ['release_condition_type', RELEASE_CONDITION_TYPES],
     ['freeze_reason', FREEZE_REASONS],
+    // Перечень, которым пока не пользуется ни одна колонка схемы (`0001`), и
+    // это **не повод не сторожить его**: разошедшись молча, он подведёт в тот
+    // день, когда колонка появится, — то есть в день, когда разбираться будет
+    // некогда. Что дверь стоит без дороги, сказано отдельным тестом ниже.
+    ['unfreeze_target', UNFREEZE_TARGETS],
     ['beneficiary_status', BENEFICIARY_STATUSES],
     ['observation_level', OBSERVATION_LEVELS],
     ['owner_check', OWNER_CHECKS],
@@ -119,6 +150,36 @@ describe('перечни базы — построчное зеркало мас
     });
   }
 
+  it('у каждого перечня базы есть сторож', () => {
+    /**
+     * Перечень, не попавший ни в один случай выше, — это дверь без сторожа.
+     *
+     * Ровно так и вышло с `sdelka.unfreeze_target`: он объявлен в `0001`, у
+     * него есть экспортированный массив в TS (`UNFREEZE_TARGETS`), и при этом
+     * его не было ни в одном случае — расходиться он мог сколько угодно и
+     * молча. Список случаев, который надо не забыть пополнить, забывают
+     * всегда; поэтому здесь стоит обратная проверка: новый перечень в SQL
+     * роняет тест, пока ему не назначен сторож.
+     */
+    const guarded = new Set([...cases, ...derived].map(([name]) => name));
+    expect([...ENUMS.keys()].filter((name) => !guarded.has(name))).toEqual([]);
+    // И обратно: случай, ссылающийся на перечень, которого в SQL нет, —
+    // сверка, которая всегда проходит.
+    expect([...guarded].filter((name) => !ENUMS.has(name))).toEqual([]);
+  });
+
+  it('unfreeze_target: перечень есть, колонки под него нет', () => {
+    // **[открыто]** Целевое состояние разморозки — явное поле решения двух
+    // людей (И9.2), и в TS оно есть (`UnfreezeTarget`), а в схеме под него не
+    // заведено ни одной колонки: заморозка хранится в `sdelka.tranche`
+    // (`suspended_from`, `freeze_reason`, `frozen_by`), решение о выходе —
+    // нигде. Тест фиксирует известное состояние, чтобы оно не выглядело
+    // недосмотром: появится колонка — эта строка упадёт и будет снята вместе с
+    // ответом на вопрос, где живёт решение о разморозке.
+    const columns = [...CODE_SQL.matchAll(/sdelka\.unfreeze_target/gu)];
+    expect(columns.length, 'перечень объявлен ровно один раз и больше нигде').toBe(1);
+  });
+
   it('справочник валют — зеркало CURRENCY_EXPONENT, включая JPY', () => {
     const rows = [
       ...CODE_SQL.matchAll(/\('([A-Z]{3})',\s*(\d)\)/gu),
@@ -155,6 +216,41 @@ describe('предикаты, выведенные из перечней', () =>
   it('источник заморозки — ровно FREEZABLE_TRANCHE_STATUSES', () => {
     expect(constraintStatuses(CODE_SQL, 'tranche_freezable_origin')).toEqual([
       ...FREEZABLE_TRANCHE_STATUSES,
+    ]);
+  });
+
+  it('годный тип условия — ровно isUsableReleaseCondition', () => {
+    // Ограничение `condition_act_usable_type` названо в `0004` зеркалом
+    // доменной функции, а зеркалило половину: SQL отвергал один
+    // `registration_preliminary`, функция — **два** значения, потому что
+    // требует `!requiresConfirmation` И `sourceImplemented`. Акт с
+    // `calendar_date` вставлялся, то есть транш законно открывал приём средств
+    // под условие, по которому расчёт невозможен никогда. `0015` дописал
+    // список, а эта строка не даёт ему разойтись снова.
+    expect(constraintValues(CODE_SQL, 'condition_act_usable_type')).toEqual(
+      RELEASE_CONDITION_TYPES.filter(isUsableReleaseCondition),
+    );
+  });
+
+  it('ссылка на ответ провайдера — ровно TERMINAL_PAYOUT_STATUSES', () => {
+    // Ответа провайдера до ответа провайдера не бывает: ссылка возможна только
+    // там, где перевод уже получил исход. Обязательной она при этом не
+    // является нигде — терминальное состояние достигается и сверкой по
+    // выписке, где ответа нет по построению (`0018`).
+    expect(constraintValues(CODE_SQL, 'payout_response_only_when_answered')).toEqual([
+      ...TERMINAL_PAYOUT_STATUSES,
+    ]);
+  });
+
+  it('стоп-кран базы перечисляет ровно STOP_ACCEPTING_INVARIANT_CODES', () => {
+    // Два списка одних и тех же пяти кодов — в `v_should_stop_accepting_deals`
+    // и в `shouldStopAcceptingDeals` — совпадали только потому, что их писали в
+    // один день. Разойдясь, они дали бы стоп-кран, который срабатывает в одном
+    // контуре и молчит в другом: приём новых сделок остановлен по журналу и не
+    // остановлен по базе (или наоборот). Сверять их стало чем только после
+    // того, как условие в TS стало значением.
+    expect(viewValues(CODE_SQL, 'v_should_stop_accepting_deals')).toEqual([
+      ...STOP_ACCEPTING_INVARIANT_CODES,
     ]);
   });
 

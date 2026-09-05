@@ -82,11 +82,59 @@ export function partialIndexStatuses(sql: string, indexName: string): readonly s
   return [...body.matchAll(/'([^']*)'/gu)].map((item) => item[1] ?? '');
 }
 
-/** Значения из именованного ограничения `CHECK (... IN ('a', 'b'))`. */
-export function constraintStatuses(sql: string, constraintName: string): readonly string[] {
-  const pattern = new RegExp(`CONSTRAINT ${constraintName} CHECK \\(([\\s\\S]*?)\\n  \\)`, 'u');
-  const match = pattern.exec(sql);
-  const body = match?.[1];
-  if (body === undefined) return [];
-  return [...body.matchAll(/'([^']*)'/gu)].map((item) => item[1] ?? '');
+/**
+ * Тело выражения в скобках, начиная с позиции открывающей скобки.
+ *
+ * Считаем скобки, а не обрываем регуляркой по отступу: ограничение, заведённое
+ * `ALTER TABLE ... ADD CONSTRAINT`, отформатировано иначе, чем то же
+ * ограничение внутри `CREATE TABLE`, и разбор по виду отступа тихо возвращал
+ * бы пустой список — то есть сверка проходила бы, ничего не сверив.
+ */
+function balancedBody(sql: string, open: number): string {
+  let depth = 0;
+  for (let index = open; index < sql.length; index += 1) {
+    const char = sql[index];
+    if (char === '(') depth += 1;
+    if (char === ')') {
+      depth -= 1;
+      if (depth === 0) return sql.slice(open + 1, index);
+    }
+  }
+  throw new Error('db.sql.unbalanced_parenthesis');
+}
+
+function quoted(text: string): readonly string[] {
+  return [...text.matchAll(/'([^']*)'/gu)].map((item) => item[1] ?? '');
+}
+
+/**
+ * Строковые значения из именованного ограничения `CHECK (... IN ('a', 'b'))`.
+ *
+ * Берётся **последнее** объявление с таким именем: ограничение, заменённое
+ * поздней миграцией (`DROP CONSTRAINT` плюс `ADD CONSTRAINT`), обязано
+ * сверяться в действующей редакции, а не в первой.
+ */
+export function constraintValues(sql: string, constraintName: string): readonly string[] {
+  const anchor = `CONSTRAINT ${constraintName} CHECK `;
+  const at = sql.lastIndexOf(anchor);
+  if (at === -1) return [];
+  return quoted(balancedBody(sql, sql.indexOf('(', at + anchor.length)));
+}
+
+/** Прежнее имя того же разбора: перечень статусов в именованном ограничении. */
+export const constraintStatuses = constraintValues;
+
+/**
+ * Строковые значения в теле представления — `CREATE VIEW ... ;`.
+ *
+ * Нужно там, где список живёт не в ограничении, а в предикате представления:
+ * коды стоп-крана в `v_should_stop_accepting_deals` перечислены поимённо, и
+ * второй такой же список поимённо лежит в TS.
+ */
+export function viewValues(sql: string, viewName: string): readonly string[] {
+  const anchor = `CREATE VIEW sdelka.${viewName} AS`;
+  const at = sql.indexOf(anchor);
+  if (at === -1) return [];
+  const end = sql.indexOf(';', at);
+  return quoted(sql.slice(at, end === -1 ? sql.length : end));
 }

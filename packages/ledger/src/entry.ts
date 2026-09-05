@@ -34,7 +34,14 @@ import {
   strictestFeeCeiling,
 } from './fee-ceiling';
 
-export type Direction = 'debit' | 'credit';
+/**
+ * Направление проводки перечнем, а не только типом: перечень переписан в базу
+ * (`sdelka.direction`), и сверять его с типом нечем — типа в рантайме нет.
+ * Тот же довод, что у `ACCOUNT_TYPES` (`accounts.ts`).
+ */
+export const DIRECTIONS = ['debit', 'credit'] as const;
+
+export type Direction = (typeof DIRECTIONS)[number];
 
 /** Отнесение проводки к сделке и траншу — основание пофайловой сверки. */
 export interface TrancheRef {
@@ -87,7 +94,9 @@ export interface Posting {
  * `correction` — единственный способ исправления (красная линия №11: журнал не
  * редактируется, исправление только новой записью со ссылкой на предыдущую).
  */
-export type JournalEntryKind = 'settlement' | 'correction';
+export const JOURNAL_ENTRY_KINDS = ['settlement', 'correction'] as const;
+
+export type JournalEntryKind = (typeof JOURNAL_ENTRY_KINDS)[number];
 
 /**
  * Объявление расчёта по траншу: кто платит, кто получает, по какой сделке.

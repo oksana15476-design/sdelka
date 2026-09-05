@@ -96,13 +96,30 @@ export type Account =
 
 export type AccountKind = Account['kind'];
 
-export type AccountType = 'asset' | 'liability' | 'income' | 'expense';
+/**
+ * Перечни природы счёта — **массивы, а не одни только типы**, и это правка про
+ * дрейф, а не про стиль.
+ *
+ * Каждый из них построчно переписан в базу (`db/migrations/0001_foundation.sql`,
+ * `sdelka.account_type` и соседние), и тест дрейфа умеет сверять значение со
+ * значением: типа в рантайме нет, сверять с ним нечего. Пока эти перечни были
+ * только типами, семь меток базы не сторожил никто — метку, дописанную в один
+ * из двух списков и забытую в другом, обнаружила бы первая же вставка на проде.
+ *
+ * Тип выводится из массива, поэтому добавить значение в одном месте и забыть в
+ * другом здесь невозможно по построению.
+ */
+export const ACCOUNT_TYPES = ['asset', 'liability', 'income', 'expense'] as const;
+
+export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
 /**
  * Чьи это деньги. Красная линия №2 и покрытие (CORE.md Ф10) держатся на этом
  * различении, поэтому оно свойство счёта, а не соглашение об именовании.
  */
-export type FundsOwnership = 'client' | 'platform';
+export const FUNDS_OWNERSHIPS = ['client', 'platform'] as const;
+
+export type FundsOwnership = (typeof FUNDS_OWNERSHIPS)[number];
 
 /**
  * Чем счёт платформы является **физически**. Объявлять обязан каждый счёт
@@ -117,7 +134,9 @@ export type FundsOwnership = 'client' | 'platform';
  * - `transit` — собственные деньги платформы в пути между её счетами.
  * - `result` — доход или расход, счёт результата, а не средств.
  */
-export type PlatformFundsRole = 'bank' | 'receivable' | 'transit' | 'result';
+export const PLATFORM_FUNDS_ROLES = ['bank', 'receivable', 'transit', 'result'] as const;
+
+export type PlatformFundsRole = (typeof PLATFORM_FUNDS_ROLES)[number];
 
 /**
  * Откуда у клиентских денег берётся **файл** — та единица, внутри которой
@@ -130,7 +149,9 @@ export type PlatformFundsRole = 'bank' | 'receivable' | 'transit' | 'result';
  * - `pooled` — клиентские деньги **вне файлов**: владельца ещё (или уже) нет.
  *   Пул обязан объявить своё направление, см. `PoolDirection`.
  */
-export type FundsFileScope = 'owner_in_code' | 'in_attribution' | 'pooled';
+export const FUNDS_FILE_SCOPES = ['owner_in_code', 'in_attribution', 'pooled'] as const;
+
+export type FundsFileScope = (typeof FUNDS_FILE_SCOPES)[number];
 
 /**
  * Направление пула — единственная причина, по которой пулы вообще различаются.
@@ -144,7 +165,9 @@ export type FundsFileScope = 'owner_in_code' | 'in_attribution' | 'pooled';
  *   выходит**, пока не отвечен вопрос §3.1 «порядок обращения с
  *   невостребованными средствами — [открыто]».
  */
-export type PoolDirection = 'intake' | 'terminal';
+export const POOL_DIRECTIONS = ['intake', 'terminal'] as const;
+
+export type PoolDirection = (typeof POOL_DIRECTIONS)[number];
 
 /**
  * Природа счёта: тип, принадлежность средств и — для клиентских денег —

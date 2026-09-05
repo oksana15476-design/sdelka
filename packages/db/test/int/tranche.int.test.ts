@@ -244,6 +244,36 @@ suite.run(suite.title, () => {
     });
   }
 
+  it('половина суммы транша — не сумма', async () => {
+    if (pool === null) return;
+    // `tranche_amount_whole`: сумма и валюта в TS — одно значение (`Money`), и
+    // здесь тоже. Число без валюты — это величина, о которой нельзя сказать,
+    // сколько это; валюта без числа — валюта неизвестно чего.
+    for (const [amount, currency] of [
+      ['100000', null],
+      [null, 'GEL'],
+    ] as const) {
+      await withRollback(pool, async (client) => {
+        await seed(client);
+        let failed = false;
+        try {
+          await client.query(
+            `INSERT INTO sdelka.tranche
+               (deal_id, tranche_id, status, deadline_at, entered_at, condition_act_agreed_at,
+                required_amount_minor, required_currency)
+             VALUES ('d1', 't1', 'collecting', $1, $2, $2, $3, $4)`,
+            [DEADLINE, ENTERED, amount, currency],
+          );
+        } catch (error) {
+          failed = true;
+          expect(sqlState(error)).toBe('23514');
+          expect(String(error)).toContain('tranche_amount_whole');
+        }
+        expect(failed, `${amount}/${currency}: ожидался отказ`).toBe(true);
+      });
+    }
+  });
+
   it('одна личность по обе стороны сделки — отказ', async () => {
     if (pool === null) return;
     await withRollback(pool, async (client) => {

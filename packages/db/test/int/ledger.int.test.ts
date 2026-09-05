@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { ACCOUNT_KINDS, sampleAccountCode } from '../../src/accounts.ts';
-import { dbSuite, errorKey, sqlState, withRollback } from './support/pg.ts';
+import { dbSuite, errorDetail, errorKey, sqlState, withRollback } from './support/pg.ts';
 
 /**
  * Триггер нулевой суммы, форма счёта и append-only — на живой базе.
@@ -198,6 +198,38 @@ suite.run(suite.title, () => {
         await client.query('SET ROLE sdelka_app');
       }
     });
+  });
+
+  it('журнал не опустошается: TRUNCATE отвергается и у владельца схемы', async () => {
+    if (pool === null) return;
+    // Второй контур append-only заявлен как ловящий **владельца**, которого
+    // гранты не ограничивают. Построчный триггер на `TRUNCATE` не срабатывает
+    // — эту операцию видят только операторные (`0019`). Проверять надо именно
+    // от имени владельца: у роли приложения `TRUNCATE` отобран грантами, и
+    // тест от её имени был бы зелёным при полностью снятом триггере.
+    for (const relation of ['ledger_entry', 'ledger_posting']) {
+      await withRollback(pool, async (client) => {
+        await client.query(ENTRY, ['truncate-1']);
+        await client.query(NOMINAL, ['truncate-1', 0, 'GEL', 'debit', '100000']);
+        await client.query(CLIENT_FREE, ['truncate-1', 1, 'credit', 'GEL', '100000']);
+        // Отложенные события надо разрядить до `TRUNCATE`: пока очередь не
+        // пуста, PostgreSQL отвечает своим отказом («pending trigger events»),
+        // и тест был бы зелёным при полностью снятом триггере. Эта защита
+        // действует только внутри той же транзакции — из следующей журнал
+        // опустошается без единого возражения, если операторного триггера нет.
+        await client.query('SET CONSTRAINTS ALL IMMEDIATE');
+        await client.query('SET ROLE sdelka_owner');
+        let failed = false;
+        try {
+          await client.query(`TRUNCATE sdelka.${relation} CASCADE`);
+        } catch (error) {
+          failed = true;
+          expect(errorKey(error), relation).toBe('db.ledger.append_only');
+          expect(errorDetail(error), relation).toContain('operation=TRUNCATE');
+        }
+        expect(failed, relation).toBe(true);
+      });
+    }
   });
 
   it('владельца схемы от правки журнала держит триггер, а не гранты', async () => {

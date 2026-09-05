@@ -175,6 +175,22 @@ export function errorKey(error: unknown): string {
 }
 
 /**
+ * Подробности ошибки базы (`DETAIL`) — отдельное поле драйвера.
+ *
+ * В `String(error)` их нет: `Error.toString()` печатает одно сообщение, то
+ * есть технический ключ. Проверка вида `expect(String(error)).toContain(...)`
+ * по подробностям поэтому всегда ложна, и заметить это можно только тогда,
+ * когда сама проверка что-то утверждает.
+ */
+export function errorDetail(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'detail' in error) {
+    const detail = (error as { detail: unknown }).detail;
+    return typeof detail === 'string' ? detail : '';
+  }
+  return '';
+}
+
+/**
  * Набор, который сам себя пропускает с причиной в имени.
  *
  * `describe.skip` без причины оставляет в отчёте строку «пропущено» без
