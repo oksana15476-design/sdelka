@@ -88,9 +88,47 @@ const CONSTRAINT_RULES: Readonly<Record<string, Translator>> = Object.freeze({
   ledger_posting_amount_minor_check: ledger(LedgerErrorCode.postingNonPositiveAmount),
   /** Половина объявления расчёта — не объявление. */
   ledger_entry_settles_whole: ledger(LedgerErrorCode.entrySettlementShapeMismatch),
+  /** Расчёт без потолка удержания — расчёт, которому разрешено неизвестно сколько. */
+  ledger_entry_settles_ceiling_whole: ledger(LedgerErrorCode.entrySettlementShapeMismatch),
+  /** Доля не бывает отрицательной и не бывает больше единицы (`feeCeiling`). */
+  ledger_entry_settles_ceiling_share: ledger(LedgerErrorCode.feeCeilingInvalid),
   /** Красная линия №5: расчёт без ссылки на пакет доказательств. */
   ledger_entry_evidence_present: ledger(LedgerErrorCode.entrySettlementShapeMismatch),
   ledger_entry_settles_alphabet: ledger(LedgerErrorCode.accountInvalidIdentifier),
+  /**
+   * Объявления обмена, начисления и довнесения — те же три правила, что у
+   * объявления расчёта: целиком или никак, величины положительны, курс
+   * положителен. В коде каждое из них — отказ конструктора записи, и ключ здесь
+   * тот же самый.
+   */
+  ledger_entry_converts_whole: ledger(LedgerErrorCode.entryConversionDeclarationMismatch),
+  ledger_entry_converts_positive: ledger(LedgerErrorCode.entryConversionDeclarationMismatch),
+  ledger_entry_converts_rates_positive: ledger(LedgerErrorCode.entryConversionDeclarationMismatch),
+  ledger_entry_converts_pair_distinct: ledger(LedgerErrorCode.entryConversionDeclarationMismatch),
+  ledger_entry_converts_as_of_form: ledger(LedgerErrorCode.entryConversionDeclarationMismatch),
+  ledger_entry_converts_alphabet: ledger(LedgerErrorCode.accountInvalidIdentifier),
+  ledger_entry_accrues_whole: ledger(LedgerErrorCode.entryFeeAccrualMismatch),
+  ledger_entry_accrues_positive: ledger(LedgerErrorCode.entryFeeAccrualMismatch),
+  ledger_entry_accrues_alphabet: ledger(LedgerErrorCode.accountInvalidIdentifier),
+  ledger_entry_funds_whole: ledger(LedgerErrorCode.entryShortfallFundingMismatch),
+  ledger_entry_funds_positive: ledger(LedgerErrorCode.entryShortfallFundingMismatch),
+  ledger_entry_funds_settlement_only: ledger(LedgerErrorCode.entryShortfallFundingMismatch),
+  ledger_entry_funds_not_self: ledger(LedgerErrorCode.entryShortfallFundingMismatch),
+  ledger_entry_funds_owner_alphabet: ledger(LedgerErrorCode.accountInvalidIdentifier),
+  /**
+   * Ссылка на признание, которого в журнале нет, ссылкой не является — это
+   * внешний ключ, и в коде то же правило зовётся
+   * `journalShortfallRecognitionMissing`.
+   */
+  ledger_entry_funds_recognised_entry_id_fkey: ledger(
+    LedgerErrorCode.journalShortfallRecognitionMissing,
+  ),
+  /**
+   * Одно признание довносится один раз. В коде это
+   * `assertShortfallFundingResolves`, в схеме — частичный уникальный индекс:
+   * правило выражается ключом, и держит его ключ, а не сложение постфактум.
+   */
+  ledger_entry_shortfall_funded_once: ledger(LedgerErrorCode.journalShortfallFundedTwice),
   ledger_posting_client_key_alphabet: ledger(LedgerErrorCode.accountInvalidIdentifier),
   ledger_posting_identifier_alphabet: ledger(LedgerErrorCode.accountInvalidIdentifier),
   ledger_posting_attribution_client_alphabet: ledger(LedgerErrorCode.accountInvalidIdentifier),
@@ -160,9 +198,9 @@ function fromKey(key: string, detail: string): Error {
  */
 export function translateStorageError(error: unknown): unknown {
   // Уже названная ошибка переводу не подлежит. Без этой строки собственный
-  // отказ хранилища (`db.entry.declaration_not_storable`) пересобирался бы
-  // заново по своему же сообщению — с тем же кодом, но без подробностей,
-  // потому что `detail` у него не поле драйвера, а наше.
+  // отказ хранилища (`db.entry.ceiling_mismatch`) пересобирался бы заново по
+  // своему же сообщению — с тем же кодом, но без подробностей, потому что
+  // `detail` у него не поле драйвера, а наше.
   if (isNamed(error)) return error;
   const key = raisedKey(error);
   const detail = field(error, 'detail') ?? '';

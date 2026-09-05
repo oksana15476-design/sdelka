@@ -55,6 +55,27 @@ describe('плавающей точки в схеме нет', () => {
       expect(type.startsWith('numeric(38, 0)'), `${column}: ${type}`).toBe(true);
     }
   });
+
+  it('денежные колонки и курсы, добавленные позже, объявлены так же', () => {
+    // Проверка выше смотрит **только внутрь `CREATE TABLE`**, и колонка,
+    // заведённая `ALTER TABLE … ADD COLUMN`, мимо неё проходит целиком. То есть
+    // правило действовало на первую редакцию таблицы и переставало действовать
+    // на все следующие — а объявления записи журнала (`0021`) приезжают именно
+    // так.
+    //
+    // Курс сюда входит наравне с суммой: красная линия №4 говорит о суммах, но
+    // курс — это то, из чего сумма считается, и `2,6686875` в double не равен
+    // себе уже после трёх операций. В TS это `Rational` из двух `bigint`.
+    const added = [
+      ...CODE_SQL.matchAll(
+        /ADD COLUMN ([a-z_]*(?:amount_minor|numerator|denominator))\s+([a-z]+(?:\s*\([^)]*\))?)/gu,
+      ),
+    ].map((item) => [item[1] ?? '', (item[2] ?? '').trim()] as const);
+    expect(added.length).toBeGreaterThan(0);
+    for (const [column, type] of added) {
+      expect(type.startsWith('numeric(38, 0)'), `${column}: ${type}`).toBe(true);
+    }
+  });
 });
 
 describe('пользовательского текста в схеме нет', () => {

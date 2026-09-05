@@ -19,21 +19,30 @@ import {
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_DEADLINE_POLICY,
   DEFAULT_OBSERVATION_POLICY,
+  RELEASE_CONDITIONS,
   dealState,
   initialTrancheState,
   instant,
+  payoutIdempotencyKey,
   reduceTranche,
   refundIdempotencyKey,
+  releaseObservation,
 } from '@sdelka/domain';
 import {
+  type DealPartiesAttestation,
   type EntryMeta,
+  accrueFee,
   checkLedgerInvariants,
   clientKey,
   clientTopUp,
+  feeCeiling,
   lockForTranche,
+  receiveFee,
+  settleTrancheToClientAccount,
+  trancheSettlement,
   unlockToClientAccount,
 } from '@sdelka/ledger';
-import { isoDate, money } from '@sdelka/money';
+import { isoDate, money, rational } from '@sdelka/money';
 import { expect, it } from 'vitest';
 import { pgWorldStore } from '../../src/store/pg-store.ts';
 import type { WorldStore } from '../../src/store/port.ts';
@@ -42,7 +51,6 @@ import type {
   PayoutSnapshot,
   TrancheSnapshot,
 } from '../../src/store/port.ts';
-import { OWNER_ROLE } from '../../src/roles.ts';
 import { dbSuite, withRollback } from './support/pg.ts';
 import { savepointStore } from './support/store.ts';
 
@@ -63,21 +71,19 @@ import { savepointStore } from './support/store.ts';
  * было, эта проверка не могла существовать: мир жил в памяти и умирал вместе с
  * процессом.
  *
- * ⚠ **Сценарий идёт под ролью владельца схемы, а не под ролью приложения, и
- * это не удобство, а обход названного дефекта.** Под `sdelka_app` дописать
- * запись журнала аудита сегодня невозможно вовсе: триггер `assert_audit_chain`
- * объявлен `SECURITY INVOKER` и берёт `SELECT … FOR UPDATE`, а `FOR UPDATE`
- * требует права `UPDATE`, которое инвариант 21 у роли приложения отбирает.
- * Разбор и проба — в `store-grants.int.test.ts`.
+ * **Оба сценария идут под ролью приложения** — той самой, под которой пишет
+ * продукт, и с теми правами, которые оставляет инвариант 21. Прежняя редакция
+ * шла под ролью владельца, и это был не выбор, а обход дефекта: под
+ * `sdelka_app` дописать запись журнала аудита было невозможно вовсе
+ * (`assert_audit_chain` брала `SELECT … FOR UPDATE` от имени вызывающего).
+ * Починено `0020_audit_append_only.sql`, разбор — в `store-grants.int.test.ts`.
  *
- * ⚠ Расчёт получателю в этот сценарий не входит, и это не выбор пути поудобнее.
- * Расчёт идёт двумя записями, вторая из которых — начисление комиссии с
- * версией тарифного плана, а колонки под неё в `sdelka.ledger_entry` нет.
- * Хранилище такую запись отвергает (`db.entry.declaration_not_storable`), и
- * сценарий, который бы её обошёл, скрыл бы дыру схемы вместо того, чтобы её
- * назвать. Дыра названа там же, где отказ.
+ * Второй сценарий — **расчёт получателю**, и прежде его здесь не было по той
+ * же причине: расчёт идёт вместе с начислением комиссии, а колонок под
+ * объявления `accrues`, `converts` и `funds` в `sdelka.ledger_entry` не было.
+ * Завела `0021_entry_declarations.sql`.
  */
-const { run, title, pool } = await dbSuite('хранилище: сквозной сценарий возврата');
+const { run, title, pool } = await dbSuite('хранилище: сквозной сценарий');
 
 const GEL = 'GEL' as const;
 const DEAL = 'deal-scenario';
@@ -108,6 +114,74 @@ const ACT: ConditionAct = Object.freeze({
   conditionTextVersion: 'condition/2026-01-01.1',
   conditionType: 'registration_transfer',
 });
+
+const SELLER_ACCOUNT = clientKey(SELLER.accountKey);
+
+/** Комиссия платформы: полтора процента, как у потока P2 (FUNCTIONAL.md §3.4). */
+const FEE = money(GEL, 300_000n);
+const NET = money(GEL, AMOUNT.minor - FEE.minor);
+const TARIFF_VERSION = 'tariff/2026-01.1';
+
+/**
+ * Потолок удержания **строже** жёсткого предела учёта: полтора процента вместо
+ * двух. Ровно та величина, которую прежде нельзя было записать — потолка в
+ * схеме не было, и запись с ним хранилище отвергало.
+ */
+const CEILING = feeCeiling(rational(15n, 1_000n));
+
+const CADASTRAL_CODE = 'cadastral-scenario';
+
+/**
+ * Наблюдение из реестра: платная выписка, все пять полей сошлись, собственник
+ * установлен. Без него транш на путь выплаты не выходит ни одной дверью
+ * (`g_observation_sufficient`, ORACLE.md §6.4).
+ */
+const OBSERVATION = releaseObservation({
+  level: 'L3',
+  conditionType: 'registration_transfer',
+  sourceKey: RELEASE_CONDITIONS.registration_transfer.sourceKey,
+  cadastralCode: CADASTRAL_CODE,
+  fields: {
+    cadastralCode: true,
+    ownerDocumentNumber: true,
+    share: true,
+    basis: true,
+    noUnexpectedEncumbrances: true,
+  },
+  ownerCheck: 'established',
+  observedAt: instant(START + 3_500),
+  rawSourceDigest: 'a'.repeat(64),
+});
+
+/**
+ * Факты расчётной ветви. Два утверждающих, а не один: сумма транша выше первой
+ * ступени `DEFAULT_APPROVAL_POLICY`, и оба отличаются от готовившего операцию —
+ * это проверяет сам guard.
+ */
+const RELEASE_FACTS: Partial<TrancheFacts> = {
+  collectedAmount: AMOUNT,
+  lockedAmount: AMOUNT,
+  observation: OBSERVATION,
+  beneficiary: { status: 'verified', locked: true, lastChangedAt: null },
+  approvals: [{ userId: 'approver-a-scenario' }, { userId: 'approver-b-scenario' }],
+};
+
+/**
+ * Подтверждение сторон домена. `DealPartiesAttestation` держится на
+ * ambient-символе: значения этого типа не существует, построить его кодом
+ * нельзя, и выдавать его обязан домен. В сценарии домен играет тест — но
+ * играет честно: та же пара сторон, что записана в сделке, и та же ссылка на
+ * пакет доказательств, что у поручения.
+ */
+function attest(): DealPartiesAttestation {
+  return {
+    dealId: DEAL,
+    trancheId: TRANCHE,
+    payer: BUYER_ACCOUNT,
+    recipient: SELLER_ACCOUNT,
+    evidenceRef: 'evidence-bundle-scenario',
+  } as unknown as DealPartiesAttestation;
+}
 
 function facts(overrides: Partial<TrancheFacts> = {}): TrancheFacts {
   return {
@@ -173,7 +247,7 @@ run(title, () => {
   it('возврат покупателю проходит целиком через базу и поднимается из неё', async () => {
     if (pool === null) return;
     await withRollback(pool, async (client) => {
-      const store: WorldStore = savepointStore(client, OWNER_ROLE);
+      const store: WorldStore = savepointStore(client);
 
       /* --- Шаг 1: сделка и транш заведены --- */
       let chain = genesisChain(CHAIN, auditInstant(START), ACTOR);
@@ -380,10 +454,234 @@ run(title, () => {
     });
   });
 
+  /**
+   * Расчётная ветвь: условие наступило, деньги ушли получателю, комиссия
+   * признана и выведена на операционный счёт.
+   *
+   * Прежде этот путь через базу не проходил вовсе: расчёт идёт вместе с
+   * начислением комиссии, а объявление начисления несёт версию тарифного плана,
+   * колонки под которую в `sdelka.ledger_entry` не было. Хранилище отвергало
+   * такую запись — верно отвергало, — и сценарий обходился возвратом.
+   *
+   * Здесь проверяются обе половины красной линии №2: комиссия не остаётся на
+   * номинальном счёте (`receiveFee` выводит её на операционный), и признана она
+   * с версией плана, по которой посчитана (§4.2). Обе половины поднимаются из
+   * базы обратно тем же значением.
+   */
+  it('расчёт получателю проходит целиком через базу и поднимается из неё', async () => {
+    if (pool === null) return;
+    await withRollback(pool, async (client) => {
+      const store: WorldStore = savepointStore(client);
+      const ref = { dealId: DEAL, trancheId: TRANCHE };
+
+      /* --- Шаг 1: сделка и транш заведены --- */
+      let chain = genesisChain(CHAIN, auditInstant(START), ACTOR);
+      let state = initialTrancheState(instant(START), DEFAULT_DEADLINE_POLICY);
+      let tranche: TrancheSnapshot = { dealId: DEAL, trancheId: TRANCHE, state, required: AMOUNT };
+      const deal: DealSnapshot = {
+        dealId: DEAL,
+        state: dealState('ready'),
+        buyer: BUYER,
+        seller: SELLER,
+      };
+      await store.transact(async (tx) => {
+        await tx.saveDeal(deal);
+        await tx.saveTranche(tranche, null);
+        await tx.appendAudit(chain.records);
+      });
+
+      /* --- Шаг 2: инструкции выданы --- */
+      let previous = tranche;
+      state = step(state, { type: 'instructions_issued' }, START + 1_000);
+      tranche = { ...tranche, state };
+      chain = auditStep(chain, 1, START + 1_000, {
+        kind: 'state_transition',
+        machine: 'tranche',
+        from: 'pending',
+        to: 'collecting',
+        eventKey: 'instructions_issued',
+        failedGuards: [],
+      });
+      await store.transact(async (tx) => {
+        await tx.saveTranche(tranche, previous);
+        await tx.appendAudit([chain.records[1]!]);
+      });
+
+      /* --- Шаг 3: деньги пришли --- */
+      const topUp = clientTopUp(meta('st-1-top-up', START + 2_000), BUYER_ACCOUNT, AMOUNT);
+      previous = tranche;
+      state = step(
+        state,
+        { type: 'funds_received', amount: AMOUNT, sender: BUYER.partyId, reference: 'payment-1' },
+        START + 2_000,
+        { collectedAmount: AMOUNT },
+      );
+      tranche = { ...tranche, state };
+      chain = auditStep(chain, 2, START + 2_000, {
+        kind: 'state_transition',
+        machine: 'tranche',
+        from: 'collecting',
+        to: 'collected',
+        eventKey: 'funds_received',
+        failedGuards: [],
+      });
+      await store.transact(async (tx) => {
+        await tx.appendJournal([topUp]);
+        await tx.saveTranche(tranche, previous);
+        await tx.appendAudit([chain.records[2]!]);
+      });
+
+      /* --- Шаг 4: резерв --- */
+      const lock = lockForTranche(meta('st-2-lock', START + 3_000), BUYER_ACCOUNT, ref, AMOUNT);
+      previous = tranche;
+      state = step(state, { type: 'reserve_requested' }, START + 3_000, {
+        collectedAmount: AMOUNT,
+      });
+      tranche = { ...tranche, state };
+      chain = auditStep(chain, 3, START + 3_000, {
+        kind: 'state_transition',
+        machine: 'tranche',
+        from: 'collected',
+        to: 'reserved',
+        eventKey: 'reserve_requested',
+        failedGuards: [],
+      });
+      await store.transact(async (tx) => {
+        await tx.appendJournal([lock]);
+        await tx.saveTranche(tranche, previous);
+        await tx.appendAudit([chain.records[3]!]);
+      });
+      expect(tranche.state.status).toBe('reserved');
+
+      /* --- Шаг 5: условие установлено наблюдением из реестра --- */
+      previous = tranche;
+      state = step(
+        state,
+        {
+          type: 'condition_established',
+          evidenceBundleId: 'evidence-bundle-scenario',
+          conditionType: 'registration_transfer',
+        },
+        START + 4_000,
+        RELEASE_FACTS,
+      );
+      tranche = { ...tranche, state };
+      chain = auditStep(chain, 4, START + 4_000, {
+        kind: 'state_transition',
+        machine: 'tranche',
+        from: 'reserved',
+        to: 'release_pending',
+        eventKey: 'condition_established',
+        failedGuards: [],
+      });
+      await store.transact(async (tx) => {
+        await tx.saveTranche(tranche, previous);
+        await tx.appendAudit([chain.records[4]!]);
+      });
+      expect(tranche.state.status).toBe('release_pending');
+
+      /* --- Шаг 6: расчёт разрешён. Комиссия начислена, поручение ушло --- */
+      const accrual = accrueFee(meta('st-3-accrual', START + 5_000), ref, FEE, TARIFF_VERSION);
+      previous = tranche;
+      state = step(state, { type: 'release_authorized' }, START + 5_000, RELEASE_FACTS);
+      tranche = { ...tranche, state };
+      const payout: PayoutSnapshot = {
+        payoutId: 'payout-scenario-release',
+        dealId: DEAL,
+        state: {
+          status: 'submitted',
+          idempotencyKey: payoutIdempotencyKey(TRANCHE),
+          trancheId: TRANCHE,
+          leg: 'release',
+        },
+        amount: NET,
+        beneficiary: SELLER,
+        evidenceBundleId: 'evidence-bundle-scenario',
+        providerReference: null,
+      };
+      chain = auditStep(chain, 5, START + 5_000, {
+        kind: 'state_transition',
+        machine: 'tranche',
+        from: 'release_pending',
+        to: 'paying_out',
+        eventKey: 'release_authorized',
+        failedGuards: [],
+      });
+      await store.transact(async (tx) => {
+        await tx.appendJournal([accrual]);
+        await tx.saveTranche(tranche, previous);
+        await tx.savePayout(payout, null);
+        await tx.appendAudit([chain.records[5]!]);
+      });
+      expect(tranche.state.status).toBe('paying_out');
+
+      /* --- Шаг 7: банк подтвердил. Расчёт записан, комиссия выведена --- */
+      const settlement = settleTrancheToClientAccount(
+        meta('st-4-settle', START + 6_000),
+        trancheSettlement(ref, BUYER_ACCOUNT, SELLER_ACCOUNT, attest(), CEILING),
+        AMOUNT,
+        accrual,
+      );
+      // Красная линия №2: комиссия платформы не хранится на номинальном счёте —
+      // она выводится на операционный в момент расчёта, в том же журнале.
+      const feeReceived = receiveFee(meta('st-5-fee', START + 6_500), ref, FEE);
+      previous = tranche;
+      state = step(state, { type: 'payout_result', outcome: 'settled' }, START + 6_000, {
+        ...RELEASE_FACTS,
+        activePayouts: 1,
+      });
+      tranche = { ...tranche, state };
+      const settledPayout: PayoutSnapshot = {
+        ...payout,
+        state: { ...payout.state, status: 'settled' },
+        providerReference: 'psp/2026/03/01/release-1',
+      };
+      chain = auditStep(chain, 6, START + 6_000, {
+        kind: 'payout_result',
+        outcome: 'settled',
+        response: BANK_RESPONSE,
+        reasonKey: null,
+      });
+      await store.transact(async (tx) => {
+        await tx.appendJournal([settlement, feeReceived]);
+        await tx.saveTranche(tranche, previous);
+        await tx.savePayout(settledPayout, payout);
+        await tx.appendAudit([chain.records[6]!]);
+      });
+      expect(tranche.state.status).toBe('paid_out');
+
+      /* --- Мир поднимается из базы заново --- */
+      const reloaded = await store.transact(async (tx) => ({
+        journal: await tx.readJournal(),
+        chain: await tx.readChain(CHAIN),
+        deal: await tx.loadDeal(DEAL),
+        tranche: await tx.loadTranche(DEAL, TRANCHE),
+        payouts: await tx.loadPayouts(DEAL, TRANCHE),
+      }));
+
+      const source = [topUp, lock, accrual, settlement, feeReceived];
+      expect(reloaded.journal.entries).toEqual(source);
+      expect(checkLedgerInvariants(reloaded.journal)).toEqual([]);
+      // Объявления, которых схема не держала: версия тарифного плана и потолок
+      // удержания. Оба поднимаются тем же значением, а не умолчанием.
+      expect(reloaded.journal.entries[2]?.accrues).toEqual({
+        deal: ref,
+        fee: FEE,
+        tariffVersionId: TARIFF_VERSION,
+      });
+      expect(reloaded.journal.entries[3]?.settles?.ceiling).toEqual(CEILING);
+      expect(verifyChain(reloaded.chain).intact).toBe(true);
+      expect(reloaded.chain).toEqual(chain);
+      expect(reloaded.deal).toEqual(deal);
+      expect(reloaded.tranche).toEqual(tranche);
+      expect(reloaded.payouts).toEqual([settledPayout]);
+    });
+  });
+
   it('шаг ложится целиком или не ложится вовсе', async () => {
     if (pool === null) return;
     await withRollback(pool, async (client) => {
-      const store: WorldStore = savepointStore(client, OWNER_ROLE);
+      const store: WorldStore = savepointStore(client);
       await store.transact(async (tx) => {
         await tx.saveDeal({
           dealId: DEAL,
@@ -424,7 +722,7 @@ run(title, () => {
     // сохранения: проверяется именно его граница транзакции. Зафиксировать шаг
     // этот тест не может по построению — он падает, — поэтому базу он не
     // засоряет, а журнал только дополняется и вычистить его было бы нечем.
-    const store = pgWorldStore(pool, { role: OWNER_ROLE });
+    const store = pgWorldStore(pool);
     const entry = clientTopUp(meta('sc-committed', START + 9_000), BUYER_ACCOUNT, AMOUNT);
     const failed = store.transact(async (tx) => {
       await tx.appendJournal([entry]);

@@ -81,7 +81,7 @@ describe('перевод отказов базы', () => {
     // Без этого собственный отказ хранилища пересобирался бы по своему же
     // сообщению — с тем же кодом, но без подробностей: `details` у него не
     // поле драйвера, а наше.
-    const named = new DbError(DbErrorCode.entryDeclarationNotStorable, { field: 'accrues' });
+    const named = new DbError(DbErrorCode.entryCeilingMismatch, { entryId: 'e-1' });
     expect(translateStorageError(named)).toBe(named);
   });
 

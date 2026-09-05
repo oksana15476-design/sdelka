@@ -2,22 +2,35 @@ import {
   type Account,
   type AccountKind,
   type DealPartiesAttestation,
+  type FeeAccrualDeclaration,
   type FundsRef,
+  type FxExecution,
   type Journal,
   type JournalEntry,
   type JournalEntryInput,
   type JournalEntryKind,
   type Posting,
-  DEFAULT_FEE_CEILING,
+  type ShortfallFunding,
+  type TrancheSettlement,
   accountCode,
   appendEntry,
   clientKey,
   createJournalEntry,
   emptyJournal,
+  feeCeiling,
+  fxExecution,
   isClientRef,
   trancheSettlement,
 } from '@sdelka/ledger';
-import { type CurrencyCode, assertCurrencyCode, compareRational, money } from '@sdelka/money';
+import {
+  type CurrencyCode,
+  assertCurrencyCode,
+  compareRational,
+  fxRates,
+  isoDate,
+  money,
+  rational,
+} from '@sdelka/money';
 import { accountKindRow } from '../accounts.ts';
 import { DbError, DbErrorCode } from '../errors.ts';
 import { type PoolClient, toBigInt } from '../pool.ts';
@@ -59,36 +72,23 @@ import type { WriteOutcome } from './port.ts';
  */
 
 /* ------------------------------------------------------------------------- */
-/* Что схема удержать не может                                               */
+/* Все четыре объявления записи хранятся                                     */
 /* ------------------------------------------------------------------------- */
 
 /**
- * Поля записи, для которых в `sdelka.ledger_entry` нет колонки. Отказ описан у
- * `DbErrorCode.entryDeclarationNotStorable`: не пишем того, чего не сможем
- * прочесть обратно.
+ * **Отказа `db.entry.declaration_not_storable` больше нет, и это не
+ * послабление.** Он стоял, пока `sdelka.ledger_entry` держала одно объявление
+ * из четырёх: у обмена пропали бы три курса и дата, у начисления — версия
+ * тарифного плана, у довнесения — ссылка на признание, а у расчёта — потолок
+ * удержания. Не писать того, чего не прочтёшь обратно, было единственным
+ * честным ответом.
+ *
+ * `0021_entry_declarations.sql` завела колонки под все четыре, поэтому отвергать
+ * стало нечего: непредставимого поля у записи не осталось ни одного. Что
+ * держало правило раньше — «схема отстала от домена» — теперь держит карта
+ * `entry-shape.ts`: новое поле объявления роняет `pnpm typecheck`, а не первую
+ * вставку.
  */
-function notStorable(entry: JournalEntry): string | null {
-  if (entry.converts !== null) return 'converts';
-  if (entry.accrues !== null) return 'accrues';
-  if (entry.funds !== null) return 'funds';
-  if (entry.settles !== null) {
-    // Потолок удержания в схеме не хранится, а умолчанием у `trancheSettlement`
-    // стоит жёсткий предел учёта. Значит запись с пределом, равным жёсткому,
-    // читается обратно точно, а с более строгим — нет: чтение вернуло бы
-    // расчёт, которому разрешено больше, чем было разрешено на самом деле.
-    if (compareRational(entry.settles.ceiling.maxShare, DEFAULT_FEE_CEILING.maxShare) !== 0) {
-      return 'settles.ceiling';
-    }
-  }
-  return null;
-}
-
-export function assertStorableEntry(entry: JournalEntry): void {
-  const field = notStorable(entry);
-  if (field !== null) {
-    throw new DbError(DbErrorCode.entryDeclarationNotStorable, { entryId: entry.id, field });
-  }
-}
 
 /* ------------------------------------------------------------------------- */
 /* TS → колонки                                                              */
@@ -128,20 +128,170 @@ export function attributionColumns(ref: FundsRef | null): AttributionColumns {
 }
 
 /* ------------------------------------------------------------------------- */
+/* Запись → колонки                                                          */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Одна колонка `sdelka.ledger_entry` и то, чем она заполняется.
+ *
+ * Список **один** на запись и на чтение: `INSERT`, `SELECT` и порядок значений
+ * собираются из него же. Два списка колонок рядом расходятся ровно тогда, когда
+ * добавляется поле, — то есть в тот единственный момент, когда расхождение
+ * дорого.
+ */
+interface EntryColumn {
+  readonly name: string;
+  readonly of: (entry: JournalEntry) => unknown;
+}
+
+/**
+ * Число в базу уходит **строкой**, а не числом: `bigint` через `number` не
+ * проходит нигде, включая параметр запроса (красная линия №4). Ровно то же
+ * правило, что у суммы проводки, и оно распространяется на числитель и
+ * знаменатель курса: курс — это то, из чего сумма считается.
+ */
+function minorText(value: bigint | null): string | null {
+  return value === null ? null : value.toString();
+}
+
+const ENTRY_COLUMNS: readonly EntryColumn[] = Object.freeze([
+  { name: 'entry_id', of: (entry) => entry.id },
+  { name: 'occurred_at', of: (entry) => entry.occurredAt },
+  { name: 'kind', of: (entry) => entry.kind },
+  { name: 'memo_key', of: (entry) => entry.memoKey },
+  { name: 'corrects_entry_id', of: (entry) => entry.correctsEntryId },
+
+  { name: 'settles_deal_id', of: (entry) => entry.settles?.deal.dealId ?? null },
+  { name: 'settles_tranche_id', of: (entry) => entry.settles?.deal.trancheId ?? null },
+  { name: 'settles_payer', of: (entry) => entry.settles?.payer ?? null },
+  { name: 'settles_recipient', of: (entry) => entry.settles?.recipient ?? null },
+  { name: 'settles_evidence_ref', of: (entry) => entry.settles?.evidenceRef ?? null },
+  {
+    name: 'settles_ceiling_numerator',
+    of: (entry) => minorText(entry.settles?.ceiling.maxShare.numerator ?? null),
+  },
+  {
+    name: 'settles_ceiling_denominator',
+    of: (entry) => minorText(entry.settles?.ceiling.maxShare.denominator ?? null),
+  },
+
+  { name: 'converts_conversion_id', of: (entry) => entry.converts?.conversionId ?? null },
+  {
+    name: 'converts_source_currency',
+    of: (entry) => entry.converts?.converted.source.currency ?? null,
+  },
+  {
+    name: 'converts_source_amount_minor',
+    of: (entry) => minorText(entry.converts?.converted.source.minor ?? null),
+  },
+  {
+    name: 'converts_target_currency',
+    of: (entry) => entry.converts?.converted.target.currency ?? null,
+  },
+  {
+    name: 'converts_target_amount_minor',
+    of: (entry) => minorText(entry.converts?.converted.target.minor ?? null),
+  },
+  {
+    name: 'converts_client_rate_numerator',
+    of: (entry) => minorText(entry.converts?.converted.rates.client.value.numerator ?? null),
+  },
+  {
+    name: 'converts_client_rate_denominator',
+    of: (entry) => minorText(entry.converts?.converted.rates.client.value.denominator ?? null),
+  },
+  {
+    name: 'converts_reference_rate_numerator',
+    of: (entry) => minorText(entry.converts?.converted.rates.reference.value.numerator ?? null),
+  },
+  {
+    name: 'converts_reference_rate_denominator',
+    of: (entry) => minorText(entry.converts?.converted.rates.reference.value.denominator ?? null),
+  },
+  {
+    name: 'converts_official_rate_numerator',
+    of: (entry) => minorText(entry.converts?.converted.rates.official.value.numerator ?? null),
+  },
+  {
+    name: 'converts_official_rate_denominator',
+    of: (entry) => minorText(entry.converts?.converted.rates.official.value.denominator ?? null),
+  },
+  { name: 'converts_as_of', of: (entry) => entry.converts?.converted.asOf ?? null },
+
+  { name: 'accrues_deal_id', of: (entry) => entry.accrues?.deal.dealId ?? null },
+  { name: 'accrues_tranche_id', of: (entry) => entry.accrues?.deal.trancheId ?? null },
+  { name: 'accrues_fee_currency', of: (entry) => entry.accrues?.fee.currency ?? null },
+  {
+    name: 'accrues_fee_amount_minor',
+    of: (entry) => minorText(entry.accrues?.fee.minor ?? null),
+  },
+  { name: 'accrues_tariff_version_id', of: (entry) => entry.accrues?.tariffVersionId ?? null },
+
+  { name: 'funds_recognised_entry_id', of: (entry) => entry.funds?.recognisedEntryId ?? null },
+  { name: 'funds_owner', of: (entry) => entry.funds?.owner ?? null },
+  { name: 'funds_amount_currency', of: (entry) => entry.funds?.amount.currency ?? null },
+  { name: 'funds_amount_minor', of: (entry) => minorText(entry.funds?.amount.minor ?? null) },
+]);
+
+/** Имена колонок записи в порядке, в котором их ждут `INSERT` и `SELECT`. */
+export const ENTRY_COLUMN_NAMES: readonly string[] = Object.freeze(
+  ENTRY_COLUMNS.map((column) => column.name),
+);
+
+/** Значения записи в том же порядке. */
+export function entryValues(entry: JournalEntry): readonly unknown[] {
+  return ENTRY_COLUMNS.map((column) => column.of(entry));
+}
+
+/* ------------------------------------------------------------------------- */
 /* Колонки → TS                                                              */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * Строка `sdelka.ledger_entry` так, как её отдаёт драйвер.
+ *
+ * `numeric` остаётся строкой (`src/pool.ts`), поэтому суммы, числители и
+ * знаменатели объявлены `string | null`, а не `number`: `number` здесь и есть
+ * та самая тихая потеря точности, ради которой заведены разборщики типов.
+ */
 interface EntryRow {
   readonly entry_id: string;
   readonly occurred_at: Date;
   readonly kind: string;
   readonly memo_key: string;
   readonly corrects_entry_id: string | null;
+
   readonly settles_deal_id: string | null;
   readonly settles_tranche_id: string | null;
   readonly settles_payer: string | null;
   readonly settles_recipient: string | null;
   readonly settles_evidence_ref: string | null;
+  readonly settles_ceiling_numerator: string | null;
+  readonly settles_ceiling_denominator: string | null;
+
+  readonly converts_conversion_id: string | null;
+  readonly converts_source_currency: string | null;
+  readonly converts_source_amount_minor: string | null;
+  readonly converts_target_currency: string | null;
+  readonly converts_target_amount_minor: string | null;
+  readonly converts_client_rate_numerator: string | null;
+  readonly converts_client_rate_denominator: string | null;
+  readonly converts_reference_rate_numerator: string | null;
+  readonly converts_reference_rate_denominator: string | null;
+  readonly converts_official_rate_numerator: string | null;
+  readonly converts_official_rate_denominator: string | null;
+  readonly converts_as_of: string | null;
+
+  readonly accrues_deal_id: string | null;
+  readonly accrues_tranche_id: string | null;
+  readonly accrues_fee_currency: string | null;
+  readonly accrues_fee_amount_minor: string | null;
+  readonly accrues_tariff_version_id: string | null;
+
+  readonly funds_recognised_entry_id: string | null;
+  readonly funds_owner: string | null;
+  readonly funds_amount_currency: string | null;
+  readonly funds_amount_minor: string | null;
 }
 
 interface PostingRow {
@@ -235,6 +385,109 @@ function attestationOfRow(row: EntryRow): DealPartiesAttestation {
   } as unknown as DealPartiesAttestation;
 }
 
+/**
+ * Объявление расчёта вместе с потолком удержания.
+ *
+ * Потолок собирается `feeCeiling`, а не литералом: доля не бывает
+ * отрицательной и не бывает больше единицы, и проверяет это учёт, а не мы.
+ * Дробь при этом сокращается (`rational`), поэтому `5/10` из базы даёт ту же
+ * величину, что `1/2`, — сравниваются величины, а не форма записи.
+ *
+ * **Сверка после сборки — не украшение.** `trancheSettlement` применяет к
+ * объявленному потолку `strictestFeeCeiling` с жёстким пределом учёта, то есть
+ * потолок, лежащий в базе шире жёсткого, вернулся бы **суженным**: чтение
+ * отдало бы не то, что записано. Через порт такая строка не попадает — потолок
+ * пишется тем же значением, которое собрал учёт, — но попасть в таблицу мимо
+ * порта она может, и тогда расхождение обязано иметь имя, а не тишину. Тот же
+ * приём, что у `account_code` в проводке.
+ */
+function settlesOfRow(row: EntryRow): TrancheSettlement | null {
+  if (row.settles_deal_id === null) return null;
+  const stored = rational(
+    toBigInt(row.settles_ceiling_numerator),
+    toBigInt(row.settles_ceiling_denominator),
+  );
+  const settlement = trancheSettlement(
+    { dealId: row.settles_deal_id, trancheId: row.settles_tranche_id ?? '' },
+    clientKey(row.settles_payer ?? ''),
+    clientKey(row.settles_recipient ?? ''),
+    attestationOfRow(row),
+    feeCeiling(stored),
+  );
+  if (compareRational(settlement.ceiling.maxShare, stored) !== 0) {
+    throw new DbError(DbErrorCode.entryCeilingMismatch, {
+      entryId: row.entry_id,
+      stored: `${stored.numerator}/${stored.denominator}`,
+      rebuilt: `${settlement.ceiling.maxShare.numerator}/${settlement.ceiling.maxShare.denominator}`,
+    });
+  }
+  return settlement;
+}
+
+/**
+ * Объявление обмена: ключ, обе ноги, три курса и дата.
+ *
+ * Пара валют курса не хранится, а берётся из валют ног — см. `entry-shape.ts`.
+ * Собирается через `fxExecution`, поэтому строка, в которой встречная сумма не
+ * равна исходной по клиентскому курсу с усечением, поднимает
+ * `entry.conversion_declaration_mismatch` **на чтении**: пересчёт делает та же
+ * реализация, что и при записи, второй на PL/pgSQL нет и не будет.
+ */
+function convertsOfRow(row: EntryRow): FxExecution | null {
+  const conversionId = row.converts_conversion_id;
+  if (conversionId === null) return null;
+  const base = assertCurrencyCode(row.converts_source_currency ?? '');
+  const quote = assertCurrencyCode(row.converts_target_currency ?? '');
+  const rates = fxRates(base, quote, {
+    client: rational(
+      toBigInt(row.converts_client_rate_numerator),
+      toBigInt(row.converts_client_rate_denominator),
+    ),
+    reference: rational(
+      toBigInt(row.converts_reference_rate_numerator),
+      toBigInt(row.converts_reference_rate_denominator),
+    ),
+    official: rational(
+      toBigInt(row.converts_official_rate_numerator),
+      toBigInt(row.converts_official_rate_denominator),
+    ),
+  });
+  return fxExecution(conversionId, {
+    source: money(base, toBigInt(row.converts_source_amount_minor)),
+    target: money(quote, toBigInt(row.converts_target_amount_minor)),
+    rates,
+    asOf: isoDate(row.converts_as_of ?? ''),
+  });
+}
+
+/** Объявление начисления комиссии вместе с версией тарифного плана (§4.2). */
+function accruesOfRow(row: EntryRow): FeeAccrualDeclaration | null {
+  const dealId = row.accrues_deal_id;
+  if (dealId === null) return null;
+  return Object.freeze({
+    deal: Object.freeze({ dealId, trancheId: row.accrues_tranche_id ?? '' }),
+    fee: money(
+      assertCurrencyCode(row.accrues_fee_currency ?? ''),
+      toBigInt(row.accrues_fee_amount_minor),
+    ),
+    tariffVersionId: row.accrues_tariff_version_id ?? '',
+  });
+}
+
+/** Объявление довнесения недостачи со ссылкой на признание. */
+function fundsOfRow(row: EntryRow): ShortfallFunding | null {
+  const recognisedEntryId = row.funds_recognised_entry_id;
+  if (recognisedEntryId === null) return null;
+  return Object.freeze({
+    recognisedEntryId,
+    owner: clientKey(row.funds_owner ?? ''),
+    amount: money(
+      assertCurrencyCode(row.funds_amount_currency ?? ''),
+      toBigInt(row.funds_amount_minor),
+    ),
+  });
+}
+
 function entryOfRows(row: EntryRow, postings: readonly PostingRow[]): JournalEntry {
   const kind = row.kind as JournalEntryKind;
   const base = {
@@ -248,20 +501,27 @@ function entryOfRows(row: EntryRow, postings: readonly PostingRow[]): JournalEnt
     memoKey: row.memo_key,
     postings: postings.map(postingOfRow),
   };
-  const settles =
-    row.settles_deal_id === null
-      ? {}
-      : {
-          settles: trancheSettlement(
-            { dealId: row.settles_deal_id, trancheId: row.settles_tranche_id ?? '' },
-            clientKey(row.settles_payer ?? ''),
-            clientKey(row.settles_recipient ?? ''),
-            attestationOfRow(row),
-          ),
-        };
+  // Необязательные поля добавляются **только когда они есть**: у
+  // `JournalEntryInput` они объявлены `?`, и `undefined` на их месте — не то же
+  // самое, что отсутствие ключа (`assertEntryWellFormed` различает это прямо).
+  const settlement = settlesOfRow(row);
+  const settles = settlement === null ? {} : { settles: settlement };
+  const conversion = convertsOfRow(row);
+  const converts = conversion === null ? {} : { converts: conversion };
+  const accrual = accruesOfRow(row);
+  const accrues = accrual === null ? {} : { accrues: accrual };
+  const funding = fundsOfRow(row);
+  const funds = funding === null ? {} : { funds: funding };
   const corrects =
     row.corrects_entry_id === null ? {} : { correctsEntryId: row.corrects_entry_id };
-  const input: JournalEntryInput = { ...base, ...settles, ...corrects };
+  const input: JournalEntryInput = {
+    ...base,
+    ...settles,
+    ...converts,
+    ...accrues,
+    ...funds,
+    ...corrects,
+  };
   // Сборка идёт через **конструктор учёта**, а не литералом. Это и есть второй
   // контур инвариантов на чтении: строка, из которой не собирается запись,
   // поднимает `LedgerError` с тем же ключом, что и при записи, — баланс,
@@ -273,11 +533,19 @@ function entryOfRows(row: EntryRow, postings: readonly PostingRow[]): JournalEnt
 /* Запись                                                                    */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * Список колонок и список подстановок собираются из одного источника
+ * (`ENTRY_COLUMNS`), а не пишутся руками рядом. Тридцать три колонки и
+ * тридцать три `$n` — это ровно тот размер, на котором список, набранный
+ * вручную, однажды разъезжается на одну позицию, и разъезжается молча: типы
+ * колонок совпадают, и база принимает.
+ */
+const ENTRY_COLUMN_LIST = ENTRY_COLUMN_NAMES.join(', ');
+const ENTRY_PLACEHOLDERS = ENTRY_COLUMN_NAMES.map((_name, index) => `$${index + 1}`).join(', ');
+
 const INSERT_ENTRY = `
-  INSERT INTO sdelka.ledger_entry (
-    entry_id, occurred_at, kind, memo_key, corrects_entry_id,
-    settles_deal_id, settles_tranche_id, settles_payer, settles_recipient, settles_evidence_ref
-  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+  INSERT INTO sdelka.ledger_entry (${ENTRY_COLUMN_LIST})
+  VALUES (${ENTRY_PLACEHOLDERS})
   ON CONFLICT (entry_id) DO NOTHING
   RETURNING entry_id`;
 
@@ -290,8 +558,7 @@ const INSERT_POSTING = `
   ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`;
 
 const SELECT_ENTRY = `
-  SELECT entry_id, occurred_at, kind, memo_key, corrects_entry_id,
-         settles_deal_id, settles_tranche_id, settles_payer, settles_recipient, settles_evidence_ref
+  SELECT ${ENTRY_COLUMN_LIST}
     FROM sdelka.ledger_entry
    WHERE entry_id = $1`;
 
@@ -330,19 +597,8 @@ function sameEntry(left: JournalEntry, right: JournalEntry): boolean {
 }
 
 async function appendOne(client: PoolClient, entry: JournalEntry): Promise<boolean> {
-  assertStorableEntry(entry);
-  const settles = entry.settles;
   const inserted = await client.query<{ entry_id: string }>(INSERT_ENTRY, [
-    entry.id,
-    entry.occurredAt,
-    entry.kind,
-    entry.memoKey,
-    entry.correctsEntryId,
-    settles?.deal.dealId ?? null,
-    settles?.deal.trancheId ?? null,
-    settles?.payer ?? null,
-    settles?.recipient ?? null,
-    settles?.evidenceRef ?? null,
+    ...entryValues(entry),
   ]);
   if (inserted.rowCount === 0) {
     // Строка под этим идентификатором уже лежит. Повтор — это когда лежит **то
@@ -399,8 +655,7 @@ export async function appendJournal(
 /* ------------------------------------------------------------------------- */
 
 const SELECT_ALL_ENTRIES = `
-  SELECT entry_id, occurred_at, kind, memo_key, corrects_entry_id,
-         settles_deal_id, settles_tranche_id, settles_payer, settles_recipient, settles_evidence_ref
+  SELECT ${ENTRY_COLUMN_LIST}
     FROM sdelka.ledger_entry
    ORDER BY seq`;
 

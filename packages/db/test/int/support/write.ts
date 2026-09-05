@@ -1,7 +1,12 @@
 import type { Journal, JournalEntry } from '@sdelka/ledger';
 import type { PoolClient } from '../../../src/pool.ts';
 import { toBigInt } from '../../../src/pool.ts';
-import { accountColumns, attributionColumns } from '../../../src/store/journal.ts';
+import {
+  ENTRY_COLUMN_NAMES,
+  accountColumns,
+  attributionColumns,
+  entryValues,
+} from '../../../src/store/journal.ts';
 
 /**
  * Заливка журнала для набора-зеркала.
@@ -9,22 +14,23 @@ import { accountColumns, attributionColumns } from '../../../src/store/journal.t
  * **Почему это не порт хранилища и почему так и должно быть.** Набор
  * `mirror.int.test.ts` сверяет два независимых воплощения одних и тех же
  * правил: представления SQL (`v_ledger_invariant_violation`) и
- * `checkLedgerInvariants` в TS. Ему нужно класть в таблицы **любые** проводки,
- * включая те, которые порт писать отказывается: расчёт с начислением комиссии,
- * три записи обмена, довнесение недостачи. Отказ порта на них — не дефект
- * набора, а честный ответ на то, что в `sdelka.ledger_entry` нет колонок под
- * объявления `converts`, `accrues` и `funds` (см. `DbErrorCode.
- * entryDeclarationNotStorable`). Пропустить эти случаи мимо зеркала значило бы
- * перестать сверять представления там, где они сложнее всего.
+ * `checkLedgerInvariants` в TS. Половина его сценариев — журналы, **уже**
+ * содержащие расхождение, и собраны они в обход словаря (`uncheckedEntry`).
+ * Порт такие записи не примет: он собирает прочитанное `createJournalEntry`, то
+ * есть прогоняет ровно те правила, нарушение которых сценарий и проверяет.
+ * Поэтому здесь остались голые `INSERT`ы — но **проекция «значение в колонки»
+ * одна** и берётся из `src/store/journal.ts`. Второй проекции рядом с настоящей
+ * быть не должно: она разъедется, и набор начнёт проверять схему тем кодом,
+ * которым продукт в неё не пишет.
  *
- * Поэтому здесь остались только `INSERT`ы, а **проекция «счёт и отнесение в
- * колонки» одна** и берётся из `src/store/journal.ts`. Второй проекции рядом с
- * настоящей быть не должно: она разъедется, и набор начнёт проверять схему тем
- * кодом, которым продукт в неё не пишет.
+ * Прежняя редакция файла объясняла существование этого модуля иначе: порт
+ * якобы не умел писать объявления `converts`, `accrues` и `funds`, потому что
+ * колонок под них не было. Колонки завела `0021_entry_declarations.sql`, отказ
+ * `db.entry.declaration_not_storable` снят, и довод остался ровно один —
+ * записи, собранные мимо конструктора.
  *
- * Прежняя редакция этого файла утверждала, что обратной гидратации
- * `JournalEntry` «нет и не будет». Теперь она есть — разбор довода в заголовке
- * `src/store/journal.ts`.
+ * Прежняя редакция утверждала также, что обратной гидратации `JournalEntry`
+ * «нет и не будет». Она есть — разбор довода в заголовке `src/store/journal.ts`.
  */
 async function writePosting(
   client: PoolClient,
@@ -63,24 +69,11 @@ async function writePosting(
 }
 
 export async function writeEntry(client: PoolClient, entry: JournalEntry): Promise<void> {
-  const settles = entry.settles;
+  const placeholders = ENTRY_COLUMN_NAMES.map((_name, index) => `$${index + 1}`).join(', ');
   await client.query(
-    `INSERT INTO sdelka.ledger_entry (
-       entry_id, occurred_at, kind, memo_key, corrects_entry_id,
-       settles_deal_id, settles_tranche_id, settles_payer, settles_recipient, settles_evidence_ref
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-    [
-      entry.id,
-      entry.occurredAt,
-      entry.kind,
-      entry.memoKey,
-      entry.correctsEntryId,
-      settles?.deal.dealId ?? null,
-      settles?.deal.trancheId ?? null,
-      settles?.payer ?? null,
-      settles?.recipient ?? null,
-      settles?.evidenceRef ?? null,
-    ],
+    `INSERT INTO sdelka.ledger_entry (${ENTRY_COLUMN_NAMES.join(', ')})
+     VALUES (${placeholders})`,
+    [...entryValues(entry)],
   );
   let ord = 0;
   for (const posting of entry.postings) {
