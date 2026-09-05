@@ -21,12 +21,13 @@ function perimeterOf(value: string | undefined): PerimeterState {
  * говорит, что сейчас запрещено и почему; блок безопасности стоит над
  * реквизитами, а не в подвале.
  *
- * Состояния периметра `P-*` — экранные. Рядом с ними показан статус из
- * `packages/domain/src/beneficiary.ts` (`draft · name_consistent · verified ·
- * blocked`) и два отдельных факта — «заперто» и «идёт охлаждение». В макете
- * они сведены в один перечень из шести значений; расхождение разрешено в пользу
- * кода, потому что заперты бывают и проверенные реквизиты, а охлаждение идёт
- * поверх любого статуса.
+ * Состояния периметра `P-*` — экранные, и на экране не называются: их имена и
+ * статус из `packages/domain/src/beneficiary.ts` (`draft · name_consistent ·
+ * verified · blocked`) — устройство нашей машины, а не положение клиента
+ * (`CABINETS-REDESIGN.md` §1.7). Клиенту остаются заголовок состояния, его
+ * последствие и два факта, которые он проверяет собой: заперты ли реквизиты и
+ * идёт ли охлаждение. Оба показываются отдельно от статуса намеренно: заперты
+ * бывают и проверенные реквизиты, а охлаждение идёт поверх любого статуса.
  */
 export default async function RequisitesPage({
   params,
@@ -67,11 +68,12 @@ export default async function RequisitesPage({
       <section className={`state-card state-card--${tone}`} aria-labelledby="perimeter">
         <div className="state-card__head">
           <div className="state-card__top">
+            {/* Код периметра (`P-04`) — наше имя состояния, а не положение
+                клиента: на экране его нет (§1.7 разбора кабинетов). */}
             <span className="state-card__label">
               <StatusDot tone={tone} />
               {t(l.dict, 'requisites.perimeter')}
             </span>
-            <span className="mono faint">{state}</span>
           </div>
           <h2 className="state-card__title" id="perimeter">
             {t(l.dict, `requisites.state.${state}.title`)}
@@ -85,9 +87,10 @@ export default async function RequisitesPage({
         </div>
         <div className="state-card__inner">
           <div className="rows">
-            <Row l={l} labelKey="requisites.domainStatus">
-              <span className="mono">{facts.status}</span>
-            </Row>
+            {/* Строки «Статус в домене» здесь нет: `name_consistent` и
+                `blocked` — значения нашей модели, непереведённый текст из
+                данных. Клиенту остаются два факта, которые он может прочесть
+                как своё положение: заперты ли реквизиты и идёт ли охлаждение. */}
             <Row l={l} labelKey="requisites.domainLocked">
               <Badge
                 tone={facts.locked ? 'warn' : 'ok'}

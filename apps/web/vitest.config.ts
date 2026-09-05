@@ -9,4 +9,11 @@ export default defineConfig({
   resolve: {
     alias: { '@': resolve(here, 'src') },
   },
+  /*
+   * JSX в тестах собирается новой средой выполнения. В `tsconfig.json` стоит
+   * `jsx: preserve`, потому что разметку компилирует Next; у прогона тестов
+   * своего Next нет, и без этой строки компоненты падают на `React is not
+   * defined` — то есть экранные проверки были бы невозможны в принципе.
+   */
+  esbuild: { jsx: 'automatic' },
 });

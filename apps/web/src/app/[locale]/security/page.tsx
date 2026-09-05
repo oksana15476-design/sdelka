@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { notFound } from 'next/navigation';
 import { isLocale } from '@/i18n/locales';
 import { dictionaryOf, t } from '@/i18n/translate';
-import { LegalSlot, SecurityBlock, StatusDot } from '@/ui/primitives';
+import { LegalSlot, legalSlotPending, SecurityBlock, StatusDot } from '@/ui/primitives';
 
 /** Развёрнутый раздел безопасности и помощи `B-07`: сюда ведёт «сообщить о контакте». */
 const NEVER = ['phone', 'email', 'messenger', 'otherAccount'] as const;
@@ -77,11 +77,14 @@ export default async function SecurityPage({
         </div>
         {/* `trust.weDoNot.7` — заявление о регулируемом статусе. Юридическое
             ревью его не пропустило (`LEGAL-REVIEW.md` Ю-37, ⛔): называть себя
-            провайдером платёжных услуг до получения статуса нельзя. На месте
-            строки стоит пометка, а не черновик. */}
-        <div style={{ marginBlockStart: 'var(--s-3)' }}>
-          <LegalSlot l={l} bodyKey="trust.weDoNot.7" review="pending" />
-        </div>
+            провайдером платёжных услуг до получения статуса нельзя. До
+            формулировки юриста строки нет — ни черновика, ни пометки о нём:
+            слот в `PENDING_LEGAL_SLOTS` и не рендерится. */}
+        {legalSlotPending('trust.weDoNot.7') ? null : (
+          <div style={{ marginBlockStart: 'var(--s-3)' }}>
+            <LegalSlot l={l} bodyKey="trust.weDoNot.7" />
+          </div>
+        )}
         <p className="muted" style={{ marginBlockStart: 'var(--s-3)' }}>
           {t(l.dict, 'trust.boundary')}
         </p>

@@ -185,7 +185,7 @@ export function releaseObservation(input: ReleaseObservationInput): ReleaseObser
     throw new DomainError(RejectionCode.observationInvalid, 'level');
   }
   if (!isReleaseConditionType(input.conditionType)) {
-// MUT     throw new DomainError(RejectionCode.observationInvalid, 'conditionType');
+    throw new DomainError(RejectionCode.observationInvalid, 'conditionType');
   }
   if (!isOwnerCheck(input.ownerCheck)) {
     throw new DomainError(RejectionCode.observationInvalid, 'ownerCheck');

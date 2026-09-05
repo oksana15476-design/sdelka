@@ -114,36 +114,63 @@ export function Row({
 }
 
 /**
+ * ⚖-слоты, ждущие формулировки юриста. Ключ заведён здесь, строки в словарях
+ * нет ни на одном языке — и до тех пор слот на клиентском экране не рендерится.
+ *
+ * Перечень — единственный источник правды о незакрытых слотах: он же список
+ * работы для `legal-compliance-ru` и он же то, что сборка обязана перечислять
+ * числом в отчёте (`CABINETS-REDESIGN.md` §5.7). Формулировки сюда не пишутся
+ * ни командой, ни главредом: слот закрывается строкой в трёх словарях и
+ * вычёркиванием ключа отсюда — одной правкой, которую видно в ревью.
+ *
+ * · `deal.paying.where.payoutUnknown.revocation` — M-13, «ответа банка нет»:
+ *   что происходит с правами плательщика, пока исход выплаты неизвестен.
+ * · `deal.paying.where.releasePending.revocation` — граница отзыва плательщика
+ *   после наступления условия (`LEGAL-REVIEW.md` Ю-01, ⛔ на «нельзя»).
+ * · `deal.paying.where.frozen.disclosure` — M-18, раскрытие о приостановке.
+ * · `assurance.revocationClosed` — закрытая отзывность у получателя.
+ * · `trust.weDoNot.7` — заявление о регулируемом статусе (Ю-37, ⛔).
+ */
+export const PENDING_LEGAL_SLOTS: readonly string[] = Object.freeze([
+  'deal.paying.where.payoutUnknown.revocation',
+  'deal.paying.where.releasePending.revocation',
+  'deal.paying.where.frozen.disclosure',
+  'assurance.revocationClosed',
+  'trust.weDoNot.7',
+]);
+
+export function legalSlotPending(bodyKey: string): boolean {
+  return PENDING_LEGAL_SLOTS.includes(bodyKey);
+}
+
+/**
  * ⚖-слот: строка с юридическим весом, вынесенная из тела блока отдельным
  * ключом. Отдельный ключ можно провести через юриста и заменить одной строкой,
  * не переписывая блок (`DRAFT-money.md` §3).
  *
- * Слот, не прошедший ревью, **не публикуется**: вместо него стоит видимая
- * заглушка с пометкой (`LEGAL-REVIEW.md` §10). Показать черновую формулировку
- * границы отзыва хуже, чем не показать никакой: обе стороны прочтут её как
- * обещание, а обещание в этом месте стоит суммы сделки.
+ * Слот без формулировки юриста **не публикуется** — и не заменяется пометкой:
+ * предохранитель обязан светить команде, а не клиенту
+ * (`CABINETS-REDESIGN.md` §5.7). Черновик в этом месте обе стороны прочтут как
+ * обещание, а внутренняя пометка на месте обещания — это наш процесс, вынесенный
+ * клиенту на самый чувствительный экран кабинета. Поэтому здесь молчание:
+ * ничего не утверждать безопаснее, чем утверждать непроверенное.
+ *
+ * Вызывающая сторона обязана спросить `legalSlotPending` **до** того, как
+ * рисует обёртку слота: иначе на экране останется рамка секции без содержимого.
  */
 export function LegalSlot({
   l,
   bodyKey,
   labelKey,
-  review = 'passed',
   params,
 }: {
   readonly l: L10n;
   readonly bodyKey: string;
   readonly labelKey?: string;
-  readonly review?: 'passed' | 'pending';
   readonly params?: Readonly<Record<string, string | number>>;
 }): ReactNode {
-  if (review === 'pending') {
-    return (
-      <div className="legal legal--pending">
-        <span className="eyebrow">{t(l.dict, 'legal.pending.label')}</span>
-        <p className="legal__body">{t(l.dict, 'legal.pending.body')}</p>
-      </div>
-    );
-  }
+  // Второй рубеж: слот без строки в словаре молчит, а не печатает `[ключ]`.
+  if (legalSlotPending(bodyKey) || l.dict[bodyKey] === undefined) return null;
   return (
     <div className="legal">
       {labelKey === undefined ? null : <span className="eyebrow">{t(l.dict, labelKey)}</span>}

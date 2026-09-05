@@ -1,4 +1,9 @@
-import { TERMINAL_TRANCHE_STATUSES, THAWED_TRANCHE_STATUSES } from '@sdelka/domain';
+import {
+  RELEASE_CONDITION_TYPES,
+  TERMINAL_TRANCHE_STATUSES,
+  THAWED_TRANCHE_STATUSES,
+  isUsableReleaseCondition,
+} from '@sdelka/domain';
 import { expect, it } from 'vitest';
 import { dbSuite, sqlState, withRollback } from './support/pg.ts';
 import type { PoolClient } from '../../src/pool.ts';
@@ -188,29 +193,56 @@ suite.run(suite.title, () => {
     );
   });
 
-  it('акт с неподтверждённым типом условия не заводится', async () => {
-    if (pool === null) return;
-    await withRollback(pool, async (client) => {
-      await seed(client);
-      let failed = false;
-      try {
-        await client.query(
-          `INSERT INTO sdelka.condition_act
-             (deal_id, tranche_id, recipient_party_id, agreed_at,
-              condition_text_version, condition_type)
-           VALUES ('d1', 't2', 'p-seller', $1, 'condition/2026-01-01.1',
-                   'registration_preliminary')`,
-          [ENTERED],
-        );
-      } catch (error) {
-        failed = true;
-        expect(String(error)).toContain('condition_act_usable_type');
-      }
-      // `STATE-MACHINES.md` §8: значение помечено **[открыто]** и до
-      // подтверждения не используется.
-      expect(failed).toBe(true);
+  async function insertAct(client: PoolClient, trancheId: string, type: string): Promise<void> {
+    await client.query(
+      `INSERT INTO sdelka.condition_act
+         (deal_id, tranche_id, recipient_party_id, agreed_at,
+          condition_text_version, condition_type)
+       VALUES ('d1', $1, 'p-seller', $2, 'condition/2026-01-01.1', $3)`,
+      [trancheId, ENTERED, type],
+    );
+  }
+
+  /**
+   * Перебор по перечню, а не по одному значению.
+   *
+   * Прежняя редакция подавала единственный `registration_preliminary` — и
+   * поэтому молчала, когда домен добавил второй отвергаемый тип: у
+   * `calendar_date` `sourceImplemented: false`, а ограничение базы про второе
+   * условие `isUsableReleaseCondition` не знало и акт пропускало. Транш законно
+   * открывал приём средств под условие, по которому расчёт невозможен никогда.
+   * Теперь список берётся у домена, и разойтись молча ему больше нечем.
+   */
+  for (const type of RELEASE_CONDITION_TYPES.filter((item) => !isUsableReleaseCondition(item))) {
+    it(`акт с негодным типом условия (${type}) не заводится`, async () => {
+      if (pool === null) return;
+      await withRollback(pool, async (client) => {
+        await seed(client);
+        let failed = false;
+        try {
+          await insertAct(client, 't2', type);
+        } catch (error) {
+          failed = true;
+          expect(sqlState(error)).toBe('23514');
+          expect(String(error)).toContain('condition_act_usable_type');
+        }
+        expect(failed, `${type}: ожидался отказ ограничения`).toBe(true);
+      });
     });
-  });
+  }
+
+  for (const type of RELEASE_CONDITION_TYPES.filter(isUsableReleaseCondition)) {
+    it(`акт с годным типом условия (${type}) заводится`, async () => {
+      if (pool === null) return;
+      // Обратная сторона того же зеркала: ограничение, отвергающее годный тип,
+      // — это база, запрещающая законное состояние, и увидеть это надо здесь, а
+      // не на приёме средств.
+      await withRollback(pool, async (client) => {
+        await seed(client);
+        await insertAct(client, 't3', type);
+      });
+    });
+  }
 
   it('одна личность по обе стороны сделки — отказ', async () => {
     if (pool === null) return;

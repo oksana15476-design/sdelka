@@ -138,14 +138,21 @@ suite.run(suite.title, () => {
           `INSERT INTO sdelka.ledger_posting
              (entry_id, ord, account_kind, account_currency, client_key,
               account_deal_id, account_tranche_id, conversion_id,
-              direction, currency, amount_minor)
+              direction, currency, amount_minor,
+              attribution_deal_id, attribution_tranche_id)
            SELECT 'codes', $1, k.kind,
                   CASE WHEN k.needs_currency THEN 'GEL' END,
                   CASE WHEN k.needs_client THEN 'client-sample' END,
                   CASE WHEN k.needs_tranche THEN 'deal-sample' END,
                   CASE WHEN k.needs_tranche THEN 'tranche-sample' END,
                   CASE WHEN k.needs_conversion THEN 'conversion-sample' END,
-                  'debit', 'GEL', 1
+                  'debit', 'GEL', 1,
+                  -- Требование по комиссии живёт только с отнесением к траншу
+                  -- (ledger_posting_fee_attributed, 0016): у него нет файла в
+                  -- коде счёта, и без отнесения его не видит ни один из трёх
+                  -- отчётов по комиссии.
+                  CASE WHEN k.kind = 'fee_receivable' THEN 'deal-sample' END,
+                  CASE WHEN k.kind = 'fee_receivable' THEN 'tranche-sample' END
              FROM sdelka.account_kind k WHERE k.kind = $2`,
           [ord, kind],
         );

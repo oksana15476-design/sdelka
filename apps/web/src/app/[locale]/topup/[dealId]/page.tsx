@@ -115,23 +115,21 @@ export default async function TopupPage({
             excess: formatMoney(l.locale, excess),
           })}
         </p>
-        <div className="rows" style={{ marginBlockStart: 'var(--s-3)' }}>
-          <Row l={l} labelKey="topup.intake.match">
-            <span className="mono">
-              {view.intake.match === null ? t(l.dict, 'topup.intake.none') : view.intake.match}
-            </span>
-          </Row>
-          <Row l={l} labelKey="topup.intake.allocation">
-            <span className="mono">
-              {view.intake.allocation === null ? t(l.dict, 'topup.intake.none') : view.intake.allocation}
-            </span>
-          </Row>
-          {view.intake.suspense ? (
-            <Row l={l} labelKey="topup.intake.route">
-              <span className="mono">{t(l.dict, 'topup.intake.suspense')}</span>
-            </Row>
-          ) : null}
-        </div>
+        {/* Тело блока при излишке обещает «вывести его можно в любой момент».
+            Обещание, названное на экране, получает на нём путь (§1.2 разбора). */}
+        {view.intake.id === 'overpayment' ? (
+          <p className="actions" style={{ marginBlockStart: 'var(--s-3)' }}>
+            <a className="btn btn--secondary" href={`/${locale}/withdraw`}>
+              {t(l.dict, 'deal.paying.action.withdraw.cta')}
+            </a>
+          </p>
+        ) : null}
+        {/* «Исход сопоставления» и «Вид разнесения» с экрана убраны: это поля
+            маршрутизации приёма (`matching.ts`, `allocation.ts`) — наши слова о
+            нашей машине, к тому же приходящие в интерфейс непереведённой
+            строкой из данных (`CABINETS-REDESIGN.md` §1.7). Всё, что из них
+            следует для клиента, уже сказано заголовком, плашкой и телом блока:
+            зачислено или нет, сколько не хватает, что мы делаем дальше. */}
       </section>
 
       <section className="card" aria-labelledby="amounts">

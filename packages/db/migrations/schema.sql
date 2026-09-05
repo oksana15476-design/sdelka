@@ -3486,3 +3486,419 @@ CREATE CONSTRAINT TRIGGER assert_correction_mirrors_target
   FOR EACH ROW EXECUTE FUNCTION sdelka.assert_correction_mirrors_target();
 
 GRANT SELECT ON sdelka.v_ledger_movement TO sdelka_app;
+
+-- ===== 0015_condition_usable_type.sql =====
+-- 0015 — годный тип условия: ограничение догоняет `isUsableReleaseCondition`.
+--
+-- `0004_deal_tranche.sql` называет `condition_act_usable_type` «зеркалом
+-- `isUsableReleaseCondition`», но зеркалит половину: SQL отвергал один
+-- `registration_preliminary`, а доменная функция отвергает **два** значения —
+-- она требует `!requiresConfirmation` И `sourceImplemented`
+-- (`domain/src/release-condition.ts`), а у `calendar_date`
+-- `sourceImplemented: false`. Проба на живой базе: акт с `calendar_date`
+-- вставлялся, то есть транш законно открывал приём средств под условие, по
+-- которому расчёт невозможен никогда — ни наблюдения `L3` от
+-- `time.independent_timestamp` не производит ни одна строка кода, ни пяти полей
+-- выписки у календарной даты не бывает вовсе.
+--
+-- Это ровно тот дрейф, ради которого правило и заведено: код отвергает, база
+-- принимает и молчит. Деньги при этом уже лежат у нас.
+--
+-- **Форма списка — «годные», а не «негодные», и это решение.** Перечисление
+-- запрещённых значений означает, что метка, дописанная в
+-- `sdelka.release_condition_type` завтра, проходит по умолчанию. Здесь
+-- умолчание обязано быть отказом: непроверенное условие — видимый отказ, а не
+-- тихое разрешение (`STATE-MACHINES.md` §8). Список сверяется с
+-- `RELEASE_CONDITION_TYPES.filter(isUsableReleaseCondition)` тестом дрейфа,
+-- поэтому подтверждённый владельцем тип не останется забытым: тест упадёт в
+-- тот же день.
+
+SET LOCAL ROLE sdelka_owner;
+
+ALTER TABLE sdelka.condition_act DROP CONSTRAINT condition_act_usable_type;
+
+ALTER TABLE sdelka.condition_act ADD CONSTRAINT condition_act_usable_type CHECK (
+  condition_type IN (
+    'registration_transfer'
+  )
+);
+
+COMMENT ON CONSTRAINT condition_act_usable_type ON sdelka.condition_act IS
+  'Зеркало isUsableReleaseCondition: !requiresConfirmation AND sourceImplemented.';
+
+-- ===== 0016_fee_accrual_once.sql =====
+-- 0016 — начисление комиссии по траншу одно.
+--
+-- Идемпотентность начисления (§4.6, Ф16) жила только в коде
+-- (`ledger/src/journal.ts`, `assertFeeAccruedOnce`) и держалась ровно тем, что
+-- журнал собирают конструкторами TS. Роль приложения имеет право `INSERT` в
+-- журнал, и запись может лечь мимо `appendEntry`. Проба на живой базе: две
+-- записи «Дт fee:receivable / Кт fee:income» по одному траншу принимаются, а
+-- `v_ledger_invariant_violation` при этом **пуст** — доход признан дважды, и не
+-- видит этого никто. Сводка и не могла увидеть: `fee_not_withheld` ждёт
+-- опустошённого транша, `fee_receivable_stale` — возраста, а «начислено
+-- дважды» не выражается ни тем, ни другим.
+--
+-- Правило то же, буква в букву: начисление — это чистый **дебет** требования по
+-- комиссии, отнесённый к траншу, за вычетом того, что запись-исправление вправе
+-- вернуть по своей цели. Валюта в ключ не входит — как и в TS: комиссия по
+-- траншу величина одна, и второе начисление «в другой валюте» не второй тариф,
+-- а расхождение.
+--
+-- ⚠ Ограничение, названное честно, то же, что у зеркальности исправления
+-- (`0014`): два начисления в **параллельных** транзакциях друг друга не видят.
+-- Закрывается уровнем изоляции пишущей транзакции, а не ограничением.
+
+SET LOCAL ROLE sdelka_owner;
+
+-- ---------------------------------------------------------------------------
+-- Требование по комиссии живёт только с отнесением к траншу
+-- ---------------------------------------------------------------------------
+--
+-- Зеркало `assertFeeAccrualAttributed` (`ledger/src/entry.ts`). Без него
+-- правило ниже обходится молча: начисление без отнесения не попадает ни в один
+-- из трёх отчётов по комиссии — ни в `v_fee_receivable_open`, ни в проверку
+-- идемпотентности, — потому что все они ключуются парой «сделка, транш».
+-- Отнесение к файлу клиента запрещено тем же выражением: `attribution_deal_id`
+-- и `attribution_client_key` взаимно исключены формой отнесения (`0002`).
+ALTER TABLE sdelka.ledger_posting ADD CONSTRAINT ledger_posting_fee_attributed CHECK (
+  account_kind <> 'fee_receivable' OR attribution_deal_id IS NOT NULL
+);
+
+-- ---------------------------------------------------------------------------
+-- Чистое движение требования по комиссии по траншу
+-- ---------------------------------------------------------------------------
+--
+-- Зеркало `feeReceivableNet`. Дебет — плюс. Признак структурный, а не по
+-- объявлению начисления: объявления в базе нет вовсе, а начисление, собранное
+-- низкоуровневой дверью, обязано попадать под правило наравне с собранным
+-- словарём.
+CREATE VIEW sdelka.v_fee_receivable_net AS
+SELECT p.entry_id,
+       p.entry_seq,
+       p.attribution_deal_id AS deal_id,
+       p.attribution_tranche_id AS tranche_id,
+       sum(p.signed_minor) AS minor
+  FROM sdelka.v_posting p
+ WHERE p.account_kind = 'fee_receivable'
+   AND p.attribution_deal_id IS NOT NULL
+ GROUP BY 1, 2, 3, 4;
+
+COMMENT ON VIEW sdelka.v_fee_receivable_net IS
+  'Чистое движение fee:receivable по траншу в записи. Дебет — плюс, валюты сложены.';
+
+-- ---------------------------------------------------------------------------
+-- Сколько исправление вправе вернуть по своей цели
+-- ---------------------------------------------------------------------------
+--
+-- Зеркало `feeRestorableBy`. Возврат — не начисление, и различает их только
+-- цель: вернуть можно столько, сколько **эта самая цель** сняла, за вычетом
+-- того, что по ней уже вернули прежние исправления. Отсюда свойство, из-за
+-- которого послабление не разворачивается в дверь: чтобы получить право на
+-- дебет требования, нужна лежащая в журнале запись, это требование
+-- уменьшившая, и каждое уменьшение отдаётся один раз.
+--
+-- «Прежние» — это записи с меньшим `seq`, то есть ровно те, что в TS лежат в
+-- журнале на момент вызова. Порядок записей в журнале — это `seq`, а не
+-- `occurred_at` (`0002`).
+CREATE VIEW sdelka.v_fee_restorable AS
+SELECT e.entry_id,
+       target.deal_id,
+       target.tranche_id,
+       (-target.minor) - returned.minor AS minor
+  FROM sdelka.ledger_entry e
+  JOIN sdelka.v_fee_receivable_net target ON target.entry_id = e.corrects_entry_id
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(sum(prior.minor), 0) AS minor
+      FROM sdelka.v_fee_receivable_net prior
+      JOIN sdelka.ledger_entry pe ON pe.entry_id = prior.entry_id
+     WHERE pe.corrects_entry_id = e.corrects_entry_id
+       AND pe.seq < e.seq
+       AND prior.deal_id = target.deal_id
+       AND prior.tranche_id = target.tranche_id
+       AND prior.minor > 0
+  ) returned ON true
+ WHERE e.corrects_entry_id IS NOT NULL
+   -- Цель требование увеличила — возвращать по ней нечего.
+   AND target.minor < 0;
+
+COMMENT ON VIEW sdelka.v_fee_restorable IS
+  'Предел возврата требования по комиссии для записи-исправления: сколько сняла её цель.';
+
+-- ---------------------------------------------------------------------------
+-- Транши, по которым запись начисляет
+-- ---------------------------------------------------------------------------
+--
+-- Зеркало `feeAccrualTranches`: начислением считается только остаток дебета
+-- сверх того, что исправление вправе вернуть по своей цели. Без этого вычета
+-- законная операция — реверс расчёта целиком — оказывалась бы невыразимой.
+CREATE VIEW sdelka.v_fee_accrual AS
+SELECT net.entry_id,
+       net.entry_seq,
+       net.deal_id,
+       net.tranche_id,
+       net.minor
+  FROM sdelka.v_fee_receivable_net net
+  LEFT JOIN sdelka.v_fee_restorable restorable
+    ON restorable.entry_id = net.entry_id
+   AND restorable.deal_id = net.deal_id
+   AND restorable.tranche_id = net.tranche_id
+ WHERE net.minor > GREATEST(COALESCE(restorable.minor, 0), 0);
+
+COMMENT ON VIEW sdelka.v_fee_accrual IS
+  'Транши, по которым запись начисляет комиссию (а не возвращает снятое целью).';
+
+-- ---------------------------------------------------------------------------
+-- Одно начисление на транш
+-- ---------------------------------------------------------------------------
+--
+-- Триггер **отложенный** по той же причине, что и триггер баланса: до
+-- последней проводки запись не начисляет ничего. Следствие известно
+-- вызывающему: нарушение всплывает на `COMMIT`.
+--
+-- Сравнение идёт с **любой** другой записью, а не только с более ранней, и
+-- это не строгость ради строгости: проводку можно дописать к уже лежащей
+-- записи отдельной транзакцией, и тогда «второй» окажется старая запись.
+-- Виновной названа при этом всегда более ранняя — она начислила первой.
+CREATE FUNCTION sdelka.assert_fee_accrued_once() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+  v_entry text := COALESCE(NEW.entry_id, OLD.entry_id);
+  v_bad record;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM sdelka.ledger_posting p
+     WHERE p.entry_id = v_entry AND p.account_kind = 'fee_receivable'
+  ) AND EXISTS (
+    SELECT 1 FROM sdelka.ledger_posting p
+     WHERE p.entry_id = v_entry
+       AND p.account_kind = 'fee_income'
+       AND p.attribution_deal_id IS NULL
+  ) THEN
+    -- Вторая половина `assertFeeAccrualAttributed`: доходная нога записи, в
+    -- которой есть требование по комиссии, обязана назвать тот же файл. Иначе
+    -- отчёт покажет «не удержано 500» при «начислено 0».
+    RAISE EXCEPTION 'ledger.posting.fee_without_tranche_attribution'
+      USING ERRCODE = '23514', DETAIL = format('entry_id=%s;account=fee:income', v_entry);
+  END IF;
+
+  SELECT this.deal_id, this.tranche_id, other.entry_id AS accrued_by
+    INTO v_bad
+    FROM sdelka.v_fee_accrual this
+    JOIN sdelka.v_fee_accrual other
+      ON other.deal_id = this.deal_id
+     AND other.tranche_id = this.tranche_id
+     AND other.entry_id <> this.entry_id
+   WHERE this.entry_id = v_entry
+   ORDER BY other.entry_seq
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'ledger.journal.fee_accrued_twice'
+      USING ERRCODE = '23514',
+            DETAIL = format('entry_id=%s;accrued_by=%s;deal_id=%s;tranche_id=%s',
+                            v_entry, v_bad.accrued_by, v_bad.deal_id, v_bad.tranche_id);
+  END IF;
+  RETURN NULL;
+END
+$$;
+
+-- Два триггера, а не один, по тому же доводу, что в `0014`: запись и её
+-- проводки приезжают порознь, и проверка, стоящая лишь на одной из двух
+-- вставок, вторую не увидела бы.
+CREATE CONSTRAINT TRIGGER assert_fee_accrued_once
+  AFTER INSERT ON sdelka.ledger_entry
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION sdelka.assert_fee_accrued_once();
+
+CREATE CONSTRAINT TRIGGER assert_fee_accrued_once
+  AFTER INSERT ON sdelka.ledger_posting
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION sdelka.assert_fee_accrued_once();
+
+GRANT SELECT ON sdelka.v_fee_receivable_net, sdelka.v_fee_restorable, sdelka.v_fee_accrual
+  TO sdelka_app;
+
+-- ===== 0017_conversion_key.sql =====
+-- 0017 — ключ конверсии называет один обмен.
+--
+-- В коде правило есть (`ledger/src/journal.ts`,
+-- `assertConversionKeyNotReused`), в базе не было ни одного соответствия.
+-- Проба на живой базе: обмен пройден целиком (M1, M2, M3), позиция схлопнулась
+-- — и вторая запись под тем же ключом принимается. Два обмена становятся
+-- неразличимы в журнале навсегда: подлежащее `v_fx_position` — код счёта, а
+-- ключ конверсии входит в код счёта, поэтому «сколько нам не поставили по
+-- этому обмену» перестаёт быть величиной ровно так, как обещает не допускать
+-- комментарий к представлению.
+--
+-- Что здесь зеркалится, а что нет, — названо прямо.
+--
+-- Зеркалится **структурная** часть правила, та, что читается по проводкам:
+--
+--  1. `position_already_closed` — схлопнувшийся ключ потрачен. Позиция стала
+--     плоской, обмен закрыт, и новое движение под тем же ключом это уже другой
+--     обмен. Ему нужен свой ключ.
+--  2. `currency_pair` — за всю жизнь счёта обмена на нём бывает ровно пара
+--     валют: M1 отдаёт исходную, M2 меняет одну на другую, M3 принимает
+--     встречную. Третья валюта на счёте — другой обмен под тем же ключом.
+--     Ловится именно **третья**: после M1 на счёте видна одна валюта, и какая
+--     у обмена встречная, до M2 не знает никто, кроме объявления.
+--  3. Счёт обмена в записи один (`assertConversionDeclared`, правило 2): запись,
+--     трогающая две конверсии сразу, снова сложила бы их позиции в одну.
+--
+-- ⚠ **[открыто]** Не зеркалится `legs_exceed_opening` и перестановка ног той же
+-- пары. Обе половины сверяются с **объявлением** обмена (`entry.converts`), а
+-- объявления в базе нет вовсе: колонок под `converts`, `accrues` и `funds` у
+-- `ledger_entry` не заведено. Чтобы правило зеркалилось целиком, объявление
+-- нужно хранить — это отдельное решение о форме таблицы, и принимается оно не
+-- заодно с починкой. До тех пор эта половина живёт только в TS, и здесь об
+-- этом сказано, а не умолчано.
+
+SET LOCAL ROLE sdelka_owner;
+
+CREATE FUNCTION sdelka.assert_conversion_key_not_reused() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+  v_entry text := COALESCE(NEW.entry_id, OLD.entry_id);
+  v_seq bigint;
+  v_account text;
+  v_accounts integer;
+BEGIN
+  SELECT e.seq INTO v_seq FROM sdelka.ledger_entry e WHERE e.entry_id = v_entry;
+  -- Записи не осталось вовсе — проверять нечего (откат).
+  IF v_seq IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT count(DISTINCT p.account_code) INTO v_accounts
+    FROM sdelka.v_posting p
+   WHERE p.entry_id = v_entry AND p.conversion_id IS NOT NULL;
+  IF v_accounts = 0 THEN
+    RETURN NULL;
+  END IF;
+  IF v_accounts > 1 THEN
+    -- Сверяется код счёта, а не ключ конверсии: с владельцем в коде один и тот
+    -- же ключ у двух клиентов — это два разных счёта, и проверка по одному
+    -- ключу пропустила бы запись, гасящую позицию клиента A ногой клиента B.
+    RAISE EXCEPTION 'ledger.entry.conversion_undeclared'
+      USING ERRCODE = '23514',
+            DETAIL = format('entry_id=%s;reason=two_conversion_accounts', v_entry);
+  END IF;
+
+  SELECT DISTINCT p.account_code INTO v_account
+    FROM sdelka.v_posting p
+   WHERE p.entry_id = v_entry AND p.conversion_id IS NOT NULL;
+
+  IF (SELECT count(DISTINCT p.currency) FROM sdelka.v_posting p
+       WHERE p.account_code = v_account) > 2 THEN
+    RAISE EXCEPTION 'ledger.journal.conversion_key_reused'
+      USING ERRCODE = '23514',
+            DETAIL = format('entry_id=%s;account=%s;reason=currency_pair', v_entry, v_account);
+  END IF;
+
+  -- «Прежние» — записи с меньшим `seq`: порядок журнала это `seq`, а не
+  -- `occurred_at` (`0002`). Позиция читается **до** этой записи, как в TS, где
+  -- проверяемой записи в журнале ещё нет.
+  IF EXISTS (
+    SELECT 1 FROM sdelka.v_posting p
+     WHERE p.account_code = v_account AND p.entry_seq < v_seq
+  ) AND NOT EXISTS (
+    SELECT 1 FROM sdelka.v_posting p
+     WHERE p.account_code = v_account AND p.entry_seq < v_seq
+     GROUP BY p.currency
+    HAVING sum(p.signed_minor) <> 0
+  ) THEN
+    RAISE EXCEPTION 'ledger.journal.conversion_key_reused'
+      USING ERRCODE = '23514',
+            DETAIL = format('entry_id=%s;account=%s;reason=position_already_closed',
+                            v_entry, v_account);
+  END IF;
+  RETURN NULL;
+END
+$$;
+
+-- Отложенный и в двух экземплярах — по тем же двум доводам, что в `0014`: до
+-- последней проводки запись не является обменом, а проводку можно дописать к
+-- уже лежащей записи отдельной транзакцией.
+CREATE CONSTRAINT TRIGGER assert_conversion_key_not_reused
+  AFTER INSERT ON sdelka.ledger_entry
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION sdelka.assert_conversion_key_not_reused();
+
+CREATE CONSTRAINT TRIGGER assert_conversion_key_not_reused
+  AFTER INSERT ON sdelka.ledger_posting
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION sdelka.assert_conversion_key_not_reused();
+
+-- ===== 0018_payout_leg.sql =====
+-- 0018 — нога перевода и ссылка на ответ провайдера.
+--
+-- Две правки, и обе про одно: строка `sdelka.payout` разошлась с `PayoutState`
+-- (`domain/src/payout.ts`) в обе стороны сразу.
+--
+-- **Нога.** У домена их две, и это две разные операции с деньгами: `release` —
+-- расчёт получателю, `refund` — возврат покупателю на счёт-источник (красная
+-- линия №9). Ключ идемпотентности с их появлением стал функцией **транша и
+-- ноги** (`payoutIdempotencyKey` / `refundIdempotencyKey`), а `0005` про это
+-- ещё не знает и называет его функцией одного транша. В базе ноги не было
+-- вовсе: две строки по одному траншу неразличимы, и «поручение на возврат»
+-- читалось как «повтор расчёта».
+--
+-- Умолчания у колонки нет намеренно — по тому же доводу, по которому его нет у
+-- конструктора в домене: нога выбирается тем, какое обязательство исполняется,
+-- и молчаливого варианта у этого выбора быть не должно. Уже лежащие строки
+-- заполняются `release` разово: возврат до этой миграции своей строки не имел.
+--
+-- **Ссылка на ответ.** `0005` обосновывает `payout_unknown_has_no_response`
+-- так: «отказ — это явный ответ провайдера, поэтому у него обязана быть ссылка
+-- на ответ; у `unknown` её быть не может». Обоснование верное, ограничение из
+-- него не следовало, и следствие проверено на живой базе:
+--
+--   · `submitted` со ссылкой на ответ **принимался**, а `UPDATE` того же
+--     поручения в `unknown` после этого падал. То есть законный и обязательный
+--     переход §2.2 (сеть отвалилась — только «неизвестно») становился
+--     незаписываемым, и записать его можно было, лишь стерев ссылку, то есть
+--     потеряв след. Красная линия №8 говорит обратное: «неизвестно» — легальное
+--     состояние;
+--   · вторая половина обоснования («у отказа обязана быть ссылка») не
+--     выполнима вовсе: `rejected` достигается и сверкой
+--     (`reconciliation_absent_from_statement`), где ответа провайдера нет по
+--     построению — есть выписка. Требовать ссылку у отказа значило бы сделать
+--     незаписываемым путь восстановления из `unknown`.
+--
+-- Отсюда правило целиком: ссылка на ответ **возможна** только там, где ответ
+-- уже получен, то есть в терминальных статусах, и не обязательна нигде.
+-- Список — зеркало `TERMINAL_PAYOUT_STATUSES`, и его сверяет тест дрейфа.
+--
+-- ⚠ **[открыто]** Квитанция о приёме поручения (ответ провайдера на отправку, а
+-- не на исполнение) в домене места не имеет: у `PayoutState` такого поля нет.
+-- Появится — ей нужна своя колонка и своё правило, а не эта.
+
+SET LOCAL ROLE sdelka_owner;
+
+-- packages/domain: PAYOUT_LEGS
+CREATE TYPE sdelka.payout_leg AS ENUM ('release', 'refund');
+
+ALTER TABLE sdelka.payout ADD COLUMN leg sdelka.payout_leg;
+UPDATE sdelka.payout SET leg = 'release' WHERE leg IS NULL;
+ALTER TABLE sdelka.payout ALTER COLUMN leg SET NOT NULL;
+
+COMMENT ON COLUMN sdelka.payout.leg IS
+  'Какое обязательство исполняет перевод: расчёт получателю или возврат покупателю.';
+
+-- Инвариант 9 ногу не различает, и это не упущение: домен считает активные
+-- выплаты по траншу целиком (`activePayoutsForTranche`), потому что вторая нога
+-- наружу по тем же запертым деньгам — это двойная выплата независимо от того,
+-- как называется каждая. Частичный индекс `payout_one_active_per_tranche`
+-- остаётся по паре «сделка, транш».
+
+ALTER TABLE sdelka.payout DROP CONSTRAINT payout_unknown_has_no_response;
+
+ALTER TABLE sdelka.payout ADD CONSTRAINT payout_response_only_when_answered CHECK (
+  provider_reference IS NULL OR status IN (
+    'settled',
+    'rejected'
+  )
+);
+
+COMMENT ON CONSTRAINT payout_response_only_when_answered ON sdelka.payout IS
+  'Ссылка на ответ провайдера возможна только в терминальных статусах и не обязательна нигде.';

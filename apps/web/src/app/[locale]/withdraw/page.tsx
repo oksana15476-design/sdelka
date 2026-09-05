@@ -55,8 +55,9 @@ export default async function WithdrawPage({
       <section className={`state-card state-card--${TONE[status]}`} aria-labelledby="withdraw-state">
         <div className="state-card__head">
           <div className="state-card__top">
+            {/* Имени состояния машины (`paying_out`) на экране нет: клиент
+                читает плашку и заголовок, а не наш автомат (§1.7 разбора). */}
             <Badge tone={TONE[status]} label={t(l.dict, `withdraw.state.${status}.badge`)} />
-            <span className="mono faint">{status}</span>
           </div>
           <h2 className="state-card__title" id="withdraw-state">
             {t(l.dict, `withdraw.state.${status}.title`)}

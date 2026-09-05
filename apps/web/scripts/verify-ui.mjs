@@ -29,7 +29,26 @@
  * В браузере: непереведённый ключ на экране, **неподставленный и пусто
  * подставленный слот**, горизонтальное переполнение на 360 px, обрезанный текст
  * в кнопках и чипах, размер сенсорных целей, контраст, единственный `h1`,
- * достижимость с клавиатуры и **бюджеты длины на грузинском**.
+ * достижимость с клавиатуры, **видимость фокус-кольца**, бюджеты длины на
+ * грузинском и **бюджет длины самой суммы — на всех трёх языках**.
+ *
+ * ## Чего охват не видел до этого захода
+ *
+ * Число «150 экранов» описывало снимки, а не покрытие, и молчало о том, чего не
+ * смотрит. Вне обхода были целиком:
+ *
+ * - **кабинет владельца** — четыре страницы, ни одной проверки ни разу;
+ * - **карточка задачи консоли** (семнадцать видов разбора) и **дежурный
+ *   дашборд** — то есть то, ради чего очередь существует;
+ * - **грузинский на десктопе** у сделки и реквизитов: семейства заведены как
+ *   ru.desktop + ka.mobile, и правило «макеты проверяются на самом длинном
+ *   языке» выполнялось на них только для телефона;
+ * - **длинная сумма** — не было ни на одном снимке, а бюджет мерил подпись к
+ *   сумме, а не число;
+ * - **заморозка у получателя** — состояние останавливает его выплату, а
+ *   снималось только со стороны плательщика;
+ * - **пусто, загрузка, ошибка** — были ровно у одного экрана из пяти;
+ * - **кадр с видимым фокусом** — снимок делался до нажатия Tab.
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -362,13 +381,62 @@ const RECEIVING = [
   ['r01', 'notFunded'], ['r02', 'onAccount'], ['r03', 'reserved'],
   ['r04', 'released'], ['r05', 'payoutUnknown'], ['r06', 'releasedToAccount'],
   ['r07', 'reserved-cooling'],
+  // Заморозка снималась только со стороны плательщика (`m18`), хотя
+  // останавливает она выплату **получателю**: у плательщика замороженные деньги
+  // лежат там же, где лежали, а получатель перестаёт получать. Тексты,
+  // последствия и доступные действия у двух ролей разные — проверялась одна.
+  ['r08', 'frozen'],
 ];
+
+/**
+ * Сделка с самой длинной суммой — отдельным маршрутом, а не положением денег.
+ *
+ * Положение у неё то же `M-09`, что у `m09`; отличается только длина числа:
+ * 1 234 567 890 минорных единиц против 21 700 000 у всех прочих. Длинного числа
+ * не было ни на одном снимке набора, и колонка сумм ни разу не проверялась на
+ * переполнение (`fixtures/scenarios.ts`, `m20`).
+ */
+const LONG_AMOUNT_DEAL = 'm20';
 
 const PERIMETER = ['P-01', 'P-03', 'P-04', 'P-06', 'P-07', 'P-09', 'P-10'];
 
 const DESKTOP = { width: 1280, height: 900 };
 const MOBILE = { width: 360, height: 780 };
+/**
+ * Широкая оболочка: консоль оператора и кабинет владельца рисуются в ней, а не
+ * в клиентской (`ui/chrome.tsx`, `wide = console || owner`). Ширина 1280 у них
+ * — не проектная раскладка, а промежуточная.
+ */
+const WIDE = { width: 1440, height: 1000 };
 
+/**
+ * ## Как выбираются сочетания языка и ширины
+ *
+ * Полный перебор — три языка на две ширины, шесть снимков на каждый маршрут.
+ * Маршрутов около семидесяти, то есть четыреста с лишним прогонов и вчетверо
+ * больше времени. Берём три сочетания из шести, и всегда одни и те же — по
+ * риску, а не по симметрии:
+ *
+ * 1. **ka × узкая (360)** — самый длинный язык в самой тесной коробке. Здесь и
+ *    только здесь живут горизонтальное переполнение, обрезка текста в кнопках и
+ *    чипах, малые сенсорные цели.
+ * 2. **ka × проектная ширина (1280 клиенту, 1440 консоли и владельцу)** —
+ *    правило проекта «макеты проверяются на самом длинном языке» выполняется
+ *    только здесь. На телефоне десктопных блоков (`wide-only`, две колонки,
+ *    таблица проводок, метрики) на экране **нет вовсе**, то есть по-грузински
+ *    их не видел никто. Это была дыра у `deal-*` и `requisites-*`: заведены как
+ *    ru.desktop + ka.mobile, и грузинский десктоп не снимался ни разу.
+ * 3. **ru × проектная ширина** — только там, где показаны деньги. `Intl` в
+ *    русской локали печатает лари **трёхбуквенным кодом** `GEL`, а не знаком
+ *    `₾` (`i18n/format.ts`), и потому самая широкая запись суммы существует
+ *    только в русском: `12 345 678,90 GEL` против `12 345 678,90 ₾`. На
+ *    грузинском её не увидеть ни на одной ширине.
+ *
+ * `en` к новым экранам не добавляется намеренно: он короче обоих на каждой
+ * строке, а стоит столько же. Экран, выдержавший ka и ru, выдержит и его.
+ * Там, где `en` уже был (клиентские экраны первой очереди), он и остаётся —
+ * снимать его перестать значило бы потерять покрытие, а не сэкономить.
+ */
 function routes() {
   const list = [];
   const add = (name, path, viewports, locales = ['ru', 'en', 'ka']) => {
@@ -384,19 +452,27 @@ function routes() {
   add('deals-list-error', '?state=error', { desktop: DESKTOP }, ['ka']);
   for (const [id, state] of MONEY_STATES) {
     add(`deal-paying-${id}-${state}`, `/deals/${id}`, { desktop: DESKTOP }, ['ru']);
-    add(`deal-paying-${id}-${state}`, `/deals/${id}`, { mobile: MOBILE }, ['ka']);
+    add(`deal-paying-${id}-${state}`, `/deals/${id}`, { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
   }
   for (const [id, state] of RECEIVING) {
     add(`deal-receiving-${id}-${state}`, `/deals/${id}`, { desktop: DESKTOP }, ['ru']);
-    add(`deal-receiving-${id}-${state}`, `/deals/${id}`, { mobile: MOBILE }, ['ka']);
+    add(`deal-receiving-${id}-${state}`, `/deals/${id}`, { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
   }
+  /**
+   * Длинная сумма: грузинская подпись рядом с десятизначным числом — на
+   * телефоне и на десктопе, — и русская запись с кодом `GEL`, самая широкая из
+   * трёх. Экран «Мой счёт» ловит ту же сумму в запертой части, а очередь
+   * оператора — в строке задачи; оба маршрута в обходе уже есть.
+   */
+  add(`deal-long-amount`, `/deals/${LONG_AMOUNT_DEAL}`, { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
+  add(`deal-long-amount`, `/deals/${LONG_AMOUNT_DEAL}`, { desktop: DESKTOP }, ['ru']);
   add('deal-partial', '/deals/m09?state=partial', { desktop: DESKTOP }, ['ka']);
   add('deal-denied', '/deals/m09?state=denied', { desktop: DESKTOP }, ['ka']);
   add('deal-error', '/deals/m09?state=error', { desktop: DESKTOP }, ['ka']);
   add('account', '/account', { desktop: DESKTOP, mobile: MOBILE });
   for (const state of PERIMETER) {
     add(`requisites-${state}`, `/requisites?state=${state}`, { desktop: DESKTOP }, ['ru']);
-    add(`requisites-${state}`, `/requisites?state=${state}`, { mobile: MOBILE }, ['ka']);
+    add(`requisites-${state}`, `/requisites?state=${state}`, { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
   }
   /**
    * Маршруты, которых в обходе не было **вовсе**, хотя страницы существуют:
@@ -416,13 +492,142 @@ function routes() {
   add('profile', '/profile', { desktop: DESKTOP, mobile: MOBILE });
   add('archive', '/archive', { desktop: DESKTOP, mobile: MOBILE });
   add('deal-new', '/deals/new', { desktop: DESKTOP, mobile: MOBILE });
-  add('ops-queue', '/ops', { desktop: { width: 1440, height: 1000 } });
+  /**
+   * Пусто, загрузка и ошибка были ровно у одного экрана — списка сделок.
+   * Пустое состояние есть ещё у четырёх, и ни одно не снималось: пустой экран
+   * не ломает сборку и не виден в обычном обходе, а клиент в первый день видит
+   * именно его. Берём узкую ширину: пустой блок — одна карточка, и рискует он
+   * только переполнением на телефоне.
+   */
+  add('account-empty', '/account?state=empty', { mobile: MOBILE }, ['ka']);
+  add('documents-empty', '/documents?state=empty', { mobile: MOBILE }, ['ka']);
+  add('notifications-empty', '/notifications?state=empty', { mobile: MOBILE }, ['ka']);
+  add('archive-empty', '/archive?state=empty', { mobile: MOBILE }, ['ka']);
+  add('ops-queue', '/ops', { wide: WIDE });
   add('ops-queue', '/ops', { mobile: MOBILE }, ['ru']);
-  add('ops-queue-empty', '/ops?type=verifyClient', { desktop: { width: 1440, height: 1000 } }, ['ka']);
-  add('ops-decision', '/ops/decision', { desktop: { width: 1440, height: 1000 }, mobile: MOBILE });
-  add('ops-reconciliation', '/ops/reconciliation', { desktop: { width: 1440, height: 1000 }, mobile: MOBILE });
-  add('ops-unfreeze', '/ops/unfreeze', { desktop: { width: 1440, height: 1000 }, mobile: MOBILE });
+  add('ops-queue-empty', '/ops?type=verifyClient', { wide: WIDE }, ['ka']);
+  /* Нарушение покрытия клиентских средств — красная линия №3 на экране. Баннер
+     существует, и не снимался ни разу. */
+  add('ops-queue-breach', '/ops?state=breach', { wide: WIDE }, ['ka']);
+  add('ops-decision', '/ops/decision', { wide: WIDE, mobile: MOBILE });
+  add('ops-reconciliation', '/ops/reconciliation', { wide: WIDE, mobile: MOBILE });
+  add('ops-unfreeze', '/ops/unfreeze', { wide: WIDE, mobile: MOBILE });
+  /**
+   * Дежурный дашборд — второе место консоли, куда ходят не за задачей, и вне
+   * обхода он был целиком. На нём стоят пять утренних метрик и журнал проводок:
+   * длинные грузинские подписи в узких колонках — ровно тот случай, ради
+   * которого обход и существует.
+   */
+  add('ops-duty', '/ops/duty', { wide: WIDE, mobile: MOBILE }, ['ka']);
+  add('ops-duty', '/ops/duty', { wide: WIDE }, ['ru']);
+  /**
+   * Кабинет владельца — четыре страницы, которых в обходе не было **вовсе**.
+   * Они собираются, отдают 200 и ни разу не проверялись ни на непереведённый
+   * ключ, ни на переполнение, ни на контраст, ни на бюджеты длины.
+   *
+   * Карточки сделок берутся не подряд, а по трём разным формам экономики:
+   * `ow01` — расчёт с конвертацией (две валюты и три курса, самая плотная),
+   * `ow05` — откат с отрицательной маржой (знак минус, тревожный тон),
+   * `ow04` — сделка в работе (ожидаемая комиссия вместо фактической).
+   * Остальные тридцать пять повторяют одну из трёх.
+   */
+  add('owner-summary', '/owner', { wide: WIDE, mobile: MOBILE }, ['ka']);
+  add('owner-summary', '/owner', { wide: WIDE }, ['ru']);
+  /* Предыдущий период пуст по построению фикстуры: пустая сводка — состояние
+     экрана, а не отсутствие данных, и до сих пор его не видел никто. */
+  add('owner-summary-empty', '/owner?period=previous', { wide: WIDE }, ['ka']);
+  add('owner-deals', '/owner/deals', { wide: WIDE, mobile: MOBILE }, ['ka']);
+  add('owner-deals', '/owner/deals', { wide: WIDE }, ['ru']);
+  add('owner-deal-fx', '/owner/deals/ow01', { wide: WIDE, mobile: MOBILE }, ['ka']);
+  add('owner-deal-fx', '/owner/deals/ow01', { wide: WIDE }, ['ru']);
+  add('owner-deal-loss', '/owner/deals/ow05', { wide: WIDE }, ['ka']);
+  add('owner-deal-live', '/owner/deals/ow04', { wide: WIDE }, ['ka']);
+  add('owner-tariff', '/owner/tariff', { wide: WIDE, mobile: MOBILE }, ['ka']);
+  add('owner-tariff', '/owner/tariff', { wide: WIDE }, ['ru']);
   add('security', '/security', { desktop: DESKTOP }, ['ka']);
+  return list;
+}
+
+/* ------------------------------------- карточки задач консоли: обход по факту */
+
+/**
+ * Виды задач — из фикстуры, а не списком здесь.
+ *
+ * Перечень, переписанный в скрипт руками, разъезжается с кодом на первой же
+ * правке и разъезжается **молча**: новый вид задачи просто не попадает в обход,
+ * и его карточка не проверяется ничем. Ровно так девять видов разбора и прожили
+ * до сих пор — объявлены в коде, невидимы на экране.
+ */
+function declaredTaskTypes() {
+  const source = readFileSync(join(SRC, 'fixtures', 'store.ts'), 'utf8');
+  const block = source.match(/export const TASK_TYPES = \[([\s\S]*?)\] as const;/u);
+  if (block === null) {
+    fail('очередь', 'перечень TASK_TYPES не найден в fixtures/store.ts — обход карточек не построен');
+    return [];
+  }
+  return [...block[1].matchAll(/'(\w+)'/gu)].map((match) => match[1]);
+}
+
+/**
+ * Рамка карточки у всех видов одна, а наполнение блока «разбор» — пяти форм
+ * (`ui/ops-work.ts`, `DetailKind`). По одному представителю на форму снимается
+ * вторым сочетанием; остальные двенадцать видов отличаются только текстом, и
+ * непереведённый ключ у них ловится первым сочетанием.
+ */
+const TASK_DETAIL_SAMPLE = Object.freeze({
+  approvePayout: 'decision',
+  reviewBreak: 'break',
+  reviewSanction: 'unfreeze',
+  intakeUnderpayment: 'facts',
+  matchPayment: 'none',
+});
+
+/**
+ * Единственный вид задачи, который консоль показывает на телефоне: ночью будят
+ * ради утверждения выплаты, остальное закрыто классом `task--desktop-only`
+ * (`ui/ops.tsx`). Снимать на 360 карточки, до которых с телефона не дойти,
+ * значило бы искать дефекты в раскладке, которой нет в продукте.
+ */
+const TASK_ON_PHONE = ['approvePayout'];
+
+/**
+ * Адреса карточек читаются из самой очереди, а не собираются из `dealId` и вида
+ * задачи: правило склейки идентификатора живёт в фикстуре и может измениться, а
+ * ссылка на экране — это то, по чему пойдёт оператор.
+ */
+async function taskRoutes() {
+  const response = await fetch(`${BASE}/ka/ops`);
+  if (!response.ok) {
+    fail('очередь', `/ka/ops ответил ${response.status} — карточки задач в обход не попали`);
+    return [];
+  }
+  const html = await response.text();
+  const ids = [...new Set([...html.matchAll(/\/ka\/ops\/task\/([A-Za-z0-9_-]+)/gu)].map((m) => m[1]))];
+  const firstOfType = new Map();
+  for (const id of ids) {
+    const type = id.slice(id.indexOf('-') + 1);
+    if (!firstOfType.has(type)) firstOfType.set(type, id);
+  }
+  for (const type of declaredTaskTypes()) {
+    if (firstOfType.has(type)) continue;
+    fail('очередь', `вид задачи ${type} объявлен в TASK_TYPES, но в очереди его нет — карточку никто не откроет`);
+  }
+  for (const type of Object.keys(TASK_DETAIL_SAMPLE)) {
+    if (firstOfType.has(type)) continue;
+    fail('очередь', `представитель разбора «${TASK_DETAIL_SAMPLE[type]}» (${type}) пропал из очереди — форма разбора осталась без снимка`);
+  }
+  const list = [];
+  for (const [type, id] of firstOfType) {
+    const name = `ops-task-${type}`;
+    const path = `/ops/task/${id}`;
+    list.push({ name, path, locale: 'ka', kind: 'wide', viewport: WIDE });
+    if (TASK_ON_PHONE.includes(type)) {
+      list.push({ name, path, locale: 'ka', kind: 'mobile', viewport: MOBILE });
+    }
+    if (type in TASK_DETAIL_SAMPLE) {
+      list.push({ name, path, locale: 'ru', kind: 'wide', viewport: WIDE });
+    }
+  }
   return list;
 }
 
@@ -555,7 +760,8 @@ const LENGTH_BUDGETS = `(() => {
   const budgets = [
     ['заголовок', 'h1, h2, .card__title, .state-card__title, .banner__title, .outcome__title, .security__title', 44],
     ['тело', '.state-card__body, .banner__body, .outcome__body, .deadline__consequence, .empty p', 240],
-    ['метка суммы', '.amount-label', 24],
+    // Подпись у суммы, а не сама сумма: у числа свой бюджет, ниже.
+    ['подпись суммы', '.amount-label', 24],
     ['чип', '.chip, .chipbtn, .badge, .langs__item', 32],
     ['шаг ленты', '.timeline__label', 34],
     ['⚖-слот', '.legal__body', 200],
@@ -583,15 +789,125 @@ const LENGTH_BUDGETS = `(() => {
   return problems;
 })()`;
 
-async function checkKeyboard(page) {
+/**
+ * Бюджет длины **самой суммы** — единственный, который считается на всех трёх
+ * языках, а не только на грузинском.
+ *
+ * ## Чего не было
+ *
+ * Бюджет `.amount-label` мерил **подпись** к сумме («Сумма сделки», «Маржа»), а
+ * у самого числа бюджета не было ни одного. Число при этом длиннее подписи
+ * ровно там, где раскладка ломается: в колонке значений, где рядом стоит
+ * грузинская подпись и код валюты.
+ *
+ * ## Почему на всех трёх языках, а не на `ka`
+ *
+ * Правило «самый длинный язык — грузинский» верно для текста и **неверно для
+ * денег**. `Intl` в русской локали печатает лари трёхбуквенным кодом `GEL`
+ * вместо знака `₾` (`i18n/format.ts`, и это правило локали, а не дефект), а
+ * английская ставит код впереди: `12 345 678,90 GEL` и `GEL 12,345,678.90` —
+ * по семнадцать знаков против пятнадцати у грузинского `12 345 678,90 ₾`.
+ * Мерить сумму только на `ka` значит не мерить её вовсе в той локали, где она
+ * шире всего.
+ *
+ * ## Откуда 20
+ *
+ * Это замер, а не круглое число: самая длинная сумма набора (`m20`,
+ * 1 234 567 890 минорных единиц) даёт 17 знаков, со знаком «+» или «−» — 18,
+ * запас 2. Сумма на разряд больше в бюджет не влезает — и это верно: раскладки
+ * под неё не рисовали. Предел суммы сделки в продукте не назван — **[открыто]**,
+ * решение владельца; до него бюджет описывает то, что раскладка держит сегодня.
+ */
+const AMOUNT_BUDGET = `(() => {
+  const problems = [];
+  for (const node of document.querySelectorAll('.amount')) {
+    const value = (node.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (value.length === 0 || value.length <= 20) continue;
+    problems.push('бюджет длины (сумма): ' + value.length + ' знаков при 20 — «' + value + '»');
+  }
+  return problems;
+})()`;
+
+/**
+ * Состояние фокуса: куда он попал, видно ли элемент и **видно ли сам фокус**.
+ *
+ * Наличие кольца не угадывается по свойствам, а измеряется разностью: стиль
+ * снимается у сфокусированного узла, затем узел теряет фокус и стиль снимается
+ * снова. Совпали — значит на экране не изменилось ничего, и фокус невидим.
+ * Проверка «есть ли `outline`» так не умеет: постоянная тень у кнопки прошла бы
+ * за фокус-кольцо, а кольцо, нарисованное на `::after`, — не прошло бы вовсе.
+ * Поэтому псевдоэлементы читаются тоже.
+ */
+const FOCUS_STATE = `(() => {
+  const node = document.activeElement;
+  if (!node || node === document.body) return null;
+  const box = node.getBoundingClientRect();
+  const read = () => {
+    const out = [];
+    for (const pseudo of [null, '::before', '::after']) {
+      const style = getComputedStyle(node, pseudo);
+      out.push([
+        style.outlineStyle, style.outlineWidth, style.outlineColor, style.outlineOffset,
+        style.boxShadow, style.backgroundColor, style.color, style.borderColor,
+        style.textDecorationLine, style.content, style.opacity, style.transform,
+      ].join('~'));
+    }
+    return out.join('|');
+  };
+  const focused = read();
+  node.blur();
+  const blurred = read();
+  node.focus();
+  return {
+    label: String(node.getAttribute('aria-label') || node.textContent || node.tagName).trim().slice(0, 30),
+    visible: box.width > 0 && box.height > 0,
+    ring: focused !== blurred,
+  };
+})()`;
+
+/**
+ * Кадры, на которых фокус-кольцо обязано быть видно **глазом**, а не только
+ * проверкой. По одному на каждую оболочку: клиент широкий, клиент узкий,
+ * консоль, кабинет владельца. Больше не нужно — оболочка одна на все свои
+ * экраны, а снимок стоит времени.
+ */
+const FOCUS_SHOTS = new Set([
+  'deals-list.ka.desktop',
+  'deals-list.ka.mobile',
+  'ops-queue.ka.wide',
+  'owner-summary.ka.wide',
+]);
+
+/**
+ * Клавиатура и видимый фокус.
+ *
+ * ## Что было сломано
+ *
+ * Проверка считала нажатия Tab и смотрела, попал ли фокус на видимый узел. Того,
+ * что фокус **видно**, она не проверяла вовсе, а снимок делался до неё — то есть
+ * кадра с фокус-кольцом не существовало ни одного за весь обход. Пропавшая
+ * обводка не ломает ни сборку, ни тест, ни скриншот; она ломает работу
+ * клавиатурой, и обнаруживается это у того, кто мышью не пользуется.
+ */
+async function checkKeyboard(page, shotPath) {
   const focusable = await page.evaluate(
     () => document.querySelectorAll('a[href], button, summary, input, select, textarea').length,
   );
   if (focusable === 0) return [];
   const problems = [];
   await page.keyboard.press('Tab');
-  const first = await page.evaluate(() => document.activeElement?.tagName ?? null);
-  if (first === null || first === 'BODY') problems.push('первый Tab не попал ни на один элемент');
+  const first = await page.evaluate(FOCUS_STATE);
+  if (first === null) {
+    problems.push('первый Tab не попал ни на один элемент');
+  } else {
+    if (!first.visible) problems.push(`первый Tab попал на невидимый элемент: «${first.label}»`);
+    // Кольцо меряется разностью стилей, поэтому «не видно» здесь значит «на
+    // экране не изменилось ничего», а не «не нашли знакомого свойства».
+    if (!first.ring) problems.push(`фокус не виден: стиль элемента «${first.label}» не меняется от фокуса`);
+  }
+  /* Кадр с фокусом — не полностраничный: кольцо стоит на первом элементе, и
+     полная страница ради него весит впятеро больше, ничего не добавляя. */
+  if (shotPath !== null) await page.screenshot({ path: shotPath, fullPage: false });
   for (let step = 0; step < 8; step += 1) {
     await page.keyboard.press('Tab');
   }
@@ -785,8 +1101,13 @@ async function main() {
   mkdirSync(SHOTS, { recursive: true });
 
   const browser = await chromium.launch({ executablePath: BROWSER_PATH });
-  const list = routes();
-  process.stdout.write(`Обход: ${list.length} экранов (три языка, десктоп и телефон)\n`);
+  /* Карточки задач добавляются после подъёма сервера: их адреса читаются из
+     самой очереди, а не собираются здесь из идентификаторов фикстуры. */
+  const list = [...routes(), ...(await taskRoutes())];
+  const byName = new Set(list.map((route) => route.name)).size;
+  process.stdout.write(
+    `Обход: ${list.length} снимков на ${byName} маршрутах (ka и ru, узкая и проектная ширина)\n`,
+  );
   let shot = 0;
 
   for (const route of list) {
@@ -803,19 +1124,25 @@ async function main() {
       await context.close();
       continue;
     }
+    const at = `${route.name}.${route.locale}.${route.kind}`;
     const problems = await page.evaluate(PAGE_CHECKS);
     if (route.locale === 'ka') {
       problems.push(...(await page.evaluate(LENGTH_BUDGETS)));
     }
+    // Бюджет суммы — на каждом языке: самая широкая запись денег живёт в
+    // русской локали, а не в грузинской (см. шапку `AMOUNT_BUDGET`).
+    problems.push(...(await page.evaluate(AMOUNT_BUDGET)));
     for (const problem of problems) {
-      fail(`${route.name}.${route.locale}.${route.kind}`, problem);
+      fail(at, problem);
     }
-    const file = join(SHOTS, `${route.name}.${route.locale}.${route.kind}.png`);
+    const file = join(SHOTS, `${at}.png`);
     await page.screenshot({ path: file, fullPage: true });
     shot += 1;
-    for (const problem of await checkKeyboard(page)) {
-      fail(`${route.name}.${route.locale}.${route.kind}`, problem);
+    const focusShot = FOCUS_SHOTS.has(at) ? join(SHOTS, `${at}.focus.png`) : null;
+    for (const problem of await checkKeyboard(page, focusShot)) {
+      fail(at, problem);
     }
+    if (focusShot !== null) shot += 1;
     await context.close();
   }
 

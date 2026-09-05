@@ -16,6 +16,7 @@ import {
   Disclosure,
   Eyebrow,
   LegalSlot,
+  legalSlotPending,
   Row,
   StatusDot,
 } from './primitives';
@@ -41,28 +42,96 @@ const BEFORE_COLLECTED = new Set(['pending', 'collecting']);
 const REFUND_MODEL = new Set(['refund_pending', 'refunding', 'refunded']);
 
 /**
+ * Положения, где деньги на счёте свободны и обещание «забрать можно в любой
+ * момент» произнесено прямым текстом (`…where.onAccount.title`,
+ * `…where.overfunded.body`). Обещание без органа на экране — самый частый
+ * дефект разбора (`CABINETS-REDESIGN.md` §1.2), поэтому рядом с ним стоит путь
+ * к выводу, а не только слова о нём.
+ */
+const FREE_TO_WITHDRAW = new Set(['onAccount', 'overfunded']);
+
+/**
  * ⚖-слот о праве отзыва. Ключи — из `DRAFT-money.md` §5, формулировка — из
  * `LEGAL-REVIEW.md` Ю-03 (одна на все точки границы, слово в слово).
  *
- * Слот `…releasePending.revocation` ревью **не прошёл** (Ю-01, ⛔): «нельзя» —
- * это утверждение об отсутствии права, которого по ст. 720.1 отнять нельзя.
- * Пока юрист не дал формулировку, на его месте стоит заглушка, а не черновик.
+ * Слоты после наступления условия ревью **не прошли** (Ю-01, ⛔) и перечислены
+ * в `PENDING_LEGAL_SLOTS`: пока юриста нет, на их месте не рендерится ничего —
+ * ни черновик, ни наша пометка о черновике (§5.7 разбора кабинетов). У `M-13`
+ * слот свой: «ответа банка нет» — не то же самое, что «выплата идёт», и одна
+ * формулировка на оба положения была бы обещанием по аналогии.
  */
-function revocationSlot(deal: DealSnapshot): { readonly key: string; readonly review: 'passed' | 'pending' } | null {
+function revocationKey(deal: DealSnapshot): string | null {
   switch (deal.trancheStatus) {
     case 'collecting':
     case 'collected':
-      return { key: 'deal.paying.revocation.beforeReserve', review: 'passed' };
+      return 'deal.paying.revocation.beforeReserve';
     case 'reserved':
       return deal.moneyState === 'submitted'
-        ? { key: 'deal.paying.where.submitted.revocation', review: 'passed' }
-        : { key: 'deal.paying.where.reserved.revocation', review: 'passed' };
+        ? 'deal.paying.where.submitted.revocation'
+        : 'deal.paying.where.reserved.revocation';
     case 'release_pending':
     case 'paying_out':
-      return { key: 'deal.paying.where.releasePending.revocation', review: 'pending' };
+      return deal.moneyState === 'payoutUnknown'
+        ? 'deal.paying.where.payoutUnknown.revocation'
+        : 'deal.paying.where.releasePending.revocation';
     default:
       return null;
   }
+}
+
+/** Ключ слота, который действительно будет показан, либо ничего. */
+function visibleRevocationKey(deal: DealSnapshot): string | null {
+  const key = revocationKey(deal);
+  return key === null || legalSlotPending(key) ? null : key;
+}
+
+/**
+ * Недобор для подстановки в текст. Берётся из положения денег, а если его там
+ * нет — считается из требуемой суммы и того, что на счёте: число, зовущее
+ * клиента к переводу, обязано быть числом, а не пустым слотом (та же оговорка,
+ * что на экране пополнения).
+ */
+function shortfallOf(deal: DealSnapshot): Money<CurrencyCode> | null {
+  if (deal.shortfall !== null) return deal.shortfall;
+  const gap = deal.required.minor - (deal.credited.minor + deal.locked.minor);
+  return gap > 0n ? money(deal.required.currency, gap) : null;
+}
+
+/**
+ * Три числа расхождения — `M-07` и `M-08`.
+ *
+ * Разбор `CABINETS-REDESIGN.md` §1.5: кнопка на `M-07` печатала сумму сделки, а
+ * не недобор, и клиент дослал бы поверх внесённого. Одного правильного числа в
+ * кнопке мало: чтобы ему поверили, рядом обязаны стоять два, из которых оно
+ * получено. Сумма «на счёте» считается как свободная часть плюс запертая — тем
+ * же способом, каким считаются недобор и излишек (`fixtures/store.ts`), иначе
+ * таблица не сходится в арифметике.
+ */
+function MoneyGap({ l, deal }: { readonly l: L10n; readonly deal: DealSnapshot }): ReactNode {
+  if (deal.shortfall === null && deal.excess === null) return null;
+  const onAccount = money(deal.required.currency, deal.credited.minor + deal.locked.minor);
+  return (
+    <div className="state-card__section">
+      <div className="rows">
+        <Row l={l} labelKey="deal.money.dealAmount">
+          <Amount l={l} value={deal.required} size="muted" />
+        </Row>
+        <Row l={l} labelKey="deal.paying.where.onAccount.amountLabel">
+          <Amount l={l} value={onAccount} size="muted" />
+        </Row>
+        {deal.shortfall === null ? null : (
+          <Row l={l} labelKey="deal.money.shortfallRow" total>
+            <Amount l={l} value={deal.shortfall} />
+          </Row>
+        )}
+        {deal.excess === null ? null : (
+          <Row l={l} labelKey="deal.money.excess" total>
+            <Amount l={l} value={deal.excess} />
+          </Row>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /** Сумма, которую показывает карточка положения денег, и её метка. */
@@ -85,16 +154,20 @@ function heroAmount(deal: DealSnapshot): Money<CurrencyCode> {
 export function MoneyStateCard({ l, deal, now, operationsZone, viewerZone }: DealProps): ReactNode {
   const base = `deal.paying.where.${deal.moneyState}`;
   const action: RequiredAction = requiredAction(deal);
-  const revocation = revocationSlot(deal);
+  const revocation = visibleRevocationKey(deal);
   const unavailable =
     deal.moneyState === 'frozen' || deal.moneyState === 'heldThirdParty' || deal.moneyState === 'unidentified';
   // Скрывается только сумма в валюте сделки: она пересчитывается. Сумма в
   // валюте перевода известна точно, и прятать её значит прятать деньги клиента.
   const hidden = deal.modifiers.quoteExpired && deal.conversion === null;
+  // `amount` — сумма сделки и только она. Число, которое клиент отправляет,
+  // приходит в свой слот (`shortfall`): подставить одно в другое здесь значит
+  // позвать на перевод суммы сделки поверх уже внесённой (§1.5 разбора).
+  const shortfall = shortfallOf(deal);
   const params = {
     bank: t(l.dict, 'glossary.custodian'),
     counterparty: deal.counterpartyName,
-    shortfall: deal.shortfall === null ? '' : formatMoney(l.locale, deal.shortfall),
+    shortfall: shortfall === null ? '' : formatMoney(l.locale, shortfall),
     excess: deal.excess === null ? '' : formatMoney(l.locale, deal.excess),
     amount: formatMoney(l.locale, deal.required),
   };
@@ -102,11 +175,13 @@ export function MoneyStateCard({ l, deal, now, operationsZone, viewerZone }: Dea
     <section className={`state-card state-card--${deal.tone}`} aria-labelledby="where-money">
       <div className="state-card__head">
         <div className="state-card__top">
+          {/* Кода положения денег здесь нет и не будет: `M-07` — наше имя
+              состояния, а не положение клиента. Предмет разговора с поддержкой
+              уже существует и называется номером сделки (§1.7 разбора). */}
           <span className="state-card__label">
             <StatusDot tone={deal.tone} />
             {t(l.dict, 'deal.whereMoney.heading')}
           </span>
-          <span className="mono faint">{deal.moneyStateCode}</span>
         </div>
         {hidden ? (
           <AmountSkeleton l={l} labelKey={`${base}.amountLabel`} />
@@ -132,6 +207,8 @@ export function MoneyStateCard({ l, deal, now, operationsZone, viewerZone }: Dea
             {t(l.dict, action.titleKey, params)}
           </p>
         </div>
+
+        <MoneyGap l={l} deal={deal} />
 
         {action.kind === 'blocked' && action.ctaKey !== null && action.reasonKey !== null ? (
           <BlockedAction l={l} labelKey={action.ctaKey} reasonKey={action.reasonKey} params={params} />
@@ -159,6 +236,17 @@ export function MoneyStateCard({ l, deal, now, operationsZone, viewerZone }: Dea
           </p>
         ) : null}
 
+        {/* Обещание «забрать можно в любой момент» получает путь на том же
+            экране, где произнесено. Второстепенная кнопка, а не главная:
+            требуемого действия здесь нет, и подталкивать к выводу нечем. */}
+        {FREE_TO_WITHDRAW.has(deal.moneyState) ? (
+          <p className="actions">
+            <a className="btn btn--secondary" href={`/${l.locale}/withdraw`}>
+              {t(l.dict, 'deal.paying.action.withdraw.cta')}
+            </a>
+          </p>
+        ) : null}
+
         {WITH_DEADLINE.has(deal.trancheStatus) && deal.deadline !== null ? (
           <div className="state-card__section">
             <DeadlineTimer
@@ -173,18 +261,13 @@ export function MoneyStateCard({ l, deal, now, operationsZone, viewerZone }: Dea
 
         {revocation === null ? null : (
           <div className="state-card__section">
-            <LegalSlot
-              l={l}
-              bodyKey={revocation.key}
-              labelKey="deal.paying.revocation.label"
-              review={revocation.review}
-            />
+            <LegalSlot l={l} bodyKey={revocation} labelKey="deal.paying.revocation.label" />
           </div>
         )}
 
-        {deal.moneyState === 'frozen' ? (
+        {deal.moneyState === 'frozen' && !legalSlotPending('deal.paying.where.frozen.disclosure') ? (
           <div className="state-card__section">
-            <LegalSlot l={l} bodyKey="deal.paying.where.frozen.disclosure" review="pending" />
+            <LegalSlot l={l} bodyKey="deal.paying.where.frozen.disclosure" />
           </div>
         ) : null}
 
@@ -651,7 +734,7 @@ export function AssuranceCard({
       </div>
 
       {deal.moneyState === 'releasePending' ? (
-        <LegalSlot l={l} bodyKey="assurance.revocationClosed" review="pending" />
+        <LegalSlot l={l} bodyKey="assurance.revocationClosed" />
       ) : null}
 
       <hr className="rule" />

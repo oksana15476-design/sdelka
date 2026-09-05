@@ -453,6 +453,38 @@ function overfundedShortfalls(journal: Journal): readonly InvariantViolation[] {
 }
 
 /**
+ * Расхождения, при которых приём новых сделок останавливается (красная линия
+ * №3, CORE.md Ф10).
+ *
+ * **Перечень, а не пять `||` подряд, и это не косметика.** Тот же список
+ * поимённо перечислен в базе — `v_should_stop_accepting_deals`
+ * (`db/migrations/0008_views.sql`), — и до появления этого массива сверить два
+ * списка было нечем: тест дрейфа умеет сравнивать значение со значением, а не
+ * значение с ветвью условия. Совпадали они ровно потому, что их писали в один
+ * день; расхождение — стоп-кран, который сработал бы в коде и промолчал в базе
+ * (или наоборот), то есть худший вид расхождения из возможных.
+ *
+ * Порядок значим: он сверяется с порядком в SQL буква в букву, как у меток
+ * перечня.
+ *
+ * Профицит (`custodySurplus`) здесь по той же причине, что и недостача: это
+ * отклонение покрытия от единицы, только в другую сторону, и оно
+ * останавливает приём ровно так же — пока на счёте клиентских средств лежит
+ * чужое этому счёту, новые деньги туда принимать нельзя.
+ *
+ * Чего в списке нет намеренно: `unclaimedUncovered` — порядок обращения с
+ * невостребованными помечен в §3.1 как **[открыто]**, и решение о стоп-кране
+ * по нему принимает владелец.
+ */
+export const STOP_ACCEPTING_INVARIANT_CODES = Object.freeze([
+  InvariantCode.coverageBelowOne,
+  InvariantCode.trancheUncovered,
+  InvariantCode.clientAccountUncovered,
+  InvariantCode.custodySurplus,
+  InvariantCode.negativeClientBalance,
+] as const);
+
+/**
  * Нарушение покрытия останавливает приём новых сделок автоматически
  * (красная линия №3, CORE.md Ф10). Решение принимает приложение — здесь
  * только признак, вычисленный из журнала.
@@ -461,15 +493,8 @@ export function shouldStopAcceptingDeals(
   journal: Journal,
   options: InvariantOptions = {},
 ): boolean {
-  return checkLedgerInvariants(journal, options).some(
-    (violation) =>
-      violation.code === InvariantCode.coverageBelowOne ||
-      violation.code === InvariantCode.trancheUncovered ||
-      violation.code === InvariantCode.clientAccountUncovered ||
-      // Профицит — тоже отклонение покрытия от единицы, только в другую
-      // сторону, и останавливает приём ровно так же: пока на счёте клиентских
-      // средств лежит чужое этому счёту, новые деньги туда принимать нельзя.
-      violation.code === InvariantCode.custodySurplus ||
-      violation.code === InvariantCode.negativeClientBalance,
+  const stopping: readonly string[] = STOP_ACCEPTING_INVARIANT_CODES;
+  return checkLedgerInvariants(journal, options).some((violation) =>
+    stopping.includes(violation.code),
   );
 }
