@@ -94,6 +94,18 @@ describe('сторона видит просрочку сама', () => {
   it('срока не обещали — просрочки нет', () => {
     expect(trackingView({ legs: [declared('left_sender_bank')] }, NOW).overdue).toBe(false);
   });
+
+  it('ровно в обещанный момент просрочки ещё нет', () => {
+    // Обещание «к такому-то моменту» этим моментом исполняется, а не
+    // нарушается. Иначе сторона видит красную отметку на секунду раньше срока.
+    const view = trackingView({ legs: [declared('left_sender_bank', 0)] }, NOW);
+    expect(view.overdue).toBe(false);
+    expect(view.reasons).not.toContain(INTAKE_REASON_KEYS.trackingOverdue);
+  });
+
+  it('на миллисекунду позже обещанного — уже просрочка', () => {
+    expect(trackingView({ legs: [declared('left_sender_bank', -1)] }, NOW).overdue).toBe(true);
+  });
 });
 
 describe('медиана потерь на корреспондентах', () => {

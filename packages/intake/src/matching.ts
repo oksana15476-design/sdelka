@@ -76,6 +76,23 @@ export function amountFits(
  * проходить, потому что для неё теста не написали.
  */
 export function assertMatchingWeights(weights: MatchingWeights): void {
+  // Ни один вес не отрицателен. Проверка не декоративная: сумма в сто процентов
+  // набирается и с отрицательным слагаемым, а отрицательный вес уводит
+  // `withoutNameBp` ниже нуля — и тогда ветвь «ноль непарных признаков даёт ноль
+  // итога» промахивается мимо, надбавка за имя добавляется к отрицательному
+  // весу, и имя снова начинает давать кандидата в одиночку. Правило первое в
+  // этом файле, и одной суммой оно не защищено.
+  for (const value of [
+    weights.referenceExactPercent,
+    weights.referenceDamagedPercent,
+    weights.amountFitsPercent,
+    weights.sourceAccountSeenPercent,
+    weights.currencyMatchesPercent,
+  ]) {
+    if (value < 0) {
+      throw new IntakeError(IntakeErrorCode.basisPointsOutOfRange, { value: String(value) });
+    }
+  }
   const total =
     weights.referenceExactPercent +
     weights.amountFitsPercent +

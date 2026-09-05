@@ -72,3 +72,74 @@ describe('быстрая перепродажа одного объекта', ()
     expect(assess([other]).outcome).toBe('clear');
   });
 });
+
+/**
+ * Границы. У детектора их три: край окна, край шкалы времени и порог скачка
+ * цены. Ошибка на единицу в любой из них — это разница между «сделка идёт» и
+ * «сделка остановлена с оценкой на отчёт о подозрении».
+ */
+describe('быстрая перепродажа: границы окна и порога', () => {
+  it('переход ровно на краю окна ещё считается', () => {
+    const days = POLICY.flipping.window / DAY_MS;
+    const result = assess([transfer('t1', days, 20_000_000n)]);
+    expect(result.outcome).toBe('review');
+    expect(result.sinceLastTransferMs).toBe(POLICY.flipping.window);
+  });
+
+  it('переход на миллисекунду старше окна уже не считается', () => {
+    const old: PropertyTransfer = {
+      transferId: 't1',
+      cadastralCode: CADASTRE,
+      registeredAt: instant(NOW - POLICY.flipping.window - 1) as Instant,
+      price: money('GEL', 20_000_000n),
+    };
+    expect(assess([old]).outcome).toBe('clear');
+  });
+
+  it('переход, зарегистрированный ровно сейчас, считается', () => {
+    const result = assess([transfer('t1', 0, 20_000_000n)]);
+    expect(result.outcome).toBe('review');
+    expect(result.sinceLastTransferMs).toBe(0);
+  });
+
+  it('переход из будущего не считается: это дефект данных реестра', () => {
+    const future: PropertyTransfer = {
+      transferId: 't1',
+      cadastralCode: CADASTRE,
+      registeredAt: instant(NOW + 1) as Instant,
+      price: money('GEL', 20_000_000n),
+    };
+    expect(assess([future]).outcome).toBe('clear');
+  });
+
+  it('скачок ровно на пороге эскалирует: граница включающая', () => {
+    // 10 000 000 → 12 000 000 — ровно 2 000 базисных пунктов.
+    const result = assess([transfer('t1', 30, 10_000_000n)], 12_000_000n);
+    expect(result.priceJumpBp).toBe(POLICY.flipping.priceJumpBp);
+    expect(result.outcome).toBe('stop');
+  });
+
+  it('скачок на один базисный пункт ниже порога не эскалирует', () => {
+    const result = assess([transfer('t1', 30, 10_000_000n)], 11_999_000n);
+    expect(result.priceJumpBp).toBe(1_999);
+    expect(result.outcome).toBe('review');
+  });
+
+  it('из двух переходов внутри окна берётся самый свежий', () => {
+    // Старый переход дал бы скачок в 10 000 пунктов и стоп; свежий — ноль и разбор.
+    const result = assess(
+      [transfer('t-old', 80, 10_000_000n), transfer('t-new', 10, 20_000_000n)],
+      20_000_000n,
+    );
+    expect(result.recentTransfers[0]?.transferId).toBe('t-new');
+    expect(result.sinceLastTransferMs).toBe(10 * DAY_MS);
+    expect(result.priceJumpBp).toBe(0);
+    expect(result.outcome).toBe('review');
+  });
+
+  it('нулевая цена прошлого перехода скачок не считает и не делит на ноль', () => {
+    const result = assess([transfer('t1', 30, 0n)], 20_000_000n);
+    expect(result.priceJumpBp).toBeNull();
+    expect(result.outcome).toBe('review');
+  });
+});

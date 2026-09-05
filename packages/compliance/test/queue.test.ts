@@ -41,6 +41,17 @@ describe('возраст считается от постановки, а не �
     expect(taskAgeMs(task({ enteredAt: instant(NOW + HOUR_MS) as Instant }), NOW)).toBe(0);
   });
 
+  it('возраст ровно на пороге норматив уже перешагнул', () => {
+    // Пороги из политики: 4, 24 и 72 часа. Норматив «через четыре часа»
+    // означает, что на четвёртом часу задача уже просрочена, а не ещё нет.
+    for (const [index, threshold] of policy.escalationAfter.entries()) {
+      const exactly = task({ enteredAt: instant(NOW - threshold) as Instant });
+      const justBefore = task({ enteredAt: instant(NOW - threshold + 1) as Instant });
+      expect(escalationLevel(exactly, NOW, policy)).toBe(index + 1);
+      expect(escalationLevel(justBefore, NOW, policy)).toBe(index);
+    }
+  });
+
   it('эскалация растёт по порогам возраста', () => {
     expect(escalationLevel(task(), NOW, policy)).toBe(0);
     expect(escalationLevel(task({ enteredAt: instant(NOW - 5 * HOUR_MS) as Instant }), NOW, policy)).toBe(1);
@@ -81,6 +92,18 @@ describe('порядок разбора', () => {
     const ranked = prioritize([foreign], policy, NOW);
     expect(ranked[0]?.rankMinor).toBeNull();
     expect(ranked).toHaveLength(1);
+  });
+
+  it('при равных эскалации, тяжести и сумме впереди старшая задача', () => {
+    // Идентификаторы подобраны против возраста: если сравнение по возрасту
+    // развернуть, порядок совпадёт с алфавитным и ошибка спрячется за
+    // устойчивостью сортировки.
+    const older = task({ taskId: 'z', enteredAt: instant(NOW - 3 * HOUR_MS) as Instant });
+    const newer = task({ taskId: 'a', enteredAt: instant(NOW - 1 * HOUR_MS) as Instant });
+    expect(prioritize([newer, older], policy, NOW).map((item) => item.task.taskId)).toEqual([
+      'z',
+      'a',
+    ]);
   });
 
   it('порядок устойчив: полностью равные задачи упорядочены по идентификатору', () => {

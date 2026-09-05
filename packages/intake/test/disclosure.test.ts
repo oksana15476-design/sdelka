@@ -47,6 +47,23 @@ describe('раскрытие допуска — записанный факт, �
     expect(effective.reasons).toContain(INTAKE_REASON_KEYS.toleranceDisclosedAfterPayment);
   });
 
+  it('раскрытие ровно в момент поступления — не «позже»', () => {
+    // Задним числом объявить нельзя, но одновременность задним числом не
+    // является: инструкция и платёж легко попадают в одну миллисекунду, и
+    // строгая сторона границы здесь молча обнулила бы объявленный допуск.
+    const simultaneous = disclosure({ disclosedAt: NOW });
+    const effective = effectiveTolerance(REQUIRED, PROPOSED_INTAKE_POLICY, simultaneous, NOW);
+    expect(effective.amount.minor).toBe(5_000n);
+    expect(effective.reasons).not.toContain(INTAKE_REASON_KEYS.toleranceDisclosedAfterPayment);
+  });
+
+  it('раскрытие на миллисекунду позже поступления допуск обнуляет', () => {
+    const late = disclosure({ disclosedAt: at(1) });
+    const effective = effectiveTolerance(REQUIRED, PROPOSED_INTAKE_POLICY, late, NOW);
+    expect(effective.amount.minor).toBe(0n);
+    expect(effective.reasons).toContain(INTAKE_REASON_KEYS.toleranceDisclosedAfterPayment);
+  });
+
   it('раскрыто под другую требуемую сумму — факт устарел, допуск ноль', () => {
     const stale = disclosure({ requiredAmount: gel(19_000_000n) });
     const effective = effectiveTolerance(REQUIRED, PROPOSED_INTAKE_POLICY, stale, NOW);

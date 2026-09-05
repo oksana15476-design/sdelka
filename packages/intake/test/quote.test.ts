@@ -97,6 +97,24 @@ describe('котировка гасится при движении рынка �
     const report = quoteStatus(makeQuote(), RATES.reference.value, at(PROPOSED_INTAKE_POLICY.quote.validity));
     expect(report.status).toBe('expired');
   });
+
+  it('граница порога: движение ровно на порог уже гасит котировку', () => {
+    // Эталон 2,6787; сто базисных пунктов от него — ровно 0,026787.
+    // Порог назван как «движение, при котором котировка гасится», и он
+    // достигается равенством: иначе объявленный порог на пункт больше
+    // действующего, а пункт здесь — это спред по всей паре.
+    const atThreshold = rationalFromDecimalString('2.705487');
+    const report = quoteStatus(makeQuote(), atThreshold, at(60_000));
+    expect(report.driftBp).toBe(PROPOSED_INTAKE_POLICY.quote.driftThreshold.valueBp);
+    expect(report.status).toBe('voided_by_market_move');
+  });
+
+  it('движение на пункт ниже порога котировку не гасит', () => {
+    const belowThreshold = rationalFromDecimalString('2.705486');
+    const report = quoteStatus(makeQuote(), belowThreshold, at(60_000));
+    expect(report.driftBp).toBe(99);
+    expect(report.status).toBe('firm');
+  });
 });
 
 describe('конвертация невозможна без явного подтверждения', () => {

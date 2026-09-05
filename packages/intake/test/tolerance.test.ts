@@ -57,6 +57,23 @@ describe('допуск: крайние значения', () => {
   it('нулевое требование даёт нулевой допуск', () => {
     expect(toleranceAmount(toleranceFor(gel(0n), PROPOSED_INTAKE_POLICY), 'GEL').minor).toBe(0n);
   });
+
+  it('доля в сто процентов законна: это верхний край диапазона, а не выход за него', () => {
+    const policy = withTolerance({ absolute: [money('GEL', 1_000_000n)], shareBp: 10_000 });
+    const resolution = toleranceFor(gel(100_000n), policy);
+    expect(resolution.kind).toBe('declared');
+    // Доля от требования равна самому требованию, абсолют больше — берётся доля.
+    expect(toleranceAmount(resolution, 'GEL').minor).toBe(100_000n);
+  });
+
+  it('доля сверх ста процентов и отрицательная отвергаются', () => {
+    expect(() => toleranceFor(gel(100_000n), withTolerance({ shareBp: 10_001 }))).toThrow(
+      'intake.basis_points.out_of_range',
+    );
+    expect(() => toleranceFor(gel(100_000n), withTolerance({ shareBp: -1 }))).toThrow(
+      'intake.basis_points.out_of_range',
+    );
+  });
 });
 
 describe('допуск в чужой валюте — отказ закрытый, а не пересчёт', () => {

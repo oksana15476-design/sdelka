@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type IntakePolicy,
   INTAKE_REASON_KEYS,
   REFERENCE_LENGTH,
   matchReference,
@@ -12,6 +13,17 @@ import { POLICY } from './support/fixtures';
 
 const REFERENCE = paymentReference({ dealCode: 'D7K2M9Q4', trancheCode: 'T1' });
 
+/** Политика с заданным порогом искажения: остальное берётся из предложенной. */
+function withDamagedThreshold(valueBp: number): IntakePolicy {
+  return Object.freeze({
+    ...POLICY,
+    matching: Object.freeze({
+      ...POLICY.matching,
+      damagedReferenceThreshold: Object.freeze({ valueBp, rationaleDocRef: 'docs/product/INTAKE.md' }),
+    }),
+  });
+}
+
 describe('референс уникален по траншу', () => {
   it('разные транши одной сделки дают разные референсы', () => {
     const first = paymentReference({ dealCode: 'D7K2M9Q4', trancheCode: 'T1' });
@@ -21,6 +33,31 @@ describe('референс уникален по траншу', () => {
 
   it('референс детерминирован: одна и та же пара кодов даёт одно значение', () => {
     expect(paymentReference({ dealCode: 'D7K2M9Q4', trancheCode: 'T1' })).toBe(REFERENCE);
+  });
+
+  it('значение референса зафиксировано буквально', () => {
+    // Референс уходит наружу: он напечатан в инструкции на перевод и живёт в
+    // назначении платежа неделями. Смена схемы контрольного знака — а её видно
+    // только по значению — обесценивает все выданные ранее референсы разом, и
+    // сопоставление по ним перестаёт сходиться. Сверка «сам с собой» этого не
+    // ловит: генерация и проверка сдвинутся вместе.
+    expect(paymentReference({ dealCode: 'D7K2M9Q4', trancheCode: 'T1' })).toBe('SDD7K2M9Q4T16');
+    expect(paymentReference({ dealCode: 'ZZZZZZZZ', trancheCode: '99' })).toBe('SDZZZZZZZZ99Z');
+  });
+
+  it('код длиннее поля обрезается с конца, а не с начала', () => {
+    // Хвост кода информативнее головы: у последовательных сделок различаются
+    // младшие разряды. Срез не с той стороны склеил бы разные сделки в один
+    // референс.
+    const reference = paymentReference({ dealCode: 'XY' + 'D7K2M9Q4', trancheCode: 'T1' });
+    expect(reference).toBe(REFERENCE);
+  });
+
+  it('код короче поля дополняется нулями слева', () => {
+    expect(parseReference(paymentReference({ dealCode: '7', trancheCode: '1' }))?.parts).toEqual({
+      dealCode: '00000007',
+      trancheCode: '01',
+    });
   });
 
   it('пустой код отвергается', () => {
@@ -52,7 +89,10 @@ describe('контрольный знак', () => {
     const payload = (REFERENCE as string).slice(0, REFERENCE_LENGTH - 1);
     const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     let checked = 0;
-    for (let position = 2; position < payload.length; position += 1) {
+    // Позиции считаются с нуля, включая префикс: контрольный знак обязан
+    // зависеть от каждого знака нагрузки. Пропусти первый — и ошибка в нём
+    // останется незамеченной, а сама схема этого не покажет.
+    for (let position = 0; position < payload.length; position += 1) {
       const original = payload[position];
       for (const replacement of alphabet) {
         if (replacement === original) continue;
@@ -69,7 +109,7 @@ describe('контрольный знак', () => {
   it('ловит перестановку соседних различных знаков', () => {
     const payload = (REFERENCE as string).slice(0, REFERENCE_LENGTH - 1);
     let swapsChecked = 0;
-    for (let position = 2; position + 1 < payload.length; position += 1) {
+    for (let position = 0; position + 1 < payload.length; position += 1) {
       const left = payload[position];
       const right = payload[position + 1];
       if (left === undefined || right === undefined || left === right) continue;
@@ -101,11 +141,31 @@ describe('искажённый референс не выдаётся за то�
     expect(matchReference(REFERENCE, null, POLICY).degree).toBe('absent');
     expect(matchReference(REFERENCE, '   ', POLICY).degree).toBe('absent');
   });
+
+  it('сходство ровно на пороге читается как искажение, ниже — как чужой', () => {
+    // Порог отделяет «прочитали почти правильно» от «это референс другой
+    // сделки», и сторона границы у него включающая: равенство порогу — ещё
+    // искажение. Ошибка на единицу здесь отправляет свой платёж в чужие.
+    const damaged = `${(REFERENCE as string).slice(0, 4)}XYZ${(REFERENCE as string).slice(7)}`;
+    const similarityBp = matchReference(REFERENCE, damaged, withDamagedThreshold(0)).similarityBp;
+    expect(similarityBp).toBeGreaterThan(0);
+    expect(similarityBp).toBeLessThan(10_000);
+
+    expect(matchReference(REFERENCE, damaged, withDamagedThreshold(similarityBp)).degree).toBe(
+      'damaged',
+    );
+    expect(matchReference(REFERENCE, damaged, withDamagedThreshold(similarityBp + 1)).degree).toBe(
+      'foreign',
+    );
+  });
 });
 
 describe('разбор', () => {
   it('строка не той длины на референс не похожа', () => {
     expect(parseReference('SD123')).toBeNull();
+    // Длиннее ожидаемого — тоже не референс: разбор по фиксированным позициям
+    // молча отрезал бы хвост и выдал чужую пару кодов за свою.
+    expect(parseReference(`${REFERENCE}0`)).toBeNull();
   });
 
   it('референс с несошедшимся знаком разбирается, но помечается', () => {

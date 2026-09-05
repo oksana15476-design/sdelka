@@ -257,6 +257,64 @@ describe('применение изменения', () => {
     expect(result.value.status).toBe('name_consistent');
   });
 
+  it('охлаждение ровно в срок истекло: граница на стороне заявителя', () => {
+    // Охлаждение объявлено как 24 часа. На двадцать четвёртом часу оно
+    // закончилось, а не «ещё идёт»: иначе объявленный срок на деле длиннее.
+    const result = applyBeneficiaryChange(
+      lockOnFunding(state()),
+      request({ requestedAt: instant(NOW - POLICY.beneficiary.cooldown) as Instant }),
+      applyInput,
+      approver,
+      POLICY,
+      NOW,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('за миллисекунду до конца охлаждения — отказ', () => {
+    const result = applyBeneficiaryChange(
+      lockOnFunding(state()),
+      request({ requestedAt: instant(NOW - POLICY.beneficiary.cooldown + 1) as Instant }),
+      applyInput,
+      approver,
+      POLICY,
+      NOW,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('compliance.beneficiary.change_cooling_off');
+  });
+
+  it('уже применённая заявка второй раз не применяется', () => {
+    // Иначе одно утверждение меняет реквизиты дважды: заявка терминальна, и
+    // повторный проход по ней — это изменение без собственного основания.
+    const result = applyBeneficiaryChange(
+      lockOnFunding(state()),
+      request({ status: 'applied' }),
+      applyInput,
+      approver,
+      POLICY,
+      NOW,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('compliance.beneficiary.change_in_release_window');
+  });
+
+  it('автоблокированная заявка не применяется', () => {
+    const result = applyBeneficiaryChange(
+      lockOnFunding(state()),
+      request({ status: 'auto_blocked' }),
+      applyInput,
+      approver,
+      POLICY,
+      NOW,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('compliance.beneficiary.change_in_release_window');
+  });
+
   it('охлаждение не истекло — отказ', () => {
     const result = applyBeneficiaryChange(
       lockOnFunding(state()),

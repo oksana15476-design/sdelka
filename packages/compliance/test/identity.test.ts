@@ -101,6 +101,22 @@ describe('профиль без грузинского личного номер
       'compliance.identity.document_expired',
     );
   });
+
+  it('документ, истекающий ровно сейчас, уже просрочен', () => {
+    // Срок действия оканчивается **в** названный момент. Обратное прочтение
+    // даёт лишний миг, в который выплата уходит по недействующему документу.
+    const atExpiry = profile({ document: { ...BUYER_DOCUMENT, expiresAt: NOW } });
+    expect(identityCompleteness(atExpiry, NOW).missing).toContain(
+      'compliance.identity.document_expired',
+    );
+  });
+
+  it('документ, действующий ещё миллисекунду, полноту не ломает', () => {
+    const almost = profile({ document: { ...BUYER_DOCUMENT, expiresAt: NOW + 1 } });
+    expect(identityCompleteness(almost, NOW).missing).not.toContain(
+      'compliance.identity.document_expired',
+    );
+  });
 });
 
 describe('сверка собственника ведётся по номеру документа', () => {

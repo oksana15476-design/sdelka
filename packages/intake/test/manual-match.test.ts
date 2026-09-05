@@ -51,6 +51,16 @@ describe('порог второго утверждения', () => {
     expect(requiresSecondApproval(jpy(1n), POLICY)).toBe(true);
   });
 
+  it('сумма ровно на пороге второго человека ещё не требует', () => {
+    // Порог назван как «выше этой суммы»: равенство порогом не является его
+    // превышением. Сдвиг на минорную единицу здесь меняет то, кому разрешено
+    // отнести деньги к сделке в одиночку.
+    const threshold = POLICY.manualMatch.secondApprovalAbove.find((item) => item.currency === 'GEL');
+    if (threshold === undefined) throw new Error('порог в лари не объявлен');
+    expect(requiresSecondApproval(gel(threshold.minor), POLICY)).toBe(false);
+    expect(requiresSecondApproval(gel(threshold.minor + 1n), POLICY)).toBe(true);
+  });
+
   it('порог по валютам, без пересчёта по курсу', () => {
     expect(requiresSecondApproval(usd(300_000n), POLICY)).toBe(false);
     expect(requiresSecondApproval(usd(500_000n), POLICY)).toBe(true);

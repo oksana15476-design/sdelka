@@ -112,6 +112,16 @@ const PROVOCATIONS: readonly Provocation[] = [
   },
   {
     code: IntakeErrorCode.basisPointsOutOfRange,
+    site: 'matching.ts вес признака отрицателен',
+    run: () =>
+      assertMatchingWeights({
+        ...PROPOSED_INTAKE_POLICY.matching.weights,
+        amountFitsPercent: -20,
+        currencyMatchesPercent: 45,
+      }),
+  },
+  {
+    code: IntakeErrorCode.basisPointsOutOfRange,
     site: 'matching.ts надбавка за имя отрицательна',
     run: () =>
       assertMatchingWeights({

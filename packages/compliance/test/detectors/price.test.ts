@@ -66,4 +66,45 @@ describe('расхождение суммы с ценой в договоре', 
     expect(result.reasons).toContain('compliance.price.currency_mismatch');
     expect(result.deltaMinor).toBeNull();
   });
+
+  it('нулевая цена договора читается как отсутствие цены, а не делится на ноль', () => {
+    const result = assess({ contractPrice: money('GEL', 0n) });
+    expect(result.outcome).toBe('stop');
+    expect(result.reasons).toContain('compliance.price.contract_missing');
+    expect(result.deltaBp).toBeNull();
+  });
+});
+
+/**
+ * Допуск по цене у действующей политики нулевой, и на нём граница «строго
+ * равно» неотличима от «в пределах допуска»: любое ненулевое расхождение даёт
+ * хотя бы один базисный пункт. Поэтому сторона границы проверяется на политике
+ * с ненулевым допуском — иначе сравнение можно поменять, не сломав ни одного
+ * теста, а вместе с ним поедет и величина, которую увидит оператор.
+ */
+describe('допуск по цене: сторона границы', () => {
+  const tolerant = { toleranceBp: 100 };
+  const withTolerance = (overrides: Partial<PriceFacts> = {}) =>
+    assessPrice(facts(overrides), POLICY_VERSION, tolerant, NOW);
+
+  it('расхождение ровно в допуск проходит, и величина остаётся в отчёте', () => {
+    // 240 000 от 24 000 000 — ровно 100 базисных пунктов.
+    const result = withTolerance({ platformAmount: money('GEL', 24_240_000n) });
+    expect(result.outcome).toBe('clear');
+    expect(result.deltaMinor).toBe(240_000n);
+    expect(result.deltaBp).toBe(100);
+  });
+
+  it('расхождение на одну тетри сверх допуска останавливает', () => {
+    const result = withTolerance({ platformAmount: money('GEL', 24_240_001n) });
+    expect(result.outcome).toBe('stop');
+    expect(result.deltaBp).toBe(101);
+    expect(result.suspicionAssessmentRequired).toBe(true);
+  });
+
+  it('точное совпадение при ненулевом допуске остаётся нулевой долей', () => {
+    const result = withTolerance();
+    expect(result.outcome).toBe('clear');
+    expect(result.deltaBp).toBe(0);
+  });
 });

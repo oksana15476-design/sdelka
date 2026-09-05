@@ -165,6 +165,16 @@ describe('совпадение устройства и реквизитов у �
     expect(result.reasons).not.toContain('compliance.linkage.shared_account');
   });
 
+  it('«связей нет» не приписывается там, где связь найдена', () => {
+    // Причина-заглушка ставится только вместо пустого перечня. Иначе отчёт
+    // одновременно называет связь и отрицает её, и оператор читает оба.
+    const result = assess({
+      parties: [party('a', { devices: [DEVICE_SHARED] }), party('b', { devices: [DEVICE_SHARED] })],
+    });
+    expect(result.reasons).toContain('compliance.linkage.shared_device');
+    expect(result.reasons).not.toContain('compliance.linkage.none');
+  });
+
   it('в отчёт попадает метка отпечатка, а не сам отпечаток', () => {
     const result = assess({
       parties: [party('a', { devices: [DEVICE_SHARED] }), party('b', { devices: [DEVICE_SHARED] })],

@@ -106,6 +106,48 @@ describe('решение по кандидатам', () => {
     expect(result.reasons).toContain('compliance.sanctions.below_threshold');
   });
 
+  it('балл провайдера ровно на пороге кандидата удерживает', () => {
+    // У скрининга дорог пропуск: равенство порогу читается как его достижение,
+    // и кандидат уходит аналитику, а не отсеивается.
+    const atThreshold = POLICY.sanctions.candidateThreshold.valueBp;
+    expect(decide({ response: completed([candidate({ providerScoreBp: atThreshold })]) }).outcome).toBe(
+      'possible_match',
+    );
+    expect(
+      decide({ response: completed([candidate({ providerScoreBp: atThreshold - 1 })]) }).outcome,
+    ).toBe('clear');
+  });
+
+  it('собственный балл ровно на пороге по имени тоже удерживает', () => {
+    // Балл провайдера ниже его порога, сильного идентификатора нет: решает
+    // только собственное сравнение имён, и его граница — та же включающая.
+    const strict = {
+      ...POLICY,
+      nameThresholds: { ...POLICY.nameThresholds, screening: { valueBp: 10_000, rationaleDocRef: 'docs' } },
+    };
+    const request = {
+      subjectRef: 'party-1',
+      subjectNames: BUYER_NAMES,
+      subjectNationalities: [IL],
+      response: completed([
+        candidate({ providerScoreBp: 100, listNames: [latinName('Sabo', 'Tikato')] }),
+      ]),
+      whitelist: [],
+      evidence: [evidence(1)],
+    };
+    // Формы совпадают буквально — собственный балл ровно 10 000, то есть порог.
+    expect(decideSanctions(request, strict, NOW).outcome).toBe('possible_match');
+  });
+
+  it('чистый скрининг не несёт причины о грузинской оговорке', () => {
+    // Оговорка отмечается для банка-партнёра там, где кандидат остался. Без
+    // кандидатов отмечать нечего, а лишняя причина в чистом решении читается
+    // как «что-то нашли».
+    const result = decide({ subjectNationalities: [GE], response: completed([]) });
+    expect(result.outcome).toBe('clear');
+    expect(result.reasons).not.toContain('compliance.sanctions.georgian_carve_out_disapplied');
+  });
+
   it('собственный балл по формам перечня поднимает кандидата при низком балле провайдера', () => {
     const result = decide({
       response: completed([
@@ -164,6 +206,25 @@ describe('белый список', () => {
     });
     expect(result.outcome).toBe('possible_match');
     expect(result.reasons).toContain('compliance.sanctions.whitelist_expired');
+  });
+
+  it('запись, истекающая ровно сейчас, уже не гасит', () => {
+    // Срок жизни разобранного ложного хита истекает **в** названный момент, а не
+    // после него: иначе на самой границе кандидат исчезает без разбора.
+    const result = decide({
+      response: completed([candidate()]),
+      whitelist: [entry({ expiresAt: NOW })],
+    });
+    expect(result.outcome).toBe('possible_match');
+    expect(result.reasons).toContain('compliance.sanctions.whitelist_expired');
+  });
+
+  it('запись, истекающая через миллисекунду, ещё гасит', () => {
+    const result = decide({
+      response: completed([candidate()]),
+      whitelist: [entry({ expiresAt: instant(NOW + 1) as Instant })],
+    });
+    expect(result.outcome).toBe('clear');
   });
 
   it('запись к другой версии записи перечня не гасит', () => {

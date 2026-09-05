@@ -73,6 +73,22 @@ describe('недоплата в пределах допуска — случай
     expect(plan.missing.minor).toBe(5_001n);
   });
 
+  it('ничего не пришло — накопления нет, и причина об этом не говорит', () => {
+    // Причина «накапливаем» обещает стороне, что часть суммы уже лежит на её
+    // счёте. При нулевом накопленном это неправда, и оператор с клиентом ищут
+    // деньги, которых не приходило.
+    const plan = run({ incoming: gel(0n), freeBefore: gel(0n) });
+    expect(plan.kind).toBe('insufficient');
+    expect(plan.missing.minor).toBe(REQUIRED.minor);
+    expect(plan.reasons).not.toContain(INTAKE_REASON_KEYS.allocationAccumulating);
+  });
+
+  it('часть суммы уже накоплена — причина о накоплении есть', () => {
+    const plan = run({ incoming: gel(1_000n), freeBefore: gel(1_000n) });
+    expect(plan.kind).toBe('insufficient');
+    expect(plan.reasons).toContain(INTAKE_REASON_KEYS.allocationAccumulating);
+  });
+
   it('недостача вынесена отдельным полем, а не спрятана в сумме транша', () => {
     const plan = run({ incoming: gel(20_000_000n - 100n) });
     // Транш на полную сумму, но 100 из них платформа ещё не донесла: до второй

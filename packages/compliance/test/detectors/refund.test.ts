@@ -55,6 +55,20 @@ describe('возврат только на счёт-источник, на им�
     expect(result.reasons).toContain('compliance.refund.source_account_unknown');
   });
 
+  it('счёт известен, а владелец нет — то же «источник не опознан»', () => {
+    // Половина факта источником не является: без владельца проверить «на имя
+    // плательщика» нечем, и дальше по лестнице идти не с чем.
+    const result = assess({ sourceHolder: null });
+    expect(result.outcome).toBe('block');
+    expect(result.reasons).toContain('compliance.refund.source_account_unknown');
+  });
+
+  it('владелец известен, а счёт нет — тоже «источник не опознан»', () => {
+    const result = assess({ sourceAccount: null });
+    expect(result.outcome).toBe('block');
+    expect(result.reasons).toContain('compliance.refund.source_account_unknown');
+  });
+
   it('санкционная заморозка имеет приоритет над возвратом по умолчанию', () => {
     const result = assess({ sanctionsFrozen: true });
     expect(result.outcome).toBe('block');

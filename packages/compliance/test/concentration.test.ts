@@ -113,4 +113,41 @@ describe('лимиты концентрации возвращают доли и
       'compliance.aggregate.negative',
     );
   });
+
+  it('нулевой оборот страны законен: ноль — не отрицательная величина', () => {
+    const report = evaluateConcentration(
+      turnover(
+        [
+          { country: DE, minor: 0n },
+          { country: RU, minor: 10_000_000n },
+        ],
+        100_000_000n,
+      ),
+      policy,
+    );
+    expect(report.countries.find((item) => item.country === DE)?.shareBp).toBe(0);
+    expect(report.countries.find((item) => item.country === DE)?.excessMinor).toBe(0n);
+    expect(report.withinLimits).toBe(true);
+  });
+
+  it('части ровно равны итогу — это не превышение агрегата', () => {
+    const report = evaluateConcentration(
+      turnover([{ country: DE, minor: 100n }], 100n),
+      policy,
+    );
+    expect(report.countries[0]?.shareBp).toBe(10_000);
+  });
+
+  it('объём сверх лимита считается усечением, а не округлением вверх', () => {
+    // Оборот не делится на лимит нацело: 100 000 001 × 25% = 25 000 000,25.
+    // Округли допустимое вверх — и превышение станет на минорную единицу меньше,
+    // то есть система недосчитает лари, который брать уже нельзя.
+    const report = evaluateConcentration(
+      turnover([{ country: RU, minor: 40_000_000n }], 100_000_001n),
+      policy,
+    );
+    const ru = report.countries.find((item) => item.country === RU);
+    expect(ru?.limitBp).toBe(2_500);
+    expect(ru?.excessMinor).toBe(15_000_000n);
+  });
 });
