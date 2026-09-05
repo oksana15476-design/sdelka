@@ -26,16 +26,24 @@ import type { SettingsVersion } from './version';
 export const RESOLUTION_STRATEGIES = ['sticky', 'immediate', 'tightening_ratchet'] as const;
 export type ResolutionStrategyKey = (typeof RESOLUTION_STRATEGIES)[number];
 
+/**
+ * Разрешение всегда несёт **версию**, а не «версию или ничего».
+ *
+ * `applied` необнуляем намеренно. Обнуляемое поле в успешном ответе — это та
+ * самая дверь, через которую в расчёт входит молчаливое умолчание: `applied?.value
+ * ?? DEFAULT` компилируется, читается как забота о крайнем случае и подставляет
+ * число, которого никто не выбирал. Отсутствие действующей версии — отказ
+ * (`SETTINGS_REFUSAL_KEYS.noVersionInEffect`), и разобрать его придётся.
+ */
 export interface SettingsResolution<T> {
   readonly strategy: ResolutionStrategyKey;
-  /** `null` — действующей версии нет. Почему именно нет, сказано в `reasonKey`. */
-  readonly applied: SettingsVersion<T> | null;
+  readonly applied: SettingsVersion<T>;
   readonly reasonKey: SettingsOutcomeKey;
 }
 
 function resolution<T>(
   strategy: ResolutionStrategyKey,
-  applied: SettingsVersion<T> | null,
+  applied: SettingsVersion<T>,
   reasonKey: SettingsOutcomeKey,
 ): SettingsResolution<T> {
   return Object.freeze({ strategy, applied, reasonKey });
@@ -59,11 +67,15 @@ export function versionInEffect<T, P extends StickingPoint>(
   }
   const found = effectiveVersionAt(series.versions, moment.at);
   if (!found.ok) return found;
-  return ok(
-    found.value === null
-      ? resolution<T>('sticky', null, SETTINGS_OUTCOME_KEYS.noVersionInEffect)
-      : resolution('sticky', found.value, SETTINGS_OUTCOME_KEYS.stickyVersionApplied),
-  );
+  if (found.value === null) {
+    // Пустая история и момент раньше первой версии — один ответ: величины на
+    // этот момент **не было**. Ни первой версии «за неимением лучшего», ни
+    // сегодняшней: подставить сегодняшнюю значило бы посчитать транш по тарифу,
+    // принятому после его создания, — пересчёт задним числом, только с другой
+    // стороны.
+    return failure(SETTINGS_REFUSAL_KEYS.noVersionInEffect);
+  }
+  return ok(resolution('sticky', found.value, SETTINGS_OUTCOME_KEYS.stickyVersionApplied));
 }
 
 /**
@@ -84,9 +96,8 @@ export function versionInEffectNow<T>(
   }
   const found = effectiveVersionAt(series.versions, now.at);
   if (!found.ok) return found;
-  return ok(
-    found.value === null
-      ? resolution<T>('immediate', null, SETTINGS_OUTCOME_KEYS.noVersionInEffect)
-      : resolution('immediate', found.value, SETTINGS_OUTCOME_KEYS.immediateVersionApplied),
-  );
+  if (found.value === null) {
+    return failure(SETTINGS_REFUSAL_KEYS.noVersionInEffect);
+  }
+  return ok(resolution('immediate', found.value, SETTINGS_OUTCOME_KEYS.immediateVersionApplied));
 }

@@ -51,7 +51,7 @@ export function findSettingsVersion<T, A extends Attachment>(
 /**
  * Дописать версию в журнал. Возвращает **новый** журнал: старый не меняется.
  *
- * Шесть отказов, и каждый закрывает свой способ получить две правды о том,
+ * Девять отказов, и каждый закрывает свой способ получить две правды о том,
  * что действовало:
  *
  * 1. Чужой домен.
@@ -77,6 +77,18 @@ export function findSettingsVersion<T, A extends Attachment>(
  *    владелец не ответил, отложенное изменение нельзя ускорить — его можно
  *    только отодвинуть; отмена отложенного (§4 п.3) остаётся отдельным
  *    механизмом и в этом пакете не выражена. **[открыто]**
+ * 7. Первая версия сослалась на предыдущую: журнал пуст, ссылаться не на что.
+ * 8. Версия легла в непустой журнал без ссылки — разрыв цепочки.
+ * 9. Ссылка ведёт не на последнюю запись журнала. `SETTINGS.md` §2 называет
+ *    `supersedes` «предыдущей действующей», а §9 п.5 требует лишь
+ *    «существующую версию того же домена» — два разных правила, и расходятся
+ *    они ровно тогда, когда в журнале лежит **отложенная** версия: последняя
+ *    запись и действующая в этот момент — разные. Взят строжайший выразимый
+ *    вариант: ссылка на **последнюю запись**, то есть цепочка без ветвлений и
+ *    без дыр. **Цена строгости:** сослаться «через голову» отложенной версии на
+ *    действующую нельзя, даже если владелец имел в виду именно её. **[открыто]**
+ *    — какое из двух прочтений верно, решает владелец; проверка «версия
+ *    существует» слабее и её одной для восстановления прошлого не хватает.
  */
 export function appendSettingsVersion<T, A extends Attachment>(
   series: SettingsSeries<T, A>,
@@ -86,7 +98,15 @@ export function appendSettingsVersion<T, A extends Attachment>(
     return failure(SETTINGS_REFUSAL_KEYS.versionDomainMismatch);
   }
   const last = series.versions.at(-1);
-  if (last !== undefined) {
+  if (last === undefined) {
+    if (version.supersedes !== null) {
+      return failure(SETTINGS_REFUSAL_KEYS.versionSupersedesUnexpected);
+    }
+  } else {
+    // Порядок проверок не произволен: тождество версии разбирается до цепочки.
+    // Повтор по двойному нажатию (§7.3) обязан назваться повтором, а не разрывом
+    // ссылки, — иначе на экране владельца двойное сохранение выглядит поломкой
+    // журнала.
     if (findSettingsVersion(series, version.versionId) !== null) {
       return failure(SETTINGS_REFUSAL_KEYS.versionIdReused);
     }
@@ -101,6 +121,12 @@ export function appendSettingsVersion<T, A extends Attachment>(
     }
     if (version.effectiveFrom < last.effectiveFrom) {
       return failure(SETTINGS_REFUSAL_KEYS.versionEffectiveBeforeDeferred);
+    }
+    if (version.supersedes === null) {
+      return failure(SETTINGS_REFUSAL_KEYS.versionSupersedesMissing);
+    }
+    if (version.supersedes !== last.versionId) {
+      return failure(SETTINGS_REFUSAL_KEYS.versionSupersedesNotPrevious);
     }
   }
   return ok(

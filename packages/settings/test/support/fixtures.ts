@@ -33,6 +33,12 @@ export interface VersionSpec {
   readonly recordedAt: Instant;
   readonly effectiveFrom: Instant;
   readonly role?: RoleId;
+  /**
+   * Ссылка на предыдущую версию. В фикстуре умолчания нет намеренно: `null`
+   * пишется руками, иначе «первая в журнале» и «забыли сослаться» стали бы одним
+   * и тем же и в тестах тоже.
+   */
+  readonly supersedes: string | null;
 }
 
 export function version(spec: VersionSpec): SettingsVersion<Tier> {
@@ -44,5 +50,22 @@ export function version(spec: VersionSpec): SettingsVersion<Tier> {
     reasonKey: REASON,
     recordedAt: spec.recordedAt,
     effectiveFrom: spec.effectiveFrom,
+    supersedes: spec.supersedes === null ? null : settingsVersionId(spec.supersedes),
   });
+}
+
+/** Звено цепочки без ссылки: её проставит `chain`. */
+export type ChainSpec = Omit<VersionSpec, 'supersedes'>;
+
+/**
+ * Готовая цепочка версий: каждая ссылается на предыдущую, первая — ни на что.
+ *
+ * Нужна там, где проверяется **не** цепочка (разрешение, храповик), а журнал
+ * обязан собраться. Сама ссылка проверяется отдельно и вручную —
+ * `series.test.ts`, `version.test.ts`; здесь она не должна занимать место.
+ */
+export function chain(specs: readonly ChainSpec[]): readonly SettingsVersion<Tier>[] {
+  return specs.map((spec, index) =>
+    version({ ...spec, supersedes: index === 0 ? null : (specs[index - 1]?.id ?? null) }),
+  );
 }

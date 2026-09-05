@@ -104,7 +104,7 @@ export function tighteningMoment(at: Instant): TighteningMoment {
 }
 
 function resolution<T>(
-  applied: SettingsVersion<T> | null,
+  applied: SettingsVersion<T>,
   reasonKey: SettingsOutcomeKey,
 ): SettingsResolution<T> {
   return Object.freeze({ strategy: 'tightening_ratchet' as const, applied, reasonKey });
@@ -138,11 +138,21 @@ export function resolveWithTighteningRatchet<T, P extends StickingPoint>(
   if (!current.ok) return current;
 
   if (stuck.value === null) {
+    if (current.value === null) {
+      // Ни прилипшей, ни текущей: величины не было ни в один из двух моментов.
+      // Храповик тут не «пропускает», а отказывает — иначе он был бы способом
+      // получить контрольную меру из пустого журнала.
+      return failure(SETTINGS_REFUSAL_KEYS.noVersionInEffect);
+    }
     // В момент прилипания версии не было. Единственный кандидат — текущая:
     // «ничего» контрольной мерой не является.
     return ok(resolution(current.value, SETTINGS_OUTCOME_KEYS.ratchetNoStuckVersion));
   }
   if (current.value === null) {
+    // Недостижимо на сегодняшнем журнале: `now.at ≥ stuckAt.at`, а множество
+    // версий, действующих на момент, только растёт со временем. Ветка оставлена
+    // рубежом на случай журнала, пришедшего из хранилища не тем, чем он должен
+    // быть, — и отвечает прилипшей версией, а не пустотой.
     return ok(resolution(stuck.value, SETTINGS_OUTCOME_KEYS.ratchetNoCurrentVersion));
   }
   if (current.value.versionId === stuck.value.versionId) {

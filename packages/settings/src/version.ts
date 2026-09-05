@@ -153,6 +153,20 @@ export interface SettingsVersion<T> {
   readonly recordedAt: Instant;
   /** Момент, с которого версия действует. Никогда не раньше `recordedAt`. */
   readonly effectiveFrom: Instant;
+  /**
+   * Предыдущая версия той же величины; `null` — только у первой
+   * (`SETTINGS.md` §2, §9 п.5).
+   *
+   * Поле обязательное **и** необнуляемое по умолчанию: `supersedes?: …` дал бы
+   * «забыли сослаться» и «первая в журнале» одним значением, а это разные вещи —
+   * ровно как `NOT_STICKY` против `undefined` в `attachment.ts`. Отсюда `null`
+   * пишется руками, и написать его во второй раз журнал не даст (`series.ts`).
+   *
+   * Ссылка держит цепочку версий той же дисциплиной, что и цепочка журнала
+   * аудита (`packages/audit/src/chain.ts`): восстановление «что действовало 14
+   * марта» не должно зависеть от того, отдало ли хранилище записи по порядку.
+   */
+  readonly supersedes: SettingsVersionId | null;
   readonly [versionBrand]: 'settings_version';
 }
 
@@ -164,6 +178,7 @@ export interface SettingsVersionInput<T> {
   readonly reasonKey: SettingsReasonKey;
   readonly recordedAt: Instant;
   readonly effectiveFrom: Instant;
+  readonly supersedes: SettingsVersionId | null;
 }
 
 /**
@@ -186,7 +201,11 @@ const MANAGE_SETTINGS = 'manage_settings';
  *    версия, действующая раньше **уже действующей**, невозможна по построению,
  *    а не запрещена правилом (`SETTINGS.md` §9 п.2).
  * 2. **Роль без полномочия.** Настройку двигает тот, кому это дано.
- * 3. Форма идентификатора и ключа основания — их конструкторами.
+ * 3. **Ссылка на предыдущую версию, ведущая не туда:** на себя, в чужой домен
+ *    или вперёд по порядку. Все три означают цепочку, по которой прошлое не
+ *    восстанавливается; существование той версии проверяет журнал (`series.ts`),
+ *    потому что здесь его знать неоткуда.
+ * 4. Форма идентификатора и ключа основания — их конструкторами.
  */
 export function settingsVersion<T>(input: SettingsVersionInput<T>): SettingsVersion<T> {
   if (!roleHasCapability(input.introducedByRole, MANAGE_SETTINGS)) {
@@ -202,6 +221,30 @@ export function settingsVersion<T>(input: SettingsVersionInput<T>): SettingsVers
       effectiveFrom: String(input.effectiveFrom),
     });
   }
+  if (input.supersedes !== null) {
+    if (typeof input.supersedes !== 'string') {
+      // Поле пропущено вовсе. Типом это уже запрещено, но версия собирается и из
+      // того, что пришло из хранилища, а там `undefined` — обычное дело.
+      throw new SettingsError(SettingsErrorCode.versionIdInvalid, { field: 'supersedes' });
+    }
+    if (input.supersedes === input.versionId) {
+      throw new SettingsError(SettingsErrorCode.supersedesSelfReference, {
+        versionId: input.versionId,
+      });
+    }
+    if (settingsVersionDomain(input.supersedes) !== settingsVersionDomain(input.versionId)) {
+      throw new SettingsError(SettingsErrorCode.supersedesDomainMismatch, {
+        versionId: input.versionId,
+        supersedes: input.supersedes,
+      });
+    }
+    if (compareVersionIds(input.supersedes, input.versionId) !== -1) {
+      throw new SettingsError(SettingsErrorCode.supersedesNotOlder, {
+        versionId: input.versionId,
+        supersedes: input.supersedes,
+      });
+    }
+  }
   return Object.freeze({
     versionId: input.versionId,
     value: input.value,
@@ -210,5 +253,6 @@ export function settingsVersion<T>(input: SettingsVersionInput<T>): SettingsVers
     reasonKey: input.reasonKey,
     recordedAt: input.recordedAt,
     effectiveFrom: input.effectiveFrom,
+    supersedes: input.supersedes,
   }) as SettingsVersion<T>;
 }
