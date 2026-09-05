@@ -129,17 +129,65 @@ describe('искажённый референс не выдаётся за то�
     const match = matchReference(REFERENCE, broken, POLICY);
     expect(match.degree).toBe('damaged');
     expect(match.checksumValid).toBe(false);
-    expect(match.reasons).toContain(INTAKE_REASON_KEYS.referenceChecksumFailed);
+    // Обе причины и в этом порядке: сначала «знак не сошёлся» — это факт о
+    // самой строке, — потом «похоже на искажение» — это уже суждение о том,
+    // чей референс перед нами. Подмена любой из них меняет то, что оператор
+    // будет искать в выписке.
+    expect(match.reasons).toEqual([
+      INTAKE_REASON_KEYS.referenceChecksumFailed,
+      INTAKE_REASON_KEYS.referenceDamaged,
+    ]);
+  });
+
+  it('искажение с сошедшимся знаком не тянет за собой причину о знаке', () => {
+    // Референс соседнего транша той же сделки: собран нами, знак сходится, но
+    // это не ожидаемый референс. Сходство выше порога — «искажён»; причина о
+    // контрольном знаке здесь была бы неправдой, и оператор пошёл бы искать
+    // ошибку переноса там, где её нет.
+    const neighbour = paymentReference({ dealCode: 'D7K2M9Q4', trancheCode: 'T2' });
+    const match = matchReference(REFERENCE, neighbour, POLICY);
+    expect(match.degree).toBe('damaged');
+    expect(match.checksumValid).toBe(true);
+    expect(match.reasons).toEqual([INTAKE_REASON_KEYS.referenceDamaged]);
+  });
+
+  it('точное совпадение: сходство полное, знак сошёлся, причина одна', () => {
+    const match = matchReference(REFERENCE, REFERENCE, POLICY);
+    expect(match.degree).toBe('exact');
+    expect(match.similarityBp).toBe(10_000);
+    // Контрольный знак у точного совпадения сошёлся по определению: строка та
+    // же самая. Ложь здесь превратила бы законное поступление в кандидата на
+    // ручной разбор.
+    expect(match.checksumValid).toBe(true);
+    expect(match.reasons).toEqual([INTAKE_REASON_KEYS.referenceExact]);
   });
 
   it('референс чужой сделки не считается искажением своей', () => {
     const foreign = paymentReference({ dealCode: 'ZZZZZZZZ', trancheCode: '99' });
-    expect(matchReference(REFERENCE, foreign, POLICY).degree).toBe('foreign');
+    const match = matchReference(REFERENCE, foreign, POLICY);
+    expect(match.degree).toBe('foreign');
+    // Знак у чужого референса сошёлся — он собран той же схемой, — поэтому
+    // причина о знаке не добавляется.
+    expect(match.checksumValid).toBe(true);
+    // ⚠️ Чужой референс отчитывается ключом `absent`: отдельного ключа
+    // «референс другой сделки» в реестре нет. Тест фиксирует то, что есть
+    // сегодня, а не то, что стоило бы показывать оператору, — расхождение
+    // вынесено в отчёт по пакету.
+    expect(match.reasons).toEqual([INTAKE_REASON_KEYS.referenceAbsent]);
   });
 
   it('референса нет вовсе', () => {
-    expect(matchReference(REFERENCE, null, POLICY).degree).toBe('absent');
-    expect(matchReference(REFERENCE, '   ', POLICY).degree).toBe('absent');
+    for (const raw of [null, '   ']) {
+      const match = matchReference(REFERENCE, raw, POLICY);
+      expect(match.degree).toBe('absent');
+      // Сходства нет — ноль, а не «немного похоже»: вес признака считается от
+      // этого числа, и любое ненулевое даёт вес референсу, которого не было.
+      expect(match.similarityBp).toBe(0);
+      // Знак не сошёлся не потому, что сломан, а потому, что проверять нечего.
+      // `true` здесь означало бы «референс проверен и верен» на пустом месте.
+      expect(match.checksumValid).toBe(false);
+      expect(match.reasons).toEqual([INTAKE_REASON_KEYS.referenceAbsent]);
+    }
   });
 
   it('сходство ровно на пороге читается как искажение, ниже — как чужой', () => {

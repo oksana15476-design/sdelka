@@ -9,6 +9,9 @@ import {
   type ThawedTrancheStatus,
   type TrancheState,
   type TrancheStatus,
+  type NonTerminalWithdrawalStatus,
+  type TerminalWithdrawalStatus,
+  type WithdrawalState,
   type WithdrawalStatus,
   DomainError,
   RejectionCode,
@@ -18,8 +21,11 @@ import {
   frozenTrancheState,
   instant,
   isTerminalTrancheStatus,
+  isTerminalWithdrawalStatus,
   nonTerminalTrancheState,
+  nonTerminalWithdrawalState,
   terminalTrancheState,
+  terminalWithdrawalState,
 } from '@sdelka/domain';
 import { assertCurrencyCode, money } from '@sdelka/money';
 import { DbError, DbErrorCode } from '../errors.ts';
@@ -640,11 +646,14 @@ interface WithdrawalRow {
   readonly amount_minor: string;
   readonly currency: string;
   readonly source_account_fingerprint: string;
+  readonly deadline_at: Date | null;
+  readonly entered_at: Date | null;
 }
 
 const WITHDRAWAL_SOURCE = `
   SELECT w.withdrawal_id, w.party_id, p.account_key AS party_account_key, w.status,
-         w.idempotency_key, w.amount_minor, w.currency, w.source_account_fingerprint
+         w.idempotency_key, w.amount_minor, w.currency, w.source_account_fingerprint,
+         w.deadline_at, w.entered_at
     FROM sdelka.withdrawal w
     JOIN sdelka.party p ON p.party_id = w.party_id`;
 
@@ -655,17 +664,60 @@ const SELECT_WITHDRAWALS_BY_PARTY = `${WITHDRAWAL_SOURCE}
 const SELECT_WITHDRAWAL_BY_ID = `${WITHDRAWAL_SOURCE}
    WHERE w.withdrawal_id = $1`;
 
+/**
+ * Состояние заявки из строки — **конструкторами домена**, а не литералом.
+ *
+ * У `WithdrawalState` два варианта союза, и часы есть ровно у одного: у
+ * нетерминального. Литерал собрал бы «нетерминальную заявку без дедлайна» из
+ * строки, которую база и не должна была принять, — то есть хранилище стало бы
+ * вторым местом, где инвариант якобы держится.
+ *
+ * Ключ идемпотентности из строки **не подставляется**: домен считает его сам по
+ * номеру заявки (`withdrawalIdempotencyKey`). Расхождение с колонкой ловит
+ * сравнение снимков (`withdrawalSnapshotsSame`), а не молчаливое доверие базе.
+ */
+function withdrawalStateOfRow(row: WithdrawalRow): WithdrawalState {
+  const status = row.status as WithdrawalStatus;
+  if (isTerminalWithdrawalStatus(status)) {
+    return terminalWithdrawalState(status as TerminalWithdrawalStatus, row.withdrawal_id);
+  }
+  if (row.deadline_at === null || row.entered_at === null) {
+    // Строка, из которой законного состояния не выходит. Ограничение
+    // `withdrawal_state_shape` (`0022`) такую строку не принимает; если она всё
+    // же прочиталась — это испорченные данные, а не «заявка без срока».
+    throw new DbError(DbErrorCode.stepConflict, {
+      relation: 'withdrawal',
+      id: row.withdrawal_id,
+      constraint: 'withdrawal_state_shape',
+    });
+  }
+  return nonTerminalWithdrawalState(
+    status as NonTerminalWithdrawalStatus,
+    row.withdrawal_id,
+    deadline(instant(row.deadline_at.getTime())),
+    instant(row.entered_at.getTime()),
+  );
+}
+
 function withdrawalOfRow(row: WithdrawalRow): WithdrawalSnapshot {
   return Object.freeze({
-    state: Object.freeze({
-      status: row.status as WithdrawalStatus,
-      withdrawalId: row.withdrawal_id,
-      idempotencyKey: row.idempotency_key,
-    }),
+    state: withdrawalStateOfRow(row),
     party: Object.freeze({ partyId: row.party_id, accountKey: row.party_account_key }),
     amount: money(assertCurrencyCode(row.currency), toBigInt(row.amount_minor)),
     sourceAccountFingerprint: row.source_account_fingerprint,
   });
+}
+
+/** Колонки часов: у терминальной заявки их нет вовсе — оба `NULL`. */
+function withdrawalClockColumns(state: WithdrawalState): {
+  readonly deadlineAt: string | null;
+  readonly enteredAt: string | null;
+} {
+  if (!('deadline' in state)) return { deadlineAt: null, enteredAt: null };
+  return {
+    deadlineAt: new Date(state.deadline.at).toISOString(),
+    enteredAt: new Date(state.enteredAt).toISOString(),
+  };
 }
 
 export async function loadWithdrawals(
@@ -685,12 +737,14 @@ export async function saveWithdrawal(
 ): Promise<WriteOutcome> {
   return translating(async () => {
     await saveParty(client, snapshot.party);
+    const clock = withdrawalClockColumns(snapshot.state);
     if (previous === null) {
       const inserted = await client.query(
         `INSERT INTO sdelka.withdrawal (
            withdrawal_id, party_id, status, idempotency_key,
-           amount_minor, currency, source_account_fingerprint
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+           amount_minor, currency, source_account_fingerprint,
+           deadline_at, entered_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          ON CONFLICT (withdrawal_id) DO NOTHING`,
         [
           snapshot.state.withdrawalId,
@@ -700,6 +754,8 @@ export async function saveWithdrawal(
           snapshot.amount.minor.toString(),
           snapshot.amount.currency,
           snapshot.sourceAccountFingerprint,
+          clock.deadlineAt,
+          clock.enteredAt,
         ],
       );
       if (inserted.rowCount !== 0) return Object.freeze({ written: 1, repeated: 0 });
@@ -710,15 +766,24 @@ export async function saveWithdrawal(
     // и между чтением и записью помещается чужой шаг. Здесь сравнение и запись
     // — один оператор, а несовпадение разбирается тем же способом, что у
     // транша: цель шага уже лежит — повтор, лежит другое — отказ с именем.
+    //
+    // Часы переставляются **вместе со статусом и только вместе с ним**: срок и
+    // возраст — часть состояния, а не поля рядом с ним. Прежние их значения
+    // стоят в `WHERE` через `IS NOT DISTINCT FROM` (у терминальной заявки они
+    // `NULL`, а `NULL = NULL` в SQL не истина) — иначе шаг, разошедшийся с базой
+    // только часами, затирал бы чужой молча.
+    const before = withdrawalClockColumns(previous.state);
     const updated = await client.query(
-      `UPDATE sdelka.withdrawal SET status = $2
+      `UPDATE sdelka.withdrawal SET status = $2, deadline_at = $9, entered_at = $10
         WHERE withdrawal_id = $1
           AND status = $3
           AND party_id = $4
           AND idempotency_key = $5
           AND amount_minor = $6
           AND currency = $7
-          AND source_account_fingerprint = $8`,
+          AND source_account_fingerprint = $8
+          AND deadline_at IS NOT DISTINCT FROM $11::timestamptz
+          AND entered_at IS NOT DISTINCT FROM $12::timestamptz`,
       [
         snapshot.state.withdrawalId,
         snapshot.state.status,
@@ -728,6 +793,10 @@ export async function saveWithdrawal(
         snapshot.amount.minor.toString(),
         snapshot.amount.currency,
         snapshot.sourceAccountFingerprint,
+        clock.deadlineAt,
+        clock.enteredAt,
+        before.deadlineAt,
+        before.enteredAt,
       ],
     );
     if (updated.rowCount !== 0) return Object.freeze({ written: 1, repeated: 0 });

@@ -14,7 +14,7 @@ import {
   trancheStatusOf,
 } from '@sdelka/app';
 import { refundIdempotencyKey } from '@sdelka/domain';
-import { accountBalance, bankNominal, bankOperating } from '@sdelka/ledger';
+import { accountBalance, balanceByCurrency, bankNominal, bankOperating } from '@sdelka/ledger';
 import { applyTrancheEvent, createDeal } from './support/acting';
 import {
   BUYER,
@@ -302,23 +302,45 @@ describe('хранилище: два мира в одной базе', () => {
     expect(shared).toEqual([]);
 
     /*
-     * В хранилище лежат записи **обоих** миров, а не последнего записавшего.
-     * `readJournal` области видимости не имеет вовсе (`memory-store.ts`, как и
-     * `pgWorldStore`), поэтому поднятый журнал — общий, и сравнение с миром
-     * идёт по его же области имён.
+     * В хранилище лежат записи **обоих** миров, а поднимается ровно свой.
+     *
+     * Прежде `readJournal` охвата не имел вовсе, и поднятый журнал был общим:
+     * покрытие клиентских средств у поднятого мира считалось по чужим деньгам,
+     * а отбор «своих» строк делал каждый вызывающий сам. Теперь охват —
+     * обязательный аргумент чтения (`app/src/store.ts`, `JournalScope`), и
+     * подъём берёт его по своей цепочке.
      */
     const restored = await restoreWorld(store, {
       chainId: OTHER_SCOPE.chainId,
       deals: [{ dealId: OTHER_SCOPE.dealId, trancheIds: [OTHER_SCOPE.trancheId] }],
     });
     expect(restoredViolations(restored)).toEqual([]);
-    expect(restored.journal.entries).toHaveLength(idsOf(first).length + idsOf(second).length);
-    expect(
-      restored.journal.entries.filter((entry) => entry.id.startsWith(`${OTHER_SCOPE.chainId}:`)),
-    ).toEqual(second.world.journal.entries);
-    // Цепочка аудита областью видимости обладает: поднимается ровно своя.
+    // Журнал одного мира не видит проводок другого — ни одной, а не «в
+    // основном своих»: сравнение полное и по значению.
+    expect(restored.journal.entries).toEqual(second.world.journal.entries);
+    expect(restored.journal.entries.filter((entry) => idsOf(first).includes(entry.id))).toEqual([]);
+    // Цепочка аудита областью видимости обладала всегда: поднимается своя.
     expect(restored.chain).toEqual(second.world.chain);
     expect(restored.deals[0]?.deal.state.status).toBe('unwound');
+
+    // Первый мир из хранилища никуда не делся: его журнал поднимается своим
+    // охватом и целиком. Отбор — не потеря записей, а вопрос, кому они.
+    const restoredFirst = await restoreWorld(store, {
+      chainId: SCOPE.chainId,
+      deals: [{ dealId: SCOPE.dealId, trancheIds: [SCOPE.trancheId] }],
+    });
+    expect(restoredFirst.journal.entries).toEqual(first.world.journal.entries);
+    expect(restoredViolations(restoredFirst)).toEqual([]);
+
+    /*
+     * Сумма проводок в прочитанном охвате равна нулю по каждой валюте —
+     * инвариант 1 (`CLAUDE.md`), проверенный не по одной записи, а по охвату
+     * целиком: охват, отдающий половину парной записи, дал бы здесь остаток.
+     */
+    for (const scoped of [restored, restoredFirst]) {
+      const postings = scoped.journal.entries.flatMap((entry) => entry.postings);
+      for (const [, total] of balanceByCurrency(postings)) expect(total).toBe(0n);
+    }
   });
 });
 

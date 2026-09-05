@@ -4,6 +4,7 @@ import {
   type BeneficiaryChangeRequest,
   type BeneficiaryRequisites,
   type BeneficiaryState,
+  type CompliancePolicy,
   APPROVER_ROLE,
   OPERATOR_ROLE,
   actor,
@@ -21,12 +22,20 @@ import {
   ACCOUNT_SOURCE,
   BUYER_NAMES,
   evidence,
+  georgianName,
   latinName,
   NOW,
   OTHER_NAMES,
   POLICY,
   profile,
 } from './support/fixtures';
+
+/**
+ * Грузинская запись той же последовательности, что и `BUYER_NAMES`: паспортная
+ * латинизация обеих даёт `sabotikato`. Профиль по реестру и выписка банка в
+ * латинице — обычная пара источников в сегменте, а не расхождение имён.
+ */
+const BUYER_NAMES_GEORGIAN = Object.freeze([georgianName('საბო', 'ტიკატო')]);
 
 const HOUR_MS = 60 * 60 * 1000;
 const writer = authorize(actor('operator-1', OPERATOR_ROLE), 'write_beneficiary');
@@ -81,6 +90,48 @@ describe('сверка владельца счёта', () => {
     );
     expect(result.outcome).toBe('verified');
     expect(result.evidence.some((item) => item.kind === 'test_transfer')).toBe(true);
+  });
+
+  /**
+   * Сверка принимает три степени совпадения, а не одну. Проверялась до сих пор
+   * только точная — а значит, две другие можно было выбросить из условия, и ни
+   * один тест бы не заметил: у всех местных собственников, чей профиль ведётся
+   * по грузинскому реестру, выплата стала бы невозможна.
+   */
+  it('имя, совпавшее только после латинизации, реквизиты не блокирует', () => {
+    const result = verifyBeneficiaryHolder(
+      requisites({ ownershipEvidence: evidence(6, 'test_transfer') }),
+      profile({ names: BUYER_NAMES_GEORGIAN }),
+      POLICY,
+      NOW,
+    );
+    expect(result.nameMatch.degree).toBe('identical_after_latinization');
+    expect(result.outcome).toBe('verified');
+    expect(result.reasons).toContain('compliance.beneficiary.holder_name_consistent');
+  });
+
+  it('сильное, но не точное совпадение имени реквизиты не блокирует', () => {
+    // Порог берётся из политики; здесь он снижен, чтобы степень решалась
+    // именно порогом, а не совпадением форм. Проверяется сторона условия, а не
+    // конкретное число: числа политики пинуются в `policy.test.ts`.
+    const lenient: CompliancePolicy = {
+      ...POLICY,
+      nameThresholds: {
+        ...POLICY.nameThresholds,
+        ownerReconciliation: {
+          valueBp: 1_000,
+          rationaleDocRef: POLICY.nameThresholds.ownerReconciliation.rationaleDocRef,
+        },
+      },
+    };
+    const result = verifyBeneficiaryHolder(
+      requisites({ holderNames: [latinName('Sabo', 'Tikaton')] }),
+      profile(),
+      lenient,
+      NOW,
+    );
+    expect(result.nameMatch.degree).toBe('strong');
+    expect(result.outcome).toBe('name_consistent');
   });
 
   it('без латинской формы имени реквизиты не принимаются', () => {
@@ -392,6 +443,20 @@ describe('применение изменения', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('применённая заявка не движется', () => {
+    // Оба терминальных статуса закрывают заявку одинаково. Повторная
+    // верификация или ещё одно утверждение поверх уже применённого изменения —
+    // это движение по заявке, у которой не осталось собственного основания.
+    const result = advanceBeneficiaryChange(
+      request({ status: 'applied' }),
+      { type: 'reverification_passed' },
+      NOW,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe('compliance.beneficiary.change_in_release_window');
+  });
+
   it('второе утверждение — второй человек', () => {
     const denied = advanceBeneficiaryChange(
       request({ approvals: [] }),
@@ -405,6 +470,11 @@ describe('применение изменения', () => {
       NOW,
     );
     expect(allowed.ok).toBe(true);
+    if (!allowed.ok) return;
+    // Утверждение переводит заявку в ожидание второго, а не применяет её:
+    // применение — отдельный шаг с собственными четырьмя условиями.
+    expect(allowed.value.status).toBe('awaiting_second_approval');
+    expect([...allowed.value.approvals]).toEqual(['approver-2']);
   });
 });
 

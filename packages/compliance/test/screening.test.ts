@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type SanctionsCandidate,
   type SanctionsDecisionInput,
+  type SanctionsOutcome,
   type SanctionsProviderResponse,
   type WhitelistEntry,
   ANALYST_ROLE,
@@ -174,6 +175,42 @@ describe('решение по кандидатам', () => {
   it('решение хранит ссылку на сырой ответ источника', () => {
     const result = decide({ response: completed([candidate()]) });
     expect(result.evidence.some((item) => item.ref === 'raw-1')).toBe(true);
+    // Вид доказательства называется точно: по нему поднимают сырой ответ
+    // источника, а не тестовый перевод или заметку оператора.
+    expect(result.evidence.find((item) => item.ref === 'raw-1')?.kind).toBe('screening_response');
+  });
+
+  it('нераспознанный исход читается как отказ, а не как «чисто»', () => {
+    // Исход пересекает границу процесса: перечень провайдера способен
+    // разойтись с нашим. Отказ закрытый — общее правило системы, и «неизвестно»
+    // здесь обязано весить как подтверждённое совпадение, а не как чистый ответ.
+    expect(sanctionsToDetectorOutcome('under_court_review' as SanctionsOutcome)).toBe('block');
+  });
+
+  it('несколько кандидатов вне политики называют перечень один раз', () => {
+    // Причина — то, что читает человек. Повтор одной и той же причины в списке
+    // выглядит как несколько разных находок.
+    const foreign = (listEntryId: string): SanctionsCandidate => ({
+      ...candidate({ listEntryId }),
+      listSource: 'other' as unknown as SanctionsCandidate['listSource'],
+    });
+    const result = decide({ response: completed([foreign('e1'), foreign('e2')]) });
+    expect(
+      result.reasons.filter((reason) => reason === 'compliance.sanctions.list_not_covered'),
+    ).toHaveLength(1);
+  });
+
+  it('несколько кандидатов ниже порога называют порог один раз', () => {
+    const result = decide({
+      response: completed([
+        candidate({ listEntryId: 'e1', providerScoreBp: 1_000 }),
+        candidate({ listEntryId: 'e2', providerScoreBp: 1_000 }),
+      ]),
+    });
+    expect(result.outcome).toBe('clear');
+    expect(
+      result.reasons.filter((reason) => reason === 'compliance.sanctions.below_threshold'),
+    ).toHaveLength(1);
   });
 });
 
@@ -234,6 +271,43 @@ describe('белый список', () => {
     });
     expect(result.outcome).toBe('possible_match');
     expect(result.reasons).toContain('compliance.sanctions.whitelist_stale_entry_version');
+  });
+
+  it('несколько погашенных кандидатов называют белый список один раз', () => {
+    const result = decide({
+      response: completed([candidate({ listEntryId: 'e1' }), candidate({ listEntryId: 'e2' })]),
+      whitelist: [entry({ listEntryId: 'e1' }), entry({ listEntryId: 'e2' })],
+    });
+    expect(result.outcome).toBe('clear');
+    expect(
+      result.reasons.filter((reason) => reason === 'compliance.sanctions.whitelist_suppressed'),
+    ).toHaveLength(1);
+  });
+
+  /**
+   * «Разбор устарел» — утверждение о **конкретной** записи: тот же субъект, тот
+   * же перечень, та же запись перечня. Чужая запись в белом списке не
+   * рассказывает про этого кандидата ничего, и приписанная ему причина
+   * отправляет аналитика искать разбор, которого не было.
+   */
+  it('запись белого списка другого субъекта кандидата не помечает', () => {
+    const result = decide({
+      response: completed([candidate()]),
+      whitelist: [entry({ subjectRef: 'party-2' })],
+    });
+    expect(result.outcome).toBe('possible_match');
+    expect(result.reasons).not.toContain('compliance.sanctions.whitelist_expired');
+    expect(result.reasons).not.toContain('compliance.sanctions.whitelist_stale_entry_version');
+  });
+
+  it('запись белого списка по другому перечню кандидата не помечает', () => {
+    const result = decide({
+      response: completed([candidate()]),
+      whitelist: [entry({ listSource: 'uk_ofsi' })],
+    });
+    expect(result.outcome).toBe('possible_match');
+    expect(result.reasons).not.toContain('compliance.sanctions.whitelist_expired');
+    expect(result.reasons).not.toContain('compliance.sanctions.whitelist_stale_entry_version');
   });
 
   it('белый список не покрывает совпадение по сильному идентификатору', () => {

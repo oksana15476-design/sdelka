@@ -21,6 +21,7 @@
     "@sdelka/domain": "workspace:*",
     "@sdelka/ledger": "workspace:*",
     "@sdelka/money": "workspace:*",
-    "@sdelka/oracle": "workspace:*"
+    "@sdelka/oracle": "workspace:*",
+    "@sdelka/settings": "workspace:*"
   }
 }

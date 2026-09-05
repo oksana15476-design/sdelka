@@ -679,12 +679,32 @@ export function reviewKindOf(type: TaskType): ReviewTaskKind | null {
 type PlacedReviewKind = NonNullable<(typeof REVIEW_KIND_OF)[TaskType]>;
 
 /**
+ * Виды разбора, которым места в интерфейсе ещё нет, — **названы поимённо**.
+ *
+ * ⚠ Это не поблажка утверждению ниже, а его же способ работы: пока вид стоит в
+ * этом списке, он виден на ревью строкой, а не отсутствием строки. Пустой
+ * список — норма; непустой — незакрытая работа с адресом.
+ *
+ * `withdrawal_stalled` (заявка на вывод простояла дольше норматива,
+ * `DECISIONS-REVIEW.md` §H4) заведён в очереди разбора и приходит в неё из часов
+ * заявок (`tickWithdrawals`, `@sdelka/app`). Места на экране у него нет:
+ * карточка задачи требует своего вида в `ops-work.ts` (перечень доказательств,
+ * раскладка, «почему» и «что дальше») и микрокопи на трёх языках — то есть
+ * работы дизайна и редактуры, а не типа. Пока их нет, вид разбора существует в
+ * продукте и **отсутствует в консоли**, и эта строка — единственное место, где
+ * об этом сказано вслух.
+ */
+type UnplacedReviewKind = 'withdrawal_stalled';
+
+/**
  * Не значение, а утверждение компилятору: **каждый** вид разбора из кода имеет
  * место в очереди. Приём тот же, что у `EXCEPTIONS_ARE_EXACTLY_AS_DOCUMENTED`
  * в `packages/compliance/src/detectors/payer.ts`: перечень закрыт не обещанием,
  * а сборкой.
  */
-export const EVERY_REVIEW_KIND_HAS_A_PLACE: [ReviewTaskKind] extends [PlacedReviewKind]
+export const EVERY_REVIEW_KIND_HAS_A_PLACE: [
+  Exclude<ReviewTaskKind, UnplacedReviewKind>,
+] extends [PlacedReviewKind]
   ? true
   : never = true;
 

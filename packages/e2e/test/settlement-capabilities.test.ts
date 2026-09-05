@@ -24,7 +24,13 @@ import {
   requestUnwind,
   requestWithdrawal,
 } from './support/acting';
-import { DEAL_AMOUNT, GEL, POLICY_VERSION, STATEMENT_SOURCE } from './support/fixtures';
+import {
+  DEAL_AMOUNT,
+  GEL,
+  POLICY_VERSION,
+  STATEMENT_SOURCE,
+  WITHDRAWAL_CLOCK,
+} from './support/fixtures';
 import { toCollected, toReserved } from './support/paths';
 
 const OPTIONS = trancheOptions(POLICY_VERSION);
@@ -156,7 +162,7 @@ describe('казначейство — operate_treasury', () => {
 describe('заявка на вывод — conduct_withdrawal', () => {
   it('заводит оператор; ФК, который её подписывает, завести её не может', async () => {
     const collected = await toCollected({ dealId: 'deal-cap-9', trancheId: 'tranche-cap-9' });
-    const scene = withWithdrawals(receiveExternalPayment(collected.world, collected.buyerKey, SPARE));
+    const scene = withWithdrawals(receiveExternalPayment(collected.world, collected.buyerKey, SPARE), WITHDRAWAL_CLOCK);
     const spec = { withdrawalId: 'wd-cap-9', owner: collected.buyerKey, amount: money(GEL, 1_000_000n) };
 
     expect(() => requestWithdrawal(scene, spec, STAFF.controller)).toThrow('app.authority.denied');

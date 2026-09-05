@@ -213,6 +213,24 @@ describe('предикаты, выведенные из перечней', () =>
     ]);
   });
 
+  it('часы заявки есть ровно у нетерминальных статусов', () => {
+    // `withdrawal_state_shape` (`0022`) — зеркало союза `WithdrawalState`:
+    // терминальная заявка часов не носит, нетерминальная без них не существует
+    // (`DECISIONS-REVIEW.md` §H4). Перечень в SQL написан строками — здесь он не
+    // даёт разойтись с перечнем домена.
+    expect(constraintValues(CODE_SQL, 'withdrawal_state_shape')).toEqual([
+      ...TERMINAL_WITHDRAWAL_STATUSES,
+    ]);
+    // Индекс возраста покрывает ровно те статусы, у которых возраст есть: по
+    // нему идёт эскалация застрявшей заявки, и статус, выпавший из индекса,
+    // выпал бы и из очереди разбора.
+    expect(partialIndexStatuses(CODE_SQL, 'withdrawal_stalled')).toEqual([
+      ...WITHDRAWAL_STATUSES.filter(
+        (status) => !(TERMINAL_WITHDRAWAL_STATUSES as readonly string[]).includes(status),
+      ),
+    ]);
+  });
+
   it('источник заморозки — ровно FREEZABLE_TRANCHE_STATUSES', () => {
     expect(constraintStatuses(CODE_SQL, 'tranche_freezable_origin')).toEqual([
       ...FREEZABLE_TRANCHE_STATUSES,

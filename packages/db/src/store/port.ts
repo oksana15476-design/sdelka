@@ -200,6 +200,25 @@ export interface WithdrawalSnapshot {
  * относится к шагу, происходит внутри `transact`, и либо ложится целиком, либо
  * не ложится вовсе.
  */
+/**
+ * Охват чтения журнала — **зеркало `packages/app/src/store.ts`**, как и снимки
+ * выше, и сверяется оно присваиванием в обе стороны
+ * (`packages/e2e/test/store-port.test.ts`).
+ *
+ * Журнал учёта в базе один и общий, а миров в нём много. Чтение без охвата
+ * отдавало записи всех сразу: подъём мира считал покрытие по чужим деньгам, а
+ * отбор «своих» строк делал каждый вызывающий сам и по-своему. Здесь охват —
+ * аргумент, то есть вопрос, на который обязан ответить тот, кто читает.
+ *
+ * Отбор идёт по **началу идентификатора**. Форма идентификатора хранилищу не
+ * известна и известна быть не должна: её знает тот модуль слоя приложения,
+ * который её чеканит (`app/src/ids.ts`), и он же собирает эту величину. Отбор
+ * поэтому грубый — надмножество, — а точное правило применяет вызывающий.
+ */
+export type JournalScope =
+  | { readonly kind: 'chain'; readonly entryIdPrefix: string }
+  | { readonly kind: 'everything'; readonly reasonKey: string };
+
 export interface WorldStore {
   transact<T>(body: (tx: WorldTransaction) => Promise<T>): Promise<T>;
 }
@@ -215,14 +234,18 @@ export interface WorldTransaction {
   appendJournal(entries: readonly JournalEntry[]): Promise<WriteOutcome>;
 
   /**
-   * Прочитать журнал обратно.
+   * Прочитать журнал обратно **в названном охвате**.
    *
    * Договор чтения: `checkLedgerInvariants` на прочитанном журнале обязан дать
    * то же, что на исходном. Это и есть смысл круга «мир → база → мир»: если
    * инварианты на прочитанном расходятся с инвариантами на записанном, значит
    * хранилище — не хранилище, а фильтр.
+   *
+   * Охват обязателен по той же причине, по которой обязателен `previous` у
+   * записи состояния: таблица одна, а миров в ней много, и «весь журнал»
+   * обязано быть написанным решением, а не пропущенным аргументом.
    */
-  readJournal(): Promise<Journal>;
+  readJournal(scope: JournalScope): Promise<Journal>;
 
   /**
    * Дописать записи журнала аудита. Цепочка сохраняется: нумерацию и сцепку по
@@ -356,6 +379,28 @@ export function payoutSnapshotsSame(left: PayoutSnapshot, right: PayoutSnapshot)
 }
 
 /**
+ * Равенство состояний заявки — **по форме союза**, а не по перечню полей.
+ *
+ * У терминального варианта часов нет вовсе, у нетерминального они обязательны;
+ * «сравнить всё, что есть» на разных вариантах сравнило бы разное. То же
+ * правило и та же причина, что у `trancheStatesSame`.
+ *
+ * Часы входят в сравнение целиком: шаг, отличающийся от лежащего в базе только
+ * сроком или возрастом, — **не повтор**. Считать его повтором значило бы
+ * потерять переставленные часы молча, а на возрасте держится эскалация
+ * застрявшей заявки (`DECISIONS-REVIEW.md` §H4).
+ */
+export function withdrawalStatesSame(left: WithdrawalState, right: WithdrawalState): boolean {
+  if (left.status !== right.status) return false;
+  if (left.withdrawalId !== right.withdrawalId) return false;
+  if (left.idempotencyKey !== right.idempotencyKey) return false;
+  if (!('deadline' in left) || !('deadline' in right)) {
+    return !('deadline' in left) && !('deadline' in right);
+  }
+  return left.deadline.at === right.deadline.at && left.enteredAt === right.enteredAt;
+}
+
+/**
  * Равенство выводов — по всем полям снимка, а не по статусу.
  *
  * Сравнение «тот же номер и тот же статус» объявило бы повтором шаг, в котором
@@ -367,9 +412,7 @@ export function withdrawalSnapshotsSame(
   right: WithdrawalSnapshot,
 ): boolean {
   return (
-    left.state.withdrawalId === right.state.withdrawalId &&
-    left.state.status === right.state.status &&
-    left.state.idempotencyKey === right.state.idempotencyKey &&
+    withdrawalStatesSame(left.state, right.state) &&
     left.party.partyId === right.party.partyId &&
     left.party.accountKey === right.party.accountKey &&
     moneySame(left.amount, right.amount) &&

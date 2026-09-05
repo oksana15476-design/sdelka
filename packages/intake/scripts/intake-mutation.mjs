@@ -38,7 +38,13 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { PACKAGE_ROOT, REPO_ROOT, buildCatalogue } from './intake-mutants.mjs';
+import {
+  EQUIVALENT_MUTANTS,
+  PACKAGE_ROOT,
+  REPO_ROOT,
+  buildCatalogue,
+  equivalenceKey,
+} from './intake-mutants.mjs';
 /**
  * Потолок на одну мутацию по умолчанию (`--timeout=<секунды>` его меняет).
  *
@@ -180,7 +186,19 @@ function startWorker(onLine, onExit) {
 
 async function main() {
   const options = parseArguments(process.argv.slice(2));
-  let catalogue = buildCatalogue();
+  const fullCatalogue = buildCatalogue();
+  // Объявления равносильности сверяются с ПОЛНЫМ каталогом, а не с
+  // отфильтрованным прогоном: объявление, потерявшее свою мутацию, — это
+  // разбор, оставшийся от прежнего кода, и знать о нём надо независимо от
+  // того, какой срез запускали сейчас.
+  const declaredKeys = new Set(fullCatalogue.map((item) => equivalenceKey(item)));
+  const staleDeclarations = EQUIVALENT_MUTANTS.filter(
+    (declaration) => !declaredKeys.has(equivalenceKey(declaration)),
+  );
+  const equivalent = new Map(
+    EQUIVALENT_MUTANTS.map((declaration) => [equivalenceKey(declaration), declaration]),
+  );
+  let catalogue = fullCatalogue;
   if (options.operator !== null) {
     catalogue = catalogue.filter((item) => item.operator === options.operator);
   }
@@ -210,11 +228,16 @@ async function main() {
 
   const before = treeFingerprint();
   console.log(`пакет до прогона: ${before.digest.slice(0, 16)} (${before.files} файлов)`);
-  console.log(`мутаций: ${catalogue.length}`);
+  console.log(
+    `мутаций: ${catalogue.length}, из них объявлено равносильными: ` +
+      `${catalogue.filter((item) => equivalent.has(equivalenceKey(item))).length}`,
+  );
 
   const byId = new Map(catalogue.map((item) => [item.id, item]));
   const queue = [...catalogue];
   const survived = [];
+  const equivalentSurvivors = [];
+  const refuted = [];
   const broken = [];
   let killed = 0;
   let done = 0;
@@ -222,10 +245,27 @@ async function main() {
 
   function record(mutant, verdict, note) {
     done += 1;
-    if (verdict === 'survived') survived.push(mutant);
-    else if (verdict === 'broken') broken.push({ mutant, note });
-    else killed += 1;
-    const mark = verdict === 'killed' ? '·' : verdict === 'survived' ? 'ВЫЖИЛ' : 'СЛОМАН';
+    const declaration = equivalent.get(equivalenceKey(mutant));
+    if (verdict === 'survived') {
+      if (declaration === undefined) survived.push(mutant);
+      else equivalentSurvivors.push(mutant);
+    } else if (verdict === 'broken') broken.push({ mutant, note });
+    else {
+      killed += 1;
+      // Объявленную равносильной мутацию убил набор — значит, поведение всё-таки
+      // меняется, и разбор неверен. Это находка, а не шум.
+      if (declaration !== undefined) refuted.push({ mutant, declaration });
+    }
+    const mark =
+      verdict === 'killed'
+        ? declaration === undefined
+          ? '·'
+          : 'ОПРОВЕРГНУТО'
+        : verdict === 'survived'
+          ? declaration === undefined
+            ? 'ВЫЖИЛ'
+            : '≡'
+          : 'СЛОМАН';
     console.log(
       `[${done}/${catalogue.length}] ${mark} ${mutant.id} — ${mutant.file}:${mutant.line} ${mutant.description}${note === '' ? '' : ` (${note})`}`,
     );
@@ -324,7 +364,10 @@ async function main() {
   }
 
   console.log('');
-  console.log(`убито: ${killed}, выжило: ${survived.length}, сломано: ${broken.length}`);
+  console.log(
+    `убито: ${killed}, выжило: ${survived.length}, ` +
+      `равносильно (объявлено): ${equivalentSurvivors.length}, сломано: ${broken.length}`,
+  );
   for (const item of broken) {
     console.log(`СЛОМАН ${item.mutant.id} — ${item.note}`);
   }
@@ -333,7 +376,25 @@ async function main() {
       `ВЫЖИЛ ${mutant.id} — ${mutant.file}:${mutant.line} [${mutant.operator}] ${mutant.description}`,
     );
   }
-  return survived.length === 0 && broken.length === 0 ? 0 : 1;
+  for (const item of refuted) {
+    console.error(
+      `ОПРОВЕРГНУТО ${item.mutant.id} — ${item.mutant.file}:${item.mutant.line} ` +
+        `${item.mutant.description}: объявлено равносильным, но набор его убил. ` +
+        `Разбор неверен: ${item.declaration.reason}`,
+    );
+  }
+  for (const declaration of staleDeclarations) {
+    console.error(
+      `УСТАРЕЛО объявление равносильности ${declaration.file} [${declaration.operator}] ` +
+        `${declaration.description}: такой мутации в каталоге больше нет.`,
+    );
+  }
+  return survived.length === 0 &&
+    broken.length === 0 &&
+    refuted.length === 0 &&
+    staleDeclarations.length === 0
+    ? 0
+    : 1;
 }
 
 main().then(

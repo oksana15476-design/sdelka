@@ -90,6 +90,21 @@ describe('совпадение устройства и реквизитов у �
     expect(result.reasons).toContain('compliance.linkage.shared_account');
   });
 
+  it('общий счёт вместе с общим устройством остаётся удержанием', () => {
+    // Сигналы разбираются подряд, и найденный следом за счётом более слабый
+    // сигнал не должен понижать исход: общий кошелёк остаётся общим кошельком,
+    // сколько бы совпадений обстановки к нему ни добавилось.
+    const result = assess({
+      parties: [
+        party('a', { accounts: [ACCOUNT_SOURCE], devices: [DEVICE_SHARED] }),
+        party('b', { accounts: [ACCOUNT_SOURCE], devices: [DEVICE_SHARED] }),
+      ],
+    });
+    expect(result.outcome).toBe('hold');
+    expect(result.reasons).toContain('compliance.linkage.shared_account');
+    expect(result.reasons).toContain('compliance.linkage.shared_device');
+  });
+
   it('заявленное и подтверждённое родство исключается из срабатывания', () => {
     const result = assess({
       parties: [

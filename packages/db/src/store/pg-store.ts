@@ -8,6 +8,7 @@ import { translating } from './errors.ts';
 import { appendJournal, readJournal } from './journal.ts';
 import type {
   DealSnapshot,
+  JournalScope,
   PayoutSnapshot,
   TrancheSnapshot,
   WithdrawalSnapshot,
@@ -58,8 +59,8 @@ class PgTransaction implements WorldTransaction {
     return appendJournal(this.#client, entries);
   }
 
-  readJournal(): Promise<Journal> {
-    return readJournal(this.#client);
+  readJournal(scope: JournalScope): Promise<Journal> {
+    return readJournal(this.#client, scope);
   }
 
   appendAudit(records: readonly AuditRecord[]): Promise<WriteOutcome> {

@@ -75,6 +75,9 @@ importers:
       '@sdelka/oracle':
         specifier: workspace:*
         version: link:../oracle
+      '@sdelka/settings':
+        specifier: workspace:*
+        version: link:../settings
 
   packages/audit: {}
 
@@ -166,6 +169,9 @@ importers:
       '@sdelka/oracle':
         specifier: workspace:*
         version: link:../oracle
+      '@sdelka/settings':
+        specifier: workspace:*
+        version: link:../settings
 
   packages/intake:
     dependencies:
@@ -185,6 +191,27 @@ importers:
         specifier: workspace:*
         version: link:../money
 
+  packages/limits:
+    dependencies:
+      '@sdelka/audit':
+        specifier: workspace:*
+        version: link:../audit
+      '@sdelka/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@sdelka/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@sdelka/ledger':
+        specifier: workspace:*
+        version: link:../ledger
+      '@sdelka/money':
+        specifier: workspace:*
+        version: link:../money
+      '@sdelka/settings':
+        specifier: workspace:*
+        version: link:../settings
+
   packages/money: {}
 
   packages/oracle:
@@ -198,6 +225,24 @@ importers:
       '@sdelka/money':
         specifier: workspace:*
         version: link:../money
+
+  packages/pricing:
+    dependencies:
+      '@sdelka/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@sdelka/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@sdelka/ledger':
+        specifier: workspace:*
+        version: link:../ledger
+      '@sdelka/money':
+        specifier: workspace:*
+        version: link:../money
+      '@sdelka/settings':
+        specifier: workspace:*
+        version: link:../settings
 
   packages/settings:
     dependencies:

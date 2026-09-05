@@ -2,22 +2,45 @@ import { money } from '@sdelka/money';
 import { describe, expect, it } from 'vitest';
 import {
   type ClientAccountFacts,
+  type Instant,
+  type WithdrawalContext,
   type WithdrawalEvent,
   type WithdrawalState,
+  NON_TERMINAL_WITHDRAWAL_STATUSES,
+  PROVISIONAL_WITHDRAWAL_CLOCK,
   RejectionCode,
+  WITHDRAWAL_CLOCK_EVENTS,
   WITHDRAWAL_GUARD_IDS,
   WITHDRAWAL_REQUIRED_APPROVALS,
   WITHDRAWAL_TRANSITIONS,
   createWithdrawal,
   evaluateWithdrawalGuard,
+  instant,
   isTerminalWithdrawalStatus,
   lockedTotal,
   planAllocationToDeal,
   reduceWithdrawal,
   statusesWithoutTerminalPath,
   withdrawalIdempotencyKey,
+  isWithdrawalStalled,
+  withdrawalStateAge,
 } from '../src/index';
 import { NOW } from './support/facts';
+
+/**
+ * Часы заявки в тестах — **временное умолчание владельца целиком**, а не свои
+ * числа: тест, придумавший себе норматив, проверяет придуманное.
+ */
+const CLOCK = PROVISIONAL_WITHDRAWAL_CLOCK;
+const CONTEXT: WithdrawalContext = { now: NOW, deadlinePolicy: CLOCK.deadline };
+
+function newWithdrawal(withdrawalId: string): WithdrawalState {
+  return createWithdrawal(withdrawalId, NOW, CLOCK.deadline);
+}
+
+function later(ms: number): Instant {
+  return instant(NOW + ms);
+}
 
 function facts(overrides: Partial<ClientAccountFacts> = {}): ClientAccountFacts {
   return {
@@ -40,7 +63,7 @@ function apply(
   event: WithdrawalEvent,
   overrides: Partial<ClientAccountFacts> = {},
 ): WithdrawalState {
-  const result = reduceWithdrawal(state, event, facts(overrides));
+  const result = reduceWithdrawal(state, event, facts(overrides), CONTEXT);
   if (!result.ok) {
     throw new Error(`unexpected rejection: ${result.error.code} ${result.error.failedGuards.join(',')}`);
   }
@@ -132,7 +155,7 @@ describe('вывод: стоп-кран не превращается в уде�
 
 describe('вывод: машина состояний', () => {
   it('runs requested → approved → paying_out → paid_out', () => {
-    let state = createWithdrawal('w-1');
+    let state = newWithdrawal('w-1');
     expect(state.status).toBe('requested');
     state = apply(state, { type: 'withdrawal_approved' });
     expect(state.status).toBe('approved');
@@ -146,7 +169,7 @@ describe('вывод: машина состояний', () => {
   it('sends an unknown source account to the operator instead of paying somewhere', () => {
     // И12.2: «счёт-источник неизвестен → вывод не создаётся, задача уходит
     // оператору с причиной». Не тихий отказ клиенту и не выплата «куда-нибудь».
-    const state = apply(createWithdrawal('w-2'), { type: 'withdrawal_approved' }, {
+    const state = apply(newWithdrawal('w-2'), { type: 'withdrawal_approved' }, {
       sourceAccount: null,
     });
     expect(state.status).toBe('blocked');
@@ -154,9 +177,10 @@ describe('вывод: машина состояний', () => {
 
   it('refuses a withdrawal larger than the free balance', () => {
     const result = reduceWithdrawal(
-      createWithdrawal('w-3'),
+      newWithdrawal('w-3'),
       { type: 'withdrawal_approved' },
       facts({ free: money('GEL', 1n) }),
+      CONTEXT,
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -167,11 +191,11 @@ describe('вывод: машина состояний', () => {
   it('keeps an unknown provider answer in place instead of retrying', () => {
     // §2.2: повтор из «неизвестно» запрещён без прохождения через сверку, и это
     // реализовано отсутствием перехода, а не проверкой в обработчике.
-    let state = apply(createWithdrawal('w-4'), { type: 'withdrawal_approved' });
+    let state = apply(newWithdrawal('w-4'), { type: 'withdrawal_approved' });
     state = apply(state, { type: 'withdrawal_dispatched' });
     state = apply(state, { type: 'payout_result', outcome: 'unknown' });
     expect(state.status).toBe('paying_out');
-    const retry = reduceWithdrawal(state, { type: 'withdrawal_dispatched' }, facts());
+    const retry = reduceWithdrawal(state, { type: 'withdrawal_dispatched' }, facts(), CONTEXT);
     expect(retry.ok).toBe(false);
     if (!retry.ok) {
       expect(retry.error.code).toBe(RejectionCode.transitionNotAllowed);
@@ -179,7 +203,7 @@ describe('вывод: машина состояний', () => {
   });
 
   it('resolves paying_out through reconciliation', () => {
-    let state = apply(createWithdrawal('w-5'), { type: 'withdrawal_approved' });
+    let state = apply(newWithdrawal('w-5'), { type: 'withdrawal_approved' });
     state = apply(state, { type: 'withdrawal_dispatched' });
     state = apply(state, { type: 'reconciliation_resolved', outcome: 'rejected' });
     expect(state.status).toBe('blocked');
@@ -192,9 +216,9 @@ describe('вывод: машина состояний', () => {
     // который утверждает о машине прямо: «перехода из утверждённой в
     // отменённую в системе нет» (`withdraw.cancel.blocked`). Сведено к строгой
     // стороне — к той, что уже обещана клиенту.
-    const approved = apply(createWithdrawal('w-9'), { type: 'withdrawal_approved' });
+    const approved = apply(newWithdrawal('w-9'), { type: 'withdrawal_approved' });
     expect(approved.status).toBe('approved');
-    const direct = reduceWithdrawal(approved, { type: 'withdrawal_cancelled' }, facts());
+    const direct = reduceWithdrawal(approved, { type: 'withdrawal_cancelled' }, facts(), CONTEXT);
     expect(direct.ok).toBe(false);
     if (!direct.ok) {
       expect(direct.error.code).toBe(RejectionCode.transitionNotAllowed);
@@ -207,8 +231,8 @@ describe('вывод: машина состояний', () => {
   });
 
   it('refuses any event on a terminal state', () => {
-    const cancelled = apply(createWithdrawal('w-6'), { type: 'withdrawal_cancelled' });
-    const result = reduceWithdrawal(cancelled, { type: 'withdrawal_approved' }, facts());
+    const cancelled = apply(newWithdrawal('w-6'), { type: 'withdrawal_cancelled' });
+    const result = reduceWithdrawal(cancelled, { type: 'withdrawal_approved' }, facts(), CONTEXT);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe(RejectionCode.terminalState);
@@ -229,9 +253,91 @@ describe('вывод: машина состояний', () => {
     // Ключа по траншу здесь быть не может: у вывода транша нет вовсе. Ни
     // попытки, ни времени в ключе — иначе повтор при потерянном ответе банка
     // создаст второй вывод (инвариант 13).
-    expect(createWithdrawal('w-7').idempotencyKey).toBe(withdrawalIdempotencyKey('w-7'));
-    expect(createWithdrawal('w-7').idempotencyKey).toBe(createWithdrawal('w-7').idempotencyKey);
-    expect(createWithdrawal('w-7').idempotencyKey).not.toBe(createWithdrawal('w-8').idempotencyKey);
+    expect(newWithdrawal('w-7').idempotencyKey).toBe(withdrawalIdempotencyKey('w-7'));
+    expect(newWithdrawal('w-7').idempotencyKey).toBe(newWithdrawal('w-7').idempotencyKey);
+    expect(newWithdrawal('w-7').idempotencyKey).not.toBe(newWithdrawal('w-8').idempotencyKey);
+  });
+});
+
+describe('часы заявки: дедлайн и норматив простоя (§H4)', () => {
+  it('нетерминальная заявка без дедлайна невыразима', () => {
+    // Проверяется не значение, а **структура**: у нетерминального варианта союза
+    // поля обязательны, у терминального их нет вовсе. Это тот же приём, которым
+    // выражен инвариант 7 у транша, и то же, что зеркалит проверка базы
+    // (`withdrawal_state_shape`, `0022_withdrawal_deadline.sql`).
+    let state = newWithdrawal('w-clock-1');
+    expect('deadline' in state).toBe(true);
+    expect('enteredAt' in state).toBe(true);
+    state = apply(state, { type: 'withdrawal_approved' });
+    expect('deadline' in state).toBe(true);
+    state = apply(state, { type: 'withdrawal_blocked', reason: 'operator' });
+    expect('deadline' in state).toBe(true);
+    const cancelled = apply(state, { type: 'withdrawal_cancelled' });
+    expect('deadline' in cancelled).toBe(false);
+    expect(withdrawalStateAge(cancelled, later(10 * 24 * 60 * 60 * 1000))).toBeNull();
+  });
+
+  it('дедлайн есть у каждого нетерминального состояния', () => {
+    // Таблица сроков — `Record` по нетерминальным статусам: состояние без своей
+    // строки не соберётся, и «забыли завести срок новому статусу» ловится типом.
+    for (const status of NON_TERMINAL_WITHDRAWAL_STATUSES) {
+      expect(CLOCK.deadline[status]).toBeGreaterThan(0);
+      expect(CLOCK.escalation[status]).toBeGreaterThan(0);
+    }
+  });
+
+  it('простой дольше норматива поднимает заявку человеку', () => {
+    const state = newWithdrawal('w-clock-2');
+    const norm = CLOCK.escalation.requested;
+    expect(isWithdrawalStalled(state, later(norm - 1), CLOCK.escalation)).toBe(false);
+    // Норматив «через сутки» означает, что на исходе суток заявка уже просрочена,
+    // а не ещё нет, — то же правило, что у возраста задачи в очереди разбора.
+    expect(isWithdrawalStalled(state, later(norm), CLOCK.escalation)).toBe(true);
+    expect(withdrawalStateAge(state, later(norm))).toBe(norm);
+  });
+
+  it('терминальную заявку не эскалируют ни при каком возрасте', () => {
+    const cancelled = apply(newWithdrawal('w-clock-3'), { type: 'withdrawal_cancelled' });
+    expect(isWithdrawalStalled(cancelled, later(365 * 24 * 60 * 60 * 1000), CLOCK.escalation)).toBe(
+      false,
+    );
+  });
+
+  it('«неизвестно» двигает дедлайн, но не возраст', () => {
+    // Иначе каждый неответ банка обнулял бы возраст, и застрявшая в «неизвестно»
+    // заявка выглядела бы вечно свежей — то же, о чём §5 и `queue.ts`.
+    let state = apply(newWithdrawal('w-clock-4'), { type: 'withdrawal_approved' });
+    state = apply(state, { type: 'withdrawal_dispatched' });
+    const entered = 'enteredAt' in state ? state.enteredAt : null;
+    const firstDeadline = 'deadline' in state ? state.deadline.at : null;
+    const hour = 60 * 60 * 1000;
+    const laterContext: WithdrawalContext = { now: later(hour), deadlinePolicy: CLOCK.deadline };
+    const unknown = reduceWithdrawal(
+      state,
+      { type: 'payout_result', outcome: 'unknown' },
+      facts(),
+      laterContext,
+    );
+    expect(unknown.ok).toBe(true);
+    if (!unknown.ok) return;
+    const moved = unknown.value.state;
+    expect(moved.status).toBe('paying_out');
+    expect('enteredAt' in moved ? moved.enteredAt : null).toBe(entered);
+    expect('deadline' in moved ? moved.deadline.at : null).not.toBe(firstDeadline);
+    expect(withdrawalStateAge(moved, later(hour))).toBe(hour);
+  });
+
+  it('часы заявки не порождают ни одного события ни из одного состояния', () => {
+    // Красная линия №8: повтор из «неизвестно» запрещён без сверки. Событие по
+    // сроку у `paying_out` и было бы тем самым автоматическим повтором. Здесь
+    // это проверяется перечнем целиком, а не одной строкой: `Record<…, null>`
+    // не даёт завести событие правкой значения.
+    for (const status of NON_TERMINAL_WITHDRAWAL_STATUSES) {
+      expect(WITHDRAWAL_CLOCK_EVENTS[status]).toBeNull();
+    }
+    expect(Object.keys(WITHDRAWAL_CLOCK_EVENTS).sort()).toEqual(
+      [...NON_TERMINAL_WITHDRAWAL_STATUSES].sort(),
+    );
   });
 });
 

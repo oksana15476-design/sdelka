@@ -70,10 +70,19 @@ export function raisedCodes(sql: string): readonly string[] {
   return [...sql.matchAll(/RAISE EXCEPTION '([^']*)'/gu)].map((item) => item[1] ?? '');
 }
 
-/** Строки предиката частичного индекса: `WHERE status IN ('a', 'b')`. */
+/**
+ * Строки предиката частичного индекса: `WHERE status IN ('a', 'b')`.
+ *
+ * Уникальность индекса в разборе необязательна. Частичный индекс несёт перечень
+ * статусов и тогда, когда он не уникален: `withdrawal_stalled` (`0022`) — список
+ * «у кого есть возраст», и его перечень обязан сверяться с доменом ровно так же,
+ * как перечень уникального `withdrawal_one_active_per_party`. Требовать здесь
+ * `UNIQUE` значило бы возвращать пустой список на верном индексе — то есть
+ * сверять, ничего не сверив.
+ */
 export function partialIndexStatuses(sql: string, indexName: string): readonly string[] {
   const pattern = new RegExp(
-    `CREATE UNIQUE INDEX ${indexName}[\\s\\S]*?WHERE status IN \\(([^)]*)\\)`,
+    `CREATE (?:UNIQUE )?INDEX ${indexName}[\\s\\S]*?WHERE status IN \\(([^)]*)\\)`,
     'u',
   );
   const match = pattern.exec(sql);

@@ -59,7 +59,26 @@ describe('граница нашей ответственности показа�
   it('нечего показать — так и говорится, а не выдумывается участок', () => {
     const view = trackingView({ legs: [] }, NOW);
     expect(view.currentLeg).toBeNull();
-    expect(view.reasons).toContain(INTAKE_REASON_KEYS.trackingLegNotObservable);
+    expect(view.reasons).toEqual([INTAKE_REASON_KEYS.trackingLegNotObservable]);
+    // «Участка нет» — это не «участок подтверждён нами» и не «участок
+    // просрочен». Оба поля здесь обязаны быть ложными: первое приписало бы нам
+    // наблюдение, которого не было, второе показало бы стороне красную отметку
+    // на состоянии, которого нам не видно вовсе.
+    expect(view.currentIsOurs).toBe(false);
+    expect(view.overdue).toBe(false);
+  });
+
+  it('единственный ненаблюдаемый участок — то же «нечего показать»', () => {
+    const view = trackingView(
+      { legs: [{ leg: 'in_flight', evidence: { kind: 'not_observable' }, expectedBy: at(-1) }] },
+      NOW,
+    );
+    expect(view.currentLeg).toBeNull();
+    expect(view.currentIsOurs).toBe(false);
+    // Срок у ненаблюдаемого участка прошёл, но текущего участка нет: просрочку
+    // не по чему считать, и обещать её стороне не на чем.
+    expect(view.overdue).toBe(false);
+    expect(view.reasons).toEqual([INTAKE_REASON_KEYS.trackingLegNotObservable]);
   });
 });
 

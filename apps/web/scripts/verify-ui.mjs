@@ -32,6 +32,16 @@
  * достижимость с клавиатуры, **видимость фокус-кольца**, бюджеты длины на
  * грузинском и **бюджет длины самой суммы — на всех трёх языках**.
  *
+ * Отдельным слоем — сплошная проверка доступности по WCAG 2.1 AA
+ * (`wcag.mjs`): контраст текста 4.5:1 и границ органов управления 3:1,
+ * считанные из вычисленных стилей с учётом прозрачности и подложки; доступное
+ * имя у каждого поля, органа и рисунка; порядок заголовков без разрывов;
+ * видимое и отличимое от фона кольцо фокуса; язык страницы против локали
+ * маршрута; запрет на смысл, переданный одним цветом; цель нажатия 24×24.
+ * Правила прогоняются по двум синтетическим страницам **до** обхода
+ * (`wcag-selftest.mjs`): молчащее правило обязано молчать потому, что нарушений
+ * нет, а не потому, что оно сломалось.
+ *
  * ## Чего охват не видел до этого захода
  *
  * Число «150 экранов» описывало снимки, а не покрытие, и молчало о том, чего не
@@ -71,6 +81,8 @@ import {
   scanDictionaries,
   validateAllowances,
 } from './forbidden-lexicon.mjs';
+import { WCAG, wcagAudit } from './wcag.mjs';
+import { selfTestWcag } from './wcag-selftest.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(HERE, '..');
@@ -426,13 +438,15 @@ function checkForbiddenLexicon(dicts) {
 /* ------------------------------- 3b. что ещё не прошло приёмку человеком */
 
 /**
- * Два перечня, которые обязаны быть видны числом на каждом прогоне:
+ * Три перечня, которые обязаны быть видны числом на каждом прогоне:
  *
  * · **⚖-слоты** (`ui/primitives.tsx`) — строки с юридическим весом, которые не
  *   публикуются вовсе, пока их не напишет юрист;
  * · **черновики микрокопи** (`ui/copy.ts`) — строки, которые публикуются, но
  *   ещё не прошли связку копирайтер → главред. У органа управления другого
- *   выхода нет: кнопка без надписи — это не «пока молчим», а сломанный экран.
+ *   выхода нет: кнопка без надписи — это не «пока молчим», а сломанный экран;
+ * · **переводы без носителя языка** (`ui/copy.ts`) — русский принят, а en и ka
+ *   написаны по отгруженной терминологии и вычитаны только машиной.
  *
  * Перечни читаются из исходников регулярным выражением, а не переписываются
  * сюда: список в двух местах разъезжается на первой же правке. Прогон это не
@@ -450,7 +464,11 @@ function reportPending() {
   const legal = readNamedList('ui/primitives.tsx', 'PENDING_LEGAL_SLOTS');
   const copy = readNamedList('ui/copy.ts', 'PENDING_COPY_KEYS');
   const legalReview = readNamedList('ui/copy.ts', 'PENDING_LEGAL_REVIEW_KEYS');
-  if (legal === null || copy === null || legalReview === null) {
+  /* Перевод, написанный не носителем языка, проверками не ловится вовсе: длина и
+     запрещённая лексика молчат о падеже и порядке слов. Работа названа числом
+     здесь, иначе она видна только тому, кто откроет `ui/copy.ts`. */
+  const nativeReview = readNamedList('ui/copy.ts', 'PENDING_NATIVE_REVIEW_KEYS');
+  if (legal === null || copy === null || legalReview === null || nativeReview === null) {
     fail('перечень', 'не найден один из перечней ожидающих строк (PENDING_*) — счёт работы потерян');
     return;
   }
@@ -459,6 +477,9 @@ function reportPending() {
   process.stdout.write(`  ? черновиков микрокопи: ${copy.length} — ждут копирайтера и главреда\n`);
   process.stdout.write(`    из них у юриста, а не у главреда: ${legalReview.length}\n`);
   for (const key of legalReview) process.stdout.write(`      ${key}\n`);
+  process.stdout.write(
+    `  ? переводов без вычитки носителем языка: ${nativeReview.length} — en и ka показываются как есть\n`,
+  );
 }
 
 /* --------------------------------------------------------- 4. что обходим */
@@ -702,6 +723,30 @@ function routes() {
   add('owner-tariff', '/owner/tariff', { wide: WIDE, mobile: MOBILE }, ['ka']);
   add('owner-tariff', '/owner/tariff', { wide: WIDE }, ['ru']);
   add('security', '/security', { desktop: DESKTOP }, ['ka']);
+  /**
+   * Публичные страницы (`docs/product/LANDING.md`): лендинг, страница второй
+   * стороны и партнёрская. Они не кабинет и потому проверяются на другое:
+   *
+   * · **три языка на лендинге, а не два.** Публичная страница — единственная
+   *   поверхность, куда человек приходит **до** того, как выбрал язык
+   *   интерфейса; английская версия здесь не «короче и потому дешевле», а
+   *   ровно та, которую увидит иностранный покупатель;
+   * · **состояния формы.** Пусто (форма), отправлено и **приём остановлен**.
+   *   Последнее — не оформление: приём новых сделок останавливается
+   *   автоматически при нарушении покрытия клиентских средств (красная линия
+   *   №3), и форма, которая в этот момент продолжает собирать заявки, собирает
+   *   то, на что никто не ответит. Состояния, которого нет в обходе, не
+   *   проверяет ничто;
+   * · **страница второй стороны — на `ka` и на `ru`.** Её печатают и передают
+   *   на бумаге, то есть смотрят на широком макете, а не только на телефоне.
+   */
+  add('landing', '/landing', { desktop: DESKTOP, mobile: MOBILE });
+  add('landing-sent', '/landing?state=sent', { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
+  add('landing-paused', '/landing?state=paused', { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
+  add('landing-recipient', '/landing/recipient', { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
+  add('landing-recipient', '/landing/recipient', { desktop: DESKTOP }, ['ru']);
+  add('landing-partners', '/landing/partners', { desktop: DESKTOP, mobile: MOBILE }, ['ka']);
+  add('landing-partners', '/landing/partners', { desktop: DESKTOP }, ['ru']);
   return list;
 }
 
@@ -1156,6 +1201,29 @@ async function checkRenderedFonts(browser) {
   if (failures.length === before) pass('текст набран своими гарнитурами на всех трёх языках');
 }
 
+/* --------------------------------- 5c. живы ли сами правила доступности */
+
+/**
+ * Семь из девяти правил доступности на живом приложении молчат, и это хорошая
+ * новость ровно до того дня, когда селектор разъедется с разметкой. С этого дня
+ * они будут молчать по другой причине, а в отчёте это выглядит одинаково.
+ *
+ * Поэтому перед обходом правила прогоняются по двум синтетическим страницам:
+ * сломанной и целой (`wcag-selftest.mjs`). Не сработавшее правило роняет прогон
+ * **до** обхода — иначе зелёный результат будет означать «не нашли», а не «нет».
+ */
+async function checkWcagRulesAlive(browser) {
+  process.stdout.write('Правила доступности живы\n');
+  const before = failures.length;
+  const result = await selfTestWcag(browser);
+  for (const problem of result.problems) {
+    fail('доступность', problem);
+  }
+  if (failures.length === before) {
+    pass(`${result.expected} правил WCAG 2.1 AA срабатывают на сломанной странице и молчат на целой`);
+  }
+}
+
 /* -------------------------------------------------------------- 6. запуск */
 
 async function waitForServer(timeoutMs) {
@@ -1338,6 +1406,7 @@ async function main() {
   mkdirSync(SHOTS, { recursive: true });
 
   const browser = await chromium.launch({ executablePath: BROWSER_PATH });
+  await checkWcagRulesAlive(browser);
   await checkRenderedFonts(browser);
   /* Карточки задач добавляются после подъёма сервера: их адреса читаются из
      самой очереди, а не собираются здесь из идентификаторов фикстуры. */
@@ -1359,6 +1428,14 @@ async function main() {
     `Обход: ${list.length} снимков на ${byName} маршрутах (ka и ru, узкая и проектная ширина)\n`,
   );
   let shot = 0;
+  /**
+   * Чего проверка доступности **не смогла** измерить: текст поверх картинки,
+   * невоспроизведённое состояние фокуса, два состояния одной фигуры. Прогон это
+   * не роняет и роняться не должно — но и молчать нельзя: непроверенное место,
+   * о котором не сказано, через месяц читается как проверенное. Собирается по
+   * всему обходу и печатается один раз с числом маршрутов.
+   */
+  const wcagNotices = new Map();
 
   for (const route of list) {
     const context = await browser.newContext({
@@ -1393,6 +1470,19 @@ async function main() {
       fail(at, problem);
     }
     if (focusShot !== null) shot += 1;
+    /* Доступность считается **после** `checkKeyboard`: `:focus-visible` при
+       программной установке фокуса включается только тогда, когда последним
+       человек работал клавиатурой, а Tab нажимает именно она. Порядок здесь —
+       условие измеримости, а не вкус. */
+    const audit = await page.evaluate(wcagAudit, { locale: route.locale, thresholds: WCAG });
+    for (const problem of audit.problems) {
+      fail(at, problem);
+    }
+    for (const notice of audit.notices) {
+      const seen = wcagNotices.get(notice) ?? [];
+      seen.push(at);
+      wcagNotices.set(notice, seen);
+    }
     await context.close();
   }
 
@@ -1401,6 +1491,12 @@ async function main() {
 
   process.stdout.write(`\nСкриншотов: ${shot}, в ${relative(APP_ROOT, SHOTS)}\n`);
   process.stdout.write(`Ключей локализации: ${keyCount} на каждый из трёх языков\n`);
+  if (wcagNotices.size > 0) {
+    process.stdout.write(`\nДоступность — не измерено (${wcagNotices.size}):\n`);
+    for (const [notice, where] of wcagNotices) {
+      process.stdout.write(`  ? ${notice} · маршрутов: ${where.length}, например ${where[0]}\n`);
+    }
+  }
   if (failures.length > 0) {
     process.stdout.write(`\nНарушений: ${failures.length}\n`);
     process.exit(1);

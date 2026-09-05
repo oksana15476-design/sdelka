@@ -12,6 +12,8 @@ import {
   BUYER_NAMES,
   document,
   evidence,
+  georgianName,
+  latinName,
   LEGAL_ENTITY_DOCUMENT,
   NOW,
   OTHER_DOCUMENT,
@@ -95,6 +97,46 @@ describe('одна личность на обеих сторонах одной 
     expect(result.reasons).toContain('compliance.counterparty.distinct');
     expect(result.reasons).toContain('compliance.counterparty.name_match_is_not_identity');
     expect(result.conflictingPartyIds).toHaveLength(0);
+  });
+
+  /**
+   * Совпадение имён показывается оператору при **любой** сильной степени, а не
+   * только при буквальном совпадении форм. Проверялась до сих пор одна степень
+   * из трёх — то есть две трети перечня можно было выбросить, и совпадение
+   * имён у сторон одной сделки перестало бы попадать оператору на глаза.
+   */
+  it('совпадение имён отмечается при любой сильной степени', () => {
+    const afterLatinization = compareNames(BUYER_NAMES, [georgianName('საბო', 'ტიკატო')], strong);
+    const strongOnly = compareNames(BUYER_NAMES, [latinName('Sabo', 'Tikaton')], {
+      strongThresholdBp: 1_000,
+    });
+    expect(afterLatinization.degree).toBe('identical_after_latinization');
+    expect(strongOnly.degree).toBe('strong');
+
+    for (const nameMatch of [afterLatinization, strongOnly]) {
+      const result = assess({
+        participations: [
+          participation('p', 'payer', BUYER_DOCUMENT),
+          participation('r', 'recipient', SAME_NAMES_OTHER_DOCUMENT),
+        ],
+        nameMatch,
+      });
+      expect(result.outcome).toBe('clear');
+      expect(result.reasons).toContain('compliance.counterparty.name_match_is_not_identity');
+    }
+  });
+
+  it('одно и то же участие, пришедшее дважды, даёт один конфликт, а не два', () => {
+    // Выгрузка участий способна повторить строку. Конфликт при этом один: пара
+    // «плательщик — получатель» та же самая, и показывать её оператору дважды
+    // значит завышать число находок.
+    const twice = [
+      participation('p', 'payer', BUYER_DOCUMENT),
+      participation('r', 'recipient', SAME_PERSON_DOCUMENT),
+      participation('r', 'recipient', SAME_PERSON_DOCUMENT),
+    ];
+    expect(selfDealingPairs(twice)).toEqual([['p', 'r']]);
+    expect(assess({ participations: twice }).conflictingPartyIds).toHaveLength(1);
   });
 
   it('не срабатывает: одно лицо в двух разных сделках — две разные выборки участий', () => {

@@ -13,7 +13,8 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "mutation": "node scripts/compliance-mutation.mjs"
   },
   "dependencies": {
     "@sdelka/domain": "workspace:*",

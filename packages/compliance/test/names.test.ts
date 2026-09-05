@@ -89,6 +89,42 @@ describe('признаки сходства целочисленные', () => {
     expect(jaroWinklerBp('abcdefgh', 'abcdefgz')).toBe(9_499);
   });
 
+  /**
+   * Замыкающая триграмма — не украшение набора. Она вносит в сравнение конец
+   * формы, а хвост фамилии как раз и различает однокоренные грузинские
+   * фамилии. Значение пинуется числом: «похоже больше нуля» переживает потерю
+   * половины набора и потому ничего не проверяет.
+   */
+  it('замыкающая триграмма входит в набор: различие в хвосте остаётся различием', () => {
+    // 'ab' → «  a», « ab», «ab »; 'abc' → «  a», « ab», «abc», «bc ».
+    // Пересечение 2, объединение 5 → 4 000. Без замыкающей триграммы
+    // объединение стало бы 3, а мера сходства — 6 666.
+    expect(trigramBp('ab', 'abc')).toBe(4_000);
+  });
+
+  /**
+   * Пустая строка против непустой — это несовпадение, а не совпадение. Обе
+   * меры сходства возвращают десять тысяч только тогда, когда пусты **обе**
+   * стороны: иначе наблюдение с незаполненной формой имени прошло бы как
+   * точное совпадение с кем угодно.
+   */
+  it('пустая строка совпадает только с пустой', () => {
+    expect(trigramBp('', '')).toBe(10_000);
+    expect(trigramBp('', 'abc')).toBe(0);
+    expect(trigramBp('abc', '')).toBe(0);
+    expect(jaroWinklerBp('', '')).toBe(10_000);
+    expect(jaroWinklerBp('', 'abc')).toBe(0);
+    expect(jaroWinklerBp('abc', '')).toBe(0);
+  });
+
+  it('переставленные знаки совпадением не считаются', () => {
+    // 'abcd' и 'abdc' состоят из одних и тех же знаков, но две пары стоят
+    // крест-накрест. Джаро вычитает половину числа перестановок: 9 166, плюс
+    // надбавка Винклера за префикс из двух знаков — 9 332. Перестань считать
+    // перестановки — и обе формы станут «одинаковыми» с баллом 10 000.
+    expect(jaroWinklerBp('abcd', 'abdc')).toBe(9_332);
+  });
+
   it('веса ансамбля в сумме сто', () => {
     const { levenshteinPercent, trigramPercent, jaroWinklerPercent } =
       DEFAULT_NAME_FEATURE_WEIGHTS;
@@ -120,6 +156,14 @@ describe('сравнение имён возвращает степень, а н
     expect(match.reasons).toContain('compliance.name.cyrillic_more_ambiguous');
   });
 
+  it('кириллица помечается с любой стороны сравнения', () => {
+    // Стороны сравнения несимметричны по происхождению — слева профиль, справа
+    // выписка банка или запись перечня, — но неоднозначность кириллицы это
+    // свойство самой формы, а не её места в аргументах.
+    const match = compareNames([latinName('Sabo', 'Titi')], [cyrillicName('Сабо', 'Тити')], strong);
+    expect(match.reasons).toContain('compliance.name.cyrillic_more_ambiguous');
+  });
+
   it('разные имена не дают сильного совпадения', () => {
     const match = compareNames([latinName('Sabo', 'Tikato')], [latinName('Nuvo', 'Zerlan')], strong);
     expect(match.degree).toBe('weak');
@@ -130,6 +174,9 @@ describe('сравнение имён возвращает степень, а н
     const match = compareNames([], [latinName('Sabo', 'Tikato')], strong);
     expect(match.degree).toBe('not_comparable');
     expect(match.reasons).toContain('compliance.name.not_comparable');
+    // «Сравнить не с чем» — тем более не основание: утверждение о
+    // недостаточности имени обязано стоять и в этой ветке тоже.
+    expect(match.sufficientAlone).toBe(false);
   });
 
   it('совпадение имени никогда не объявляется достаточным', () => {
@@ -176,6 +223,33 @@ describe('сравнение имён возвращает степень, а н
     expect(match.degree).toBe('identical_in_source_alphabet');
   });
 
+  it('совпадение в исходном алфавите побеждает и тогда, когда встретилось позже', () => {
+    // Тот же случай, что выше, но пары идут в обратном порядке. Правило «при
+    // равном балле выигрывает совпадение форм» обязано работать независимо от
+    // того, в каком порядке наблюдения пришли из источников: порядок задаёт
+    // хранилище, а не смысл.
+    const match = compareNames(
+      [latinName('Sabo', 'Titi')],
+      [georgianName('საბო', GEORGIAN_HARD), latinName('Sabo', 'Titi')],
+      strong,
+    );
+    expect(match.degree).toBe('identical_in_source_alphabet');
+  });
+
+  it('из равных пар в отчёт попадает первая, а не последняя', () => {
+    // Обе грузинские формы дают одну паспортную и потому один балл. Оператору
+    // показывается конкретная пара, и она обязана быть определена однозначно:
+    // «какая-нибудь из равных» — это отчёт, который меняется от перестановки
+    // строк в выгрузке.
+    const match = compareNames(
+      [latinName('Sabo', 'Titi')],
+      [georgianName('საბო', GEORGIAN_HARD), georgianName('საბო', GEORGIAN_SOFT)],
+      strong,
+    );
+    expect(match.scoreBp).toBe(10_000);
+    expect(match.best?.right.familyInitial).toBe('ტ');
+  });
+
   it('форма без схлопывающихся знаков причины о необратимости не несёт', () => {
     const match = compareNames([latinName('Nuvo', 'Zerlan')], [latinName('Nuvo', 'Zerlan')], strong);
     expect(match.georgianSpellingCount).toBe(1);
@@ -203,6 +277,17 @@ describe('вес доказательства наблюдения', () => {
     expect(() =>
       nameObservation({ ...latinName('Sabo', 'Titi'), evidenceWeightBp: 10_000 }),
     ).not.toThrow();
+  });
+
+  it('имя из одной части — законное наблюдение', () => {
+    // Мононим и запись без личного имени — обычные формы в сегменте, а не
+    // дефект ввода. Отказ по любой пустой части закрыл бы приём таких имён
+    // вовсе; пусто — это когда пусты обе части.
+    expect(() => nameObservation(latinName('Sabo', ''))).not.toThrow();
+    expect(() => nameObservation(latinName('', 'Tikato'))).not.toThrow();
+    expect(() => nameObservation(latinName(' ', '  '))).toThrow(
+      'compliance.name_observation.empty',
+    );
   });
 
   it('за границами диапазона наблюдение не собирается', () => {

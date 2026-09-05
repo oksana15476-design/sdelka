@@ -1583,6 +1583,8 @@ function applyIntents(
           dealId: runtime.dealId,
           trancheId: runtime.trancheId,
           partyId: next.facts.buyer.partyId,
+          // Задача о транше, а не о заявке на вывод: предмет назван выше.
+          withdrawalId: null,
           rankAmount: intent.priorityAmount,
           enteredAt: world.now,
           deadlineAt: null,

@@ -44,7 +44,6 @@ export const INTAKE_REASON_KEYS = {
   matchNameSecondaryOnly: 'intake.match.name_secondary_only',
   matchSourceAccountSeen: 'intake.match.source_account_seen',
   matchManualAwaitsSecondApproval: 'intake.match.manual_awaits_second_approval',
-  matchManualApproverNotDistinct: 'intake.match.manual_approver_not_distinct',
   matchManualJustificationMissing: 'intake.match.manual_justification_missing',
 
   /* --- Маршрут приёма --- */

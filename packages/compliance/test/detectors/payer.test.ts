@@ -16,6 +16,7 @@ import {
   BUYER_NAMES,
   document,
   evidence,
+  georgianName,
   latinName,
   NOW,
   OTHER_DOCUMENT,
@@ -159,6 +160,31 @@ describe('третье лицо: удержание при любой сумме
     });
     expect(result.outcome).toBe('hold');
     expect(result.reasons).toContain('compliance.payer.name_match_is_not_identity');
+  });
+
+  /**
+   * Оговорка «имя совпало, документ — нет» ставится при **любой** сильной
+   * степени, а не только при буквальном совпадении форм. Проверялась одна
+   * степень из трёх: две другие можно было выбросить из условия, и самый
+   * частый случай сегмента — грузинский реестр против латиницы банка — перестал
+   * бы попадать оператору на глаза.
+   */
+  it('оговорка о совпадении имени ставится при любой сильной степени', () => {
+    const afterLatinization = compareNames(BUYER_NAMES, [georgianName('საბო', 'ტიკატო')], strong);
+    const strongOnly = compareNames(BUYER_NAMES, [latinName('Sabo', 'Tikaton')], {
+      strongThresholdBp: 1_000,
+    });
+    expect(afterLatinization.degree).toBe('identical_after_latinization');
+    expect(strongOnly.degree).toBe('strong');
+
+    for (const nameMatch of [afterLatinization, strongOnly]) {
+      const result = assess({
+        origin: external(OTHER_DOCUMENT, nameMatch),
+        relationship: { kind: 'unrelated_third_party' },
+      });
+      expect(result.outcome).toBe('hold');
+      expect(result.reasons).toContain('compliance.payer.name_match_is_not_identity');
+    }
   });
 });
 

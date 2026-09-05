@@ -1,0 +1,245 @@
+/*
+ * Публичные страницы: лендинг, страница второй стороны, партнёрская.
+ *
+ * Правила те же, что у кабинета (`app.css`), и нарушать их здесь было бы
+ * особенно дорого — публичную страницу читают на чужом телефоне, чужим
+ * шрифтом и на самом длинном языке:
+ *
+ * 1) ни одной фиксированной ширины у элемента с текстом;
+ * 2) только логические свойства — задел под правостороннее письмо;
+ * 3) брейкпоинты контейнерные (`@container` по `.frame`), а не оконные;
+ * 4) кегль не зависит от языка: уменьшать грузинский нельзя (`LANDING.md`
+ *    §5.2 — кегль иностранного текста не может быть больше грузинского, а
+ *    значит и грузинский не подгоняется под раскладку).
+ *
+ * Файл подключается только каркасом публичных страниц
+ * (`app/[locale]/landing/layout.tsx`), а не глобально: кабинету он не нужен.
+ */
+
+/* ------------------------------------------------------ каркас публичного сайта */
+
+.pub {
+  display: flex;
+  flex-direction: column;
+  min-block-size: 100vh;
+  background: var(--c-bg);
+}
+
+.pub__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+  padding: var(--s-3) var(--s-5);
+  background: var(--c-surface);
+  border-block-end: 1px solid var(--c-line);
+}
+
+.pub__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-block-size: var(--tap);
+  color: var(--c-ink);
+  text-decoration: none;
+  font-weight: 800;
+  font-size: var(--t-lg);
+  letter-spacing: -0.04em;
+}
+
+.pub__brand small {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--c-ink-faint);
+  /* Подпись под знаком переносится, а не обрезается: по-грузински она длиннее
+     русской примерно в полтора раза и в одну строку не встаёт. */
+  max-inline-size: 40ch;
+}
+
+.pub__foot {
+  margin-block-start: auto;
+  padding: var(--s-6) var(--s-6) var(--s-7);
+  background: var(--c-surface-sunken);
+  border-block-start: 1px solid var(--c-line);
+  display: flex;
+  justify-content: center;
+}
+
+.pub__foot .sheet {
+  gap: var(--s-4);
+}
+
+.pub__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+/* --------------------------------------------------------------- первый экран */
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding-block: var(--s-5) var(--s-2);
+}
+
+/*
+ * Заголовок первого экрана.
+ *
+ * Кегль поднимается контейнерным запросом, а не языком: макет проверяется на
+ * грузинском, и если заголовок ломается на нём — неверен макет, а не язык.
+ * Перенос разрешён (`text-wrap: balance` из `app.css`), обрезки нет нигде:
+ * `overflow-wrap: anywhere` держит длинное слово внутри колонки.
+ */
+.hero__title {
+  font-size: var(--t-2xl);
+  overflow-wrap: anywhere;
+}
+
+.hero__lead {
+  font-size: var(--t-lg);
+  line-height: 1.55;
+  color: var(--c-ink-muted);
+  max-inline-size: var(--measure);
+}
+
+.hero__stage {
+  display: flex;
+  gap: var(--s-2);
+  align-items: flex-start;
+  padding: var(--s-3);
+  border: 1px solid var(--c-accent-line);
+  border-radius: var(--r-2);
+  background: var(--c-accent-soft);
+  font-size: var(--t-sm);
+  line-height: 1.55;
+  color: var(--c-ink-muted);
+  max-inline-size: var(--measure);
+}
+
+.hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: center;
+  margin-block-start: var(--s-2);
+}
+
+@container (min-width: 720px) {
+  .hero {
+    padding-block: var(--s-6) var(--s-4);
+  }
+
+  .hero__title {
+    font-size: var(--t-3xl);
+  }
+}
+
+/* ----------------------------------------------------------------- три факта */
+
+.facts {
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@container (min-width: 720px) {
+  .facts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-4);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-2);
+  background: var(--c-surface-sunken);
+  min-inline-size: 0;
+}
+
+.fact__title {
+  font-size: var(--t-sm);
+  font-weight: 700;
+}
+
+.fact__body {
+  font-size: var(--t-sm);
+  line-height: 1.55;
+  color: var(--c-ink-muted);
+}
+
+/* ------------------------------------------- три ответа «кто решает» (§4) */
+
+/*
+ * Наш ответ отличается рамкой **и подписью**: цвет здесь не единственный
+ * носитель смысла (WCAG 1.4.1), подпись «наш ответ» стоит словом в самой
+ * карточке.
+ */
+.outcome--ours {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+}
+
+/* Три ответа стоят рядом только на широком экране: на телефоне сравнение идёт
+   прокруткой, и колонка в 120 px сравнивать нечему. */
+@container (min-width: 900px) {
+  .outcomes--three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ------------------------------------------------------------------- шаги */
+
+.step__title {
+  font-size: var(--t-sm);
+  font-weight: 700;
+  color: var(--c-ink);
+}
+
+/* ------------------------------------------------------- документ для печати */
+
+/*
+ * Страницу второй стороны печатают и передают на бумаге (`LANDING.md` §8 п. 8).
+ *
+ * Разрыв страницы между подтверждением средств и честной границей превращает
+ * документ в обещание: читатель уносит первый лист и не уносит второй. Поэтому
+ * оба блока лежат в одном контейнере, и контейнер запрещено разрывать.
+ */
+.pubdoc {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+@media print {
+  .pub__top,
+  .pub__links,
+  .langs {
+    display: none;
+  }
+
+  .pub__foot {
+    background: none;
+    padding-block: var(--s-4);
+  }
+
+  .card,
+  .security {
+    box-shadow: none;
+    border: 1px solid var(--c-line-strong);
+    break-inside: avoid;
+  }
+
+  .pubdoc {
+    break-inside: avoid;
+  }
+}

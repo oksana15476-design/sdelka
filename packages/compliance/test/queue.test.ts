@@ -21,6 +21,7 @@ function task(overrides: Partial<ReviewTask> = {}): ReviewTask {
     dealId: 'deal-1',
     trancheId: 'tranche-1',
     partyId: null,
+    withdrawalId: null,
     rankAmount: money('GEL', 10_000_000n),
     enteredAt: instant(NOW - HOUR_MS) as Instant,
     deadlineAt: instant(NOW + HOUR_MS) as Instant,
@@ -121,6 +122,23 @@ describe('метрики дежурного', () => {
     const tasks = [task({ taskId: 'a' }), task({ taskId: 'b', enteredAt: instant(NOW - 9 * HOUR_MS) as Instant })];
     expect(oldestTaskAgeMs(tasks, NOW)).toBe(9 * HOUR_MS);
     expect(oldestTaskAgeMs([], NOW)).toBeNull();
+  });
+
+  it('берётся максимум, а не последняя задача в списке', () => {
+    // Порядок в списке задаёт выборка из хранилища, а не возраст. Подмени
+    // сравнение присваиванием — и метрика покажет возраст последней задачи:
+    // дежурный увидит свежую очередь при застрявшей на девять часов.
+    const tasks = [
+      task({ taskId: 'old', enteredAt: instant(NOW - 9 * HOUR_MS) as Instant }),
+      task({ taskId: 'fresh', enteredAt: instant(NOW - HOUR_MS) as Instant }),
+    ];
+    expect(oldestTaskAgeMs(tasks, NOW)).toBe(9 * HOUR_MS);
+  });
+
+  it('единственная задача нулевого возраста даёт ноль, а не «задач нет»', () => {
+    // Ноль и `null` — разные ответы дашборду: «задача есть, ей ноль минут» и
+    // «задач нет вовсе».
+    expect(oldestTaskAgeMs([task({ enteredAt: NOW })], NOW)).toBe(0);
   });
 
   it('перешагнувшие норматив выделяются отдельно', () => {

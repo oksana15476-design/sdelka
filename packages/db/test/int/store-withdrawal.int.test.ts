@@ -1,10 +1,14 @@
 import {
   type ClientAccountFacts,
+  type Instant,
   type PartyRef,
+  type WithdrawalContext,
   type WithdrawalState,
   DomainError,
+  PROVISIONAL_WITHDRAWAL_CLOCK,
   RejectionCode,
   createWithdrawal,
+  instant,
   reduceWithdrawal,
 } from '@sdelka/domain';
 import { money } from '@sdelka/money';
@@ -54,16 +58,27 @@ const FACTS: ClientAccountFacts = Object.freeze({
   activeWithdrawals: 0,
 });
 
+/**
+ * Часы заявки — временное умолчание владельца целиком (`PROVISIONAL_WITHDRAWAL_CLOCK`,
+ * `DECISIONS-REVIEW.md` §H4). Свои числа здесь означали бы проверку выдуманного
+ * норматива.
+ */
+const NOW: Instant = instant(Date.UTC(2026, 8, 5, 9, 0, 0));
+const CONTEXT: WithdrawalContext = {
+  now: NOW,
+  deadlinePolicy: PROVISIONAL_WITHDRAWAL_CLOCK.deadline,
+};
+
 /** Переход настоящей машиной. Отказ здесь — дефект теста, и он обязан упасть. */
 function advance(state: WithdrawalState, event: Parameters<typeof reduceWithdrawal>[1]) {
-  const result = reduceWithdrawal(state, event, FACTS);
+  const result = reduceWithdrawal(state, event, FACTS, CONTEXT);
   if (!result.ok) {
     throw new Error(`переход не состоялся: ${JSON.stringify(result.error)}`);
   }
   return result.value.state;
 }
 
-const REQUESTED = createWithdrawal('withdrawal-1');
+const REQUESTED = createWithdrawal('withdrawal-1', NOW, CONTEXT.deadlinePolicy);
 const APPROVED = advance(REQUESTED, { type: 'withdrawal_approved' });
 const DISPATCHED = advance(APPROVED, { type: 'withdrawal_dispatched' });
 const PAID_OUT = advance(DISPATCHED, { type: 'payout_result', outcome: 'settled' });
@@ -197,7 +212,7 @@ run(title, () => {
     await withRollback(pool, async (client) => {
       await client.query(`SET LOCAL ROLE ${APP_ROLE}`);
       await saveWithdrawal(client, snapshotOf(REQUESTED), null);
-      const second = snapshotOf(createWithdrawal('withdrawal-2'));
+      const second = snapshotOf(createWithdrawal('withdrawal-2', NOW, CONTEXT.deadlinePolicy));
       // Правило держит частичный уникальный индекс `withdrawal_one_active_per_party`;
       // в коде то же правило — guard `g_no_active_withdrawal`. Отказ обязан
       // приезжать именем guard’а, а не текстом драйвера: «отказ автомата» без
@@ -220,7 +235,7 @@ run(title, () => {
       // `paid_out` терминален, из предиката частичного индекса он выпадает —
       // и счёт снова свободен. Иначе один исполненный вывод запирал бы клиента
       // навсегда.
-      const next = snapshotOf(createWithdrawal('withdrawal-3'));
+      const next = snapshotOf(createWithdrawal('withdrawal-3', NOW, CONTEXT.deadlinePolicy));
       expect(await saveWithdrawal(client, next, null)).toEqual({ written: 1, repeated: 0 });
       const all = await loadWithdrawals(client, CLIENT.partyId);
       expect(all.map((item) => item.state.status)).toEqual(['paid_out', 'requested']);
@@ -243,6 +258,74 @@ run(title, () => {
     });
   });
 
+  it('нетерминальная заявка без дедлайна базой не принимается', async () => {
+    if (pool === null) return;
+    await withRollback(pool, async (client) => {
+      await client.query(`SET LOCAL ROLE ${APP_ROLE}`);
+      // Через порт такую строку не составить: у нетерминального варианта союза
+      // часы обязательны по типу. Поэтому запрос идёт **мимо** порта — проверяется
+      // ровно то, что правило держит база, а не дисциплина кода
+      // (`withdrawal_state_shape`, `0022_withdrawal_deadline.sql`).
+      const insert = client.query(
+        `INSERT INTO sdelka.withdrawal (
+           withdrawal_id, party_id, status, idempotency_key,
+           amount_minor, currency, source_account_fingerprint, deadline_at, entered_at
+         ) VALUES ($1,$2,'requested',$3,$4,$5,$6,NULL,NULL)`,
+        [
+          'withdrawal-no-deadline',
+          CLIENT.partyId,
+          REQUESTED.idempotencyKey,
+          AMOUNT.minor.toString(),
+          GEL,
+          FINGERPRINT,
+        ],
+      );
+      await expect(insert).rejects.toMatchObject({ constraint: 'withdrawal_state_shape' });
+    });
+  });
+
+  it('терминальная заявка часов не носит: база отвергает срок у закрытой', async () => {
+    if (pool === null) return;
+    await withRollback(pool, async (client) => {
+      await client.query(`SET LOCAL ROLE ${APP_ROLE}`);
+      const insert = client.query(
+        `INSERT INTO sdelka.withdrawal (
+           withdrawal_id, party_id, status, idempotency_key,
+           amount_minor, currency, source_account_fingerprint, deadline_at, entered_at
+         ) VALUES ($1,$2,'cancelled',$3,$4,$5,$6,now(),now())`,
+        [
+          'withdrawal-terminal-clock',
+          CLIENT.partyId,
+          REQUESTED.idempotencyKey,
+          AMOUNT.minor.toString(),
+          GEL,
+          FINGERPRINT,
+        ],
+      );
+      await expect(insert).rejects.toMatchObject({ constraint: 'withdrawal_state_shape' });
+    });
+  });
+
+  it('часы переживают круг: срок и возраст возвращаются теми же', async () => {
+    if (pool === null) return;
+    await withRollback(pool, async (client) => {
+      await client.query(`SET LOCAL ROLE ${APP_ROLE}`);
+      await saveWithdrawal(client, snapshotOf(REQUESTED), null);
+      const [read] = await loadWithdrawals(client, CLIENT.partyId);
+      const state = read?.state;
+      expect(state !== undefined && 'deadline' in state ? state.deadline.at : null).toBe(
+        'deadline' in REQUESTED ? REQUESTED.deadline.at : null,
+      );
+      expect(state !== undefined && 'enteredAt' in state ? state.enteredAt : null).toBe(NOW);
+      // Терминальная заявка возвращается без часов вовсе.
+      await saveWithdrawal(client, snapshotOf(APPROVED), snapshotOf(REQUESTED));
+      await saveWithdrawal(client, snapshotOf(DISPATCHED), snapshotOf(APPROVED));
+      await saveWithdrawal(client, snapshotOf(PAID_OUT), snapshotOf(DISPATCHED));
+      const [closed] = await loadWithdrawals(client, CLIENT.partyId);
+      expect(closed?.state !== undefined && 'deadline' in closed.state).toBe(false);
+    });
+  });
+
   it('выводы чужого клиента в список не попадают', async () => {
     if (pool === null) return;
     await withRollback(pool, async (client) => {
@@ -251,7 +334,7 @@ run(title, () => {
       await saveWithdrawal(client, snapshotOf(REQUESTED), null);
       await saveWithdrawal(
         client,
-        { ...snapshotOf(createWithdrawal('withdrawal-other')), party: other },
+        { ...snapshotOf(createWithdrawal('withdrawal-other', NOW, CONTEXT.deadlinePolicy)), party: other },
         null,
       );
       expect(await loadWithdrawals(client, CLIENT.partyId)).toEqual([snapshotOf(REQUESTED)]);

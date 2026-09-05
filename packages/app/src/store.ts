@@ -8,8 +8,9 @@ import {
   type WithdrawalState,
   boundConditionAct,
 } from '@sdelka/domain';
-import type { Journal, JournalEntry } from '@sdelka/ledger';
+import { type Journal, type JournalEntry, appendEntry, emptyJournal } from '@sdelka/ledger';
 import { type CurrencyCode, type Money, split } from '@sdelka/money';
+import { journalEntryIdPrefix, seqOfEternalId } from './ids';
 import {
   type DealRuntime,
   type InvariantSurface,
@@ -136,13 +137,58 @@ export interface WithdrawalSnapshot {
   readonly sourceAccountFingerprint: string;
 }
 
+/**
+ * Охват чтения журнала — **обязательный аргумент**, а не удобство.
+ *
+ * Журнал учёта в базе один и общий: в нём лежат записи всех миров сразу.
+ * `readJournal()` без охвата отдавал их скопом, и подъём мира сравнивал своё
+ * состояние с чужими проводками — то есть красная линия №1 («средства одной
+ * сделки не финансируют обязательство по другой») держалась тем, что в базе жил
+ * ровно один мир. Аргумент делает вопрос обязательным: «весь журнал без
+ * разбора» стало не пропуском параметра, а **написанным словом**
+ * (`entireJournal`, с названной причиной) — тот же приём, что у `WITHOUT_STORE`.
+ *
+ * Отбор идёт по началу идентификатора (`ids.ts`, `journalEntryIdPrefix`) и
+ * потому **грубый**: хранилище отдаёт надмножество, а точное правило —
+ * `seqOfEternalId` — применяет `restoreWorld`. Форма идентификатора хранилищу не
+ * известна и известна быть не должна: она свойство того модуля, который её
+ * чеканит.
+ */
+export type JournalScope =
+  | {
+      readonly kind: 'chain';
+      /** Начало идентификатора: `${chainId}:e`. Собирается `chainScope`. */
+      readonly entryIdPrefix: string;
+    }
+  | {
+      readonly kind: 'everything';
+      /** Зачем читается весь журнал. Ключ, а не текст: три языка (`CLAUDE.md`). */
+      readonly reasonKey: string;
+    };
+
+/** Охват одного мира: записи его цепочки. */
+export function chainScope(chainId: string): JournalScope {
+  return Object.freeze({ kind: 'chain' as const, entryIdPrefix: journalEntryIdPrefix(chainId) });
+}
+
+/**
+ * Весь журнал без разбора — сверка, отчётность, надзор.
+ *
+ * Причина обязательна и приезжает ключом: чтение, охватывающее чужие миры,
+ * обязано быть названо в том месте, где оно написано, а не выясняться потом по
+ * следам. Случайно сюда не попасть — попасть можно только вызовом.
+ */
+export function entireJournal(reasonKey: string): JournalScope {
+  return Object.freeze({ kind: 'everything' as const, reasonKey });
+}
+
 export interface WorldStore {
   transact<T>(body: (tx: WorldTransaction) => Promise<T>): Promise<T>;
 }
 
 export interface WorldTransaction {
   appendJournal(entries: readonly JournalEntry[]): Promise<WriteOutcome>;
-  readJournal(): Promise<Journal>;
+  readJournal(scope: JournalScope): Promise<Journal>;
   appendAudit(records: readonly AuditRecord[]): Promise<WriteOutcome>;
   readChain(chainId: string): Promise<AuditChain>;
   saveDeal(snapshot: DealSnapshot): Promise<WriteOutcome>;
@@ -748,6 +794,12 @@ export interface RestoredDeal {
  * значением, а не примечанием в отчёте.
  */
 export interface RestoredWorld {
+  /**
+   * Журнал **своей цепочки**, а не журнал базы: охват задан чтением
+   * (`JournalScope`) и уточнён разбором идентификаторов (`journalOfChain`).
+   * Прежде здесь лежали проводки всех миров сразу, и «покрытие клиентских
+   * средств» у поднятого мира считалось по чужим деньгам.
+   */
   readonly journal: Journal;
   readonly chain: AuditChain;
   readonly deals: readonly RestoredDeal[];
@@ -765,12 +817,37 @@ export interface RestoreRequest {
   readonly deals: readonly { readonly dealId: string; readonly trancheIds: readonly string[] }[];
 }
 
+/**
+ * Журнал одной цепочки из журнала, отобранного грубо.
+ *
+ * Хранилище отбирает по началу идентификатора и потому может отдать лишнее
+ * (`ids.ts`, `journalEntryIdPrefix`); здесь отбор идёт **разбором** — тем же
+ * модулем, который идентификаторы чеканит. Журнал пересобирается `appendEntry`,
+ * а не режется массивом: правила учёта, которым нужна история (зеркальность
+ * исправления, «расчёт отматывается один раз», ключ конверсии), обязаны пройти
+ * по той истории, которую поднятый мир и получит.
+ */
+function journalOfChain(journal: Journal, chainId: string): Journal {
+  const mine = journal.entries.filter((entry) => seqOfEternalId(chainId, entry.id) !== null);
+  if (mine.length === journal.entries.length) return journal;
+  let out = emptyJournal;
+  for (const entry of mine) out = appendEntry(out, entry);
+  return out;
+}
+
 export async function restoreWorld(
   store: WorldStore,
   request: RestoreRequest,
 ): Promise<RestoredWorld> {
   return store.transact(async (tx) => {
-    const journal = await tx.readJournal();
+    /*
+     * Охват — своя цепочка, и он обязателен (см. `JournalScope`). До него
+     * поднятый журнал нёс проводки **всех** миров базы: инварианты покрытия
+     * считались по чужим деньгам, а сравнение с миром в памяти шло по отбору,
+     * который делал каждый вызывающий сам.
+     */
+    const read = await tx.readJournal(chainScope(request.chainId));
+    const journal = journalOfChain(read, request.chainId);
     const chain = await tx.readChain(request.chainId);
     const deals: RestoredDeal[] = [];
     for (const wanted of request.deals) {

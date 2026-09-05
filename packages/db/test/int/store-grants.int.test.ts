@@ -12,6 +12,7 @@ import { expect, it } from 'vitest';
 import { APP_ROLE } from '../../src/roles.ts';
 import { appendAudit, readChain } from '../../src/store/audit.ts';
 import { appendJournal, readJournal } from '../../src/store/journal.ts';
+import type { JournalScope } from '../../src/store/port.ts';
 import { loadDeal, saveDeal } from '../../src/store/state.ts';
 import { dbSuite, sqlState, withRollback } from './support/pg.ts';
 
@@ -24,6 +25,19 @@ import { dbSuite, sqlState, withRollback } from './support/pg.ts';
  * у приложения нет по построению (инвариант 21, `CORE.md` Ф11). Схему,
  * проверенную только этой ролью, нельзя назвать проверенной.
  */
+
+/**
+ * Охват чтения — **весь журнал**, и он назван словом.
+ *
+ * Набор проверяет таблицу целиком: он идёт в откатываемой транзакции, где кроме
+ * его же записей ничего нет. Пропуском аргумента этого больше не получить —
+ * охват у чтения обязателен (`src/store/port.ts`, `JournalScope`).
+ */
+const WHOLE_JOURNAL: JournalScope = Object.freeze({
+  kind: 'everything',
+  reasonKey: 'db.test.whole_journal',
+});
+
 const { run, title, pool } = await dbSuite('хранилище: права роли приложения');
 
 const GEL = 'GEL' as const;
@@ -42,7 +56,7 @@ run(title, () => {
         money(GEL, 1_000n),
       );
       expect(await appendJournal(client, [entry])).toEqual({ written: 1, repeated: 0 });
-      expect((await readJournal(client)).entries).toEqual([entry]);
+      expect((await readJournal(client, WHOLE_JOURNAL)).entries).toEqual([entry]);
     });
   });
 

@@ -81,9 +81,13 @@ export interface ManualMatchAssessment {
   readonly failures: readonly IntakeReasonKey[];
 }
 
+// Только `awaits`: актор в правило не передаётся (см. вызов ниже), а без актора
+// причины «утвердил тот же, кто готовил» у двухаргументной формы правила нет ни
+// в типе, ни в ответе. Ключ `intake.match.manual_approver_not_distinct` жил в
+// реестре и не мог появиться ни в одном ответе пакета — мёртвая проводка,
+// найденная мутационным прогоном; она удалена вместе с ключом.
 const MANUAL_MATCH_REASONS = Object.freeze({
   awaits: INTAKE_REASON_KEYS.matchManualAwaitsSecondApproval,
-  notDistinct: INTAKE_REASON_KEYS.matchManualApproverNotDistinct,
 });
 
 /**

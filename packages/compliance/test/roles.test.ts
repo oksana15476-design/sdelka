@@ -233,6 +233,20 @@ describe('работа от имени клиента', () => {
     expect(result.value.consentRef).toBe('consent-1');
   });
 
+  it('сессия недействительна ровно в момент истечения', () => {
+    // Срок оканчивается **в** названный момент, а не после него: иначе у
+    // работы от имени клиента появляется лишний миг сверх объявленного срока,
+    // и «тридцать минут» перестаёт быть верхней границей.
+    const result = grantImpersonation(
+      authority,
+      { grantId: 'g4', partyId: 'party-1', consentRef: 'consent-1', ttlMs: 1_000 },
+      NOW,
+    );
+    if (!result.ok) throw new Error('ожидалась выдача');
+    expect(isImpersonationValid(result.value, result.value.expiresAt)).toBe(false);
+    expect(isImpersonationValid(result.value, (result.value.expiresAt - 1) as Instant)).toBe(true);
+  });
+
   it('истёкшая сессия недействительна', () => {
     const result = grantImpersonation(
       authority,

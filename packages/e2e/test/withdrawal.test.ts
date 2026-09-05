@@ -27,6 +27,7 @@ import {
   GEL,
   POLICY_VERSION,
   STATEMENT_SOURCE,
+  WITHDRAWAL_CLOCK,
 } from './support/fixtures';
 import { toCollected, toReserved } from './support/paths';
 import {
@@ -69,7 +70,7 @@ async function clientWithSpareMoney(
 ): Promise<{ readonly scene: WithdrawalWorld; readonly buyer: ClientKey; readonly world: World }> {
   const collected = await toCollected({ dealId: `deal-${suffix}`, trancheId: `tranche-${suffix}` });
   const world = receiveExternalPayment(collected.world, collected.buyerKey, SPARE);
-  return { scene: withWithdrawals(world), buyer: collected.buyerKey, world };
+  return { scene: withWithdrawals(world, WITHDRAWAL_CLOCK), buyer: collected.buyerKey, world };
 }
 
 /**
@@ -194,7 +195,7 @@ describe('вывод свободных денег со счёта клиент�
     // и не может забрать: они лежат на другом счёте (красная линия №1).
     const reserved = await toReserved({ dealId: 'deal-wd-2', trancheId: 'tranche-wd-2' });
     const buyer = reserved.buyerKey;
-    let scene = withWithdrawals(reserved.world);
+    let scene = withWithdrawals(reserved.world, WITHDRAWAL_CLOCK);
 
     expect(
       accountBalance(
@@ -249,7 +250,7 @@ describe('вывод свободных денег со счёта клиент�
     expect(accountBalance(scene.world.journal, bankNominal(GEL), GEL).minor).toBe(30_000_000n);
 
     // Счёт-источник неизвестен вовсе — тот же выход, та же дверь.
-    let unknown = withWithdrawals(start.world);
+    let unknown = withWithdrawals(start.world, WITHDRAWAL_CLOCK);
     unknown = requestWithdrawal(unknown, {
       withdrawalId: 'wd-3b',
       owner: buyer,
@@ -363,7 +364,7 @@ describe('вывод свободных денег со счёта клиент�
   it('вывод собранного, но не запертого, не имеет правила — и ловится инвариантом мира', async () => {
     const collected = await toCollected({ dealId: 'deal-wd-7', trancheId: 'tranche-wd-7' });
     const buyer = collected.buyerKey;
-    let scene = withWithdrawals(collected.world);
+    let scene = withWithdrawals(collected.world, WITHDRAWAL_CLOCK);
 
     scene = requestWithdrawal(scene, {
       withdrawalId: 'wd-7',

@@ -536,13 +536,51 @@ export function invariantViolations(world: World): readonly InvariantViolation[]
  * складывать их законно.
  */
 function unbackedCollectedClaims(world: World): readonly InvariantViolation[] {
+  return collectedClaimViolations(
+    world.journal,
+    [...world.tranches.values()].map((tranche) => ({
+      owner: payerOf(tranche),
+      dealId: tranche.dealId,
+      trancheId: tranche.trancheId,
+      terminal: isTerminalTrancheStatus(tranche.state.status),
+      claimed: tranche.facts.collectedAmount,
+    })),
+  );
+}
+
+/**
+ * Притязание одного транша на деньги клиента: чьи деньги, под каким файлом и
+ * сколько объявлено собранным.
+ *
+ * Заведено ради подъёма из хранилища (`resume.ts`): у поднятого транша нет
+ * `TrancheRuntime`, а вопрос «обеспечено ли объявленное собранное» у него ровно
+ * тот же. Второй реализации той же проверки быть не должно — она разошлась бы с
+ * первой молча, и разошлась бы именно на подъёме, где проверять некому.
+ */
+export interface CollectedClaim {
+  readonly owner: ClientKey;
+  readonly dealId: string;
+  readonly trancheId: string;
+  /** Терминальный транш притязания не заявляет: его обязательство уже погашено. */
+  readonly terminal: boolean;
+  readonly claimed: Money<CurrencyCode> | null;
+}
+
+/**
+ * Та самая проверка: сумма притязаний живых траншей против того, что учёт
+ * должен их клиенту.
+ */
+export function collectedClaimViolations(
+  journal: Journal,
+  tranches: readonly CollectedClaim[],
+): readonly InvariantViolation[] {
   const claims = new Map<string, { owner: ClientKey; currency: CurrencyCode; minor: bigint }>();
-  const owners = new Map<ClientKey, TrancheRuntime[]>();
-  for (const tranche of world.tranches.values()) {
-    const owner = payerOf(tranche);
+  const owners = new Map<ClientKey, CollectedClaim[]>();
+  for (const tranche of tranches) {
+    const owner = tranche.owner;
     owners.set(owner, [...(owners.get(owner) ?? []), tranche]);
-    if (isTerminalTrancheStatus(tranche.state.status)) continue;
-    const claimed = tranche.facts.collectedAmount;
+    if (tranche.terminal) continue;
+    const claimed = tranche.claimed;
     if (claimed === null || claimed.minor <= 0n) continue;
     const key = `${owner}|${claimed.currency}`;
     const previous = claims.get(key);
@@ -555,10 +593,10 @@ function unbackedCollectedClaims(world: World): readonly InvariantViolation[] {
 
   const out: InvariantViolation[] = [];
   for (const claim of claims.values()) {
-    let backing = accountBalance(world.journal, clientFreeAccount(claim.owner), claim.currency).minor;
+    let backing = accountBalance(journal, clientFreeAccount(claim.owner), claim.currency).minor;
     for (const tranche of owners.get(claim.owner) ?? []) {
       backing += accountBalance(
-        world.journal,
+        journal,
         clientLockedAccount(claim.owner, tranche.dealId, tranche.trancheId),
         claim.currency,
       ).minor;

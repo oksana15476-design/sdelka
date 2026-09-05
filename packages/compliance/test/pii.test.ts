@@ -4,8 +4,12 @@ import {
   assessPayer,
   assessRefundDestination,
   compareNames,
+  deviceFingerprint,
   documentNumberFingerprint,
   fingerprintLabel,
+  networkAddressFingerprint,
+  personalNumberFingerprint,
+  phoneFingerprint,
   logSafeDecision,
   logSafeNameMatch,
   nameDigest,
@@ -227,6 +231,32 @@ describe('формат отпечатка проверяется целиком'
       const details = (error as { details?: Record<string, string> }).details ?? {};
       expect(JSON.stringify(details)).not.toContain(raw);
       expect(details['kind']).toBe('document_number');
+    }
+  });
+
+  /**
+   * Вид отпечатка — единственное, что остаётся в ошибке: самого значения там
+   * нет и быть не должно (это, вероятно, сырой номер документа). Перепутанный
+   * вид отправляет разработчика чинить не то место, а всё остальное в ошибке
+   * одинаково у всех шести конструкторов.
+   */
+  it('каждый конструктор называет свой вид отпечатка', () => {
+    const constructors: readonly (readonly [(value: string) => string, string])[] = [
+      [documentNumberFingerprint, 'document_number'],
+      [personalNumberFingerprint, 'personal_number'],
+      [accountFingerprint, 'account'],
+      [deviceFingerprint, 'device'],
+      [networkAddressFingerprint, 'network_address'],
+      [phoneFingerprint, 'phone'],
+    ];
+    for (const [make, kind] of constructors) {
+      let details: Record<string, string> = {};
+      try {
+        make('не отпечаток');
+      } catch (error) {
+        details = (error as { details?: Record<string, string> }).details ?? {};
+      }
+      expect(details['kind']).toBe(kind);
     }
   });
 });

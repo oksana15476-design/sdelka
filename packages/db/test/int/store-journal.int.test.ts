@@ -40,6 +40,7 @@ import {
 import { expect, it } from 'vitest';
 import { DbError, DbErrorCode } from '../../src/errors.ts';
 import { appendJournal, readJournal } from '../../src/store/journal.ts';
+import type { JournalScope } from '../../src/store/port.ts';
 import { dbSuite, withRollback } from './support/pg.ts';
 
 /**
@@ -51,6 +52,19 @@ import { dbSuite, withRollback } from './support/pg.ts';
  * читать было нечего, и 161 интеграционный тест сторожил схему, которую в
  * рантайме не наполнял никто.
  */
+
+/**
+ * Охват чтения — **весь журнал**, и он назван словом.
+ *
+ * Набор проверяет таблицу целиком: он идёт в откатываемой транзакции, где кроме
+ * его же записей ничего нет. Пропуском аргумента этого больше не получить —
+ * охват у чтения обязателен (`src/store/port.ts`, `JournalScope`).
+ */
+const WHOLE_JOURNAL: JournalScope = Object.freeze({
+  kind: 'everything',
+  reasonKey: 'db.test.whole_journal',
+});
+
 const { run, title, pool } = await dbSuite('хранилище: журнал учёта');
 
 const GEL = 'GEL' as const;
@@ -113,7 +127,7 @@ run(title, () => {
     await withRollback(pool, async (client) => {
       const outcome = await appendJournal(client, source.entries);
       expect(outcome).toEqual({ written: 4, repeated: 0 });
-      const read = await readJournal(client);
+      const read = await readJournal(client, WHOLE_JOURNAL);
       // Не «похож», а равен: идентификаторы, порядок, вид, ключ операции,
       // ссылка исправления, объявление расчёта и все проводки со счётом,
       // направлением, суммой и отнесением.
@@ -126,7 +140,7 @@ run(title, () => {
     const source = sampleJournal();
     await withRollback(pool, async (client) => {
       await appendJournal(client, source.entries);
-      const read = await readJournal(client);
+      const read = await readJournal(client, WHOLE_JOURNAL);
       expect(checkLedgerInvariants(read)).toEqual(checkLedgerInvariants(source));
     });
   });
@@ -139,7 +153,7 @@ run(title, () => {
     const entry = clientTopUp(meta('e-huge', '2026-03-01T10:00:00.000Z'), BUYER, huge);
     await withRollback(pool, async (client) => {
       await appendJournal(client, [entry]);
-      const read = await readJournal(client);
+      const read = await readJournal(client, WHOLE_JOURNAL);
       const posting = read.entries[0]?.postings[0];
       expect(typeof posting?.amount.minor).toBe('bigint');
       expect(posting?.amount.minor).toBe(9_007_199_254_740_993_000n);
@@ -155,7 +169,7 @@ run(title, () => {
       // Повтор виден числом, а не молчанием: «повторили» и «записали дважды»
       // обязаны различаться.
       expect(again).toEqual({ written: 0, repeated: 4 });
-      const read = await readJournal(client);
+      const read = await readJournal(client, WHOLE_JOURNAL);
       expect(read.entries).toHaveLength(4);
       expect(read).toEqual(source);
     });
@@ -218,7 +232,7 @@ run(title, () => {
     ]);
     await withRollback(pool, async (client) => {
       expect(await appendJournal(client, source.entries)).toEqual({ written: 5, repeated: 0 });
-      const read = await readJournal(client);
+      const read = await readJournal(client, WHOLE_JOURNAL);
       expect(read).toEqual(source);
       // Версия плана — не украшение записи: §4.2 запрещает пересчёт задним
       // числом, и восстановить её из проводок нельзя.
@@ -253,7 +267,7 @@ run(title, () => {
     ]);
     await withRollback(pool, async (client) => {
       expect(await appendJournal(client, source.entries)).toEqual({ written: 4, repeated: 0 });
-      const read = await readJournal(client);
+      const read = await readJournal(client, WHOLE_JOURNAL);
       expect(read).toEqual(source);
       // И14.2: выписка требует курсы. Из двух сумм курс не восстанавливается —
       // усечение необратимо, — поэтому все три хранятся целыми числителем и
@@ -280,7 +294,7 @@ run(title, () => {
     ]);
     await withRollback(pool, async (client) => {
       expect(await appendJournal(client, source.entries)).toEqual({ written: 2, repeated: 0 });
-      const read = await readJournal(client);
+      const read = await readJournal(client, WHOLE_JOURNAL);
       expect(read).toEqual(source);
       expect(read.entries[1]?.funds?.recognisedEntryId).toBe('e-sh1-recognised');
     });
@@ -333,7 +347,7 @@ run(title, () => {
     ]);
     await withRollback(pool, async (client) => {
       await appendJournal(client, source.entries);
-      const read = await readJournal(client);
+      const read = await readJournal(client, WHOLE_JOURNAL);
       expect(read).toEqual(source);
       expect(read.entries[2]?.settles?.ceiling.maxShare).toEqual(rational(1n, 100n));
     });

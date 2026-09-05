@@ -256,6 +256,13 @@ function blank(code, start, end) {
   return code.slice(0, start) + removed + code.slice(end);
 }
 
+/** Текст строки, в которой стоит смещение, без отступа и хвостовых пробелов. */
+function sourceLineAt(code, offset) {
+  const from = code.lastIndexOf('\n', offset - 1) + 1;
+  const to = code.indexOf('\n', offset);
+  return code.slice(from, to === -1 ? code.length : to).trim();
+}
+
 function lineOf(code, offset) {
   let line = 1;
   for (let index = 0; index < offset; index += 1) if (code[index] === '\n') line += 1;
@@ -518,10 +525,83 @@ export function buildCatalogue() {
     );
     runtime.sort((left, right) => left.at - right.at);
     for (const mutant of runtime) {
-      mutants.push({ ...mutant, id: `${name}::${mutant.operator}::${mutant.tag}` });
+      mutants.push({
+        ...mutant,
+        id: `${name}::${mutant.operator}::${mutant.tag}`,
+        // Текст строки нужен ключу объявления равносильности: он переживает
+        // сдвиг номеров строк, а номер — нет.
+        sourceLine: sourceLineAt(code, mutant.at),
+      });
     }
   }
   return mutants;
+}
+
+/* ------------------------------------------------------------------ */
+/* Равносильные мутации                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Мутации, которые набор не убивает и убить не может: подменённый код
+ * недостижим либо подмена тождественна. Формат — тот же, что у стенда
+ * `packages/compliance` (`compliance-mutants.mjs`), и это намеренно: два разных
+ * соглашения на два стенда означали бы, что разбор одного нельзя прочитать,
+ * зная другой.
+ *
+ * Объявление здесь — не способ закрыть глаза, а запись разбора. Оно проверяется
+ * в обе стороны: объявление, потерявшее свою мутацию, — устаревший разбор от
+ * прежнего кода; объявленная равносильной мутация, которую набор **убил**, —
+ * неверный разбор. Оба случая роняют прогон.
+ */
+export const EQUIVALENT_MUTANTS = Object.freeze([
+  {
+    file: 'reference.ts',
+    operator: 'throw',
+    sourceLine:
+      "throw new IntakeError(IntakeErrorCode.referenceAlphabet, { character: String(check) });",
+    description: 'удалено: throw new IntakeError(IntakeErrorCode.referenceA\u2026',
+    reason:
+      'Индекс считается как `(36 − total % 36) % 36`, то есть лежит в [0,35], а алфавит ' +
+      'длиной ровно 36. `undefined` не бывает ни при каком входе. `throw` существует ' +
+      'только чтобы сузить `string | undefined` до `string` под `noUncheckedIndexedAccess` — ' +
+      'это утверждение для компилятора, а не ветка поведения.',
+  },
+  {
+    file: 'matching.ts',
+    operator: 'throw',
+    sourceLine: "throw new IntakeError(IntakeErrorCode.basisPointsOutOfRange, { value: '1' });",
+    description: 'удалено: throw new IntakeError(IntakeErrorCode.basisPoint\u2026',
+    reason:
+      'Обращение `above[0]` внутри ветки `above.length === 1`: элемент есть по условию ветки. ' +
+      'То же сужение типа под `noUncheckedIndexedAccess`, что и в `reference.ts`.',
+  },
+  {
+    file: 'tracking.ts',
+    operator: 'str',
+    sourceLine: "case 'not_observable':",
+    description: "'not_observable' → 'observed_by_us'",
+    reason:
+      'Ветка `not_observable` в приватной `evidenceKey`. Единственный вызывающий — ' +
+      '`trackingView`, и он такие участки отсеивает раньше вызова. Ветка нужна ' +
+      'компилятору для полноты `switch`, а исполниться не может ни при каком входе.',
+  },
+  {
+    file: 'tracking.ts',
+    operator: 'key',
+    sourceLine: 'return INTAKE_REASON_KEYS.trackingLegNotObservable;',
+    description: 'trackingLegNotObservable → trackingOverdue',
+    reason: 'Тело той же недостижимой ветки `not_observable`. См. объявление выше.',
+  },
+]);
+
+/**
+ * Ключ объявления. Позиция внутри строки здесь не нужна: ни одна из четырёх
+ * равносильных мутаций не делит строку с другой мутацией того же оператора.
+ * Если такая строка появится, ключ придётся уточнить позицией — ровно так, как
+ * это уже пришлось сделать в стенде `compliance`.
+ */
+export function equivalenceKey(item) {
+  return `${item.file}::${item.operator}::${item.sourceLine}::${item.description}`;
 }
 
 /** Мутация по идентификатору. Неизвестный идентификатор — отказ, а не тишина. */

@@ -58,6 +58,10 @@ describe('расхождение суммы с ценой в договоре', 
     const result = assess({ contractPrice: null });
     expect(result.outcome).toBe('stop');
     expect(result.reasons).toContain('compliance.price.contract_missing');
+    // Стоп из-за нехватки документа — не оценка на отчёт о подозрении:
+    // договора просто ещё нет, и подозревать пока нечего. Флаг ведёт к подаче
+    // отчёта в надзорную службу, и ставить его без основания нельзя.
+    expect(result.suspicionAssessmentRequired).toBe(false);
   });
 
   it('разные валюты — стоп, а не сравнение чисел', () => {
@@ -65,6 +69,9 @@ describe('расхождение суммы с ценой в договоре', 
     expect(result.outcome).toBe('stop');
     expect(result.reasons).toContain('compliance.price.currency_mismatch');
     expect(result.deltaMinor).toBeNull();
+    // Несравнимые величины — тоже не подозрение: сравнить не удалось, а не
+    // «расхождение обнаружено».
+    expect(result.suspicionAssessmentRequired).toBe(false);
   });
 
   it('нулевая цена договора читается как отсутствие цены, а не делится на ноль', () => {

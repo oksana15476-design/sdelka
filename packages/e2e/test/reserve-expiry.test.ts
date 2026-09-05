@@ -18,7 +18,14 @@ import {
 import {
   applyTrancheEvent,
 } from './support/acting';
-import { DAY_MS, DEAL_AMOUNT, GEL, POLICY_VERSION, STATEMENT_SOURCE } from './support/fixtures';
+import {
+  DAY_MS,
+  DEAL_AMOUNT,
+  GEL,
+  POLICY_VERSION,
+  STATEMENT_SOURCE,
+  WITHDRAWAL_CLOCK,
+} from './support/fixtures';
 import { toReserved } from './support/paths';
 import {
   type WithdrawalStepOptions,
@@ -57,7 +64,7 @@ function preparedWithdrawal(
   owner: ClientKey,
   id: string,
 ): WithdrawalWorld {
-  let scene = requestWithdrawal(withWithdrawals(world), {
+  let scene = requestWithdrawal(withWithdrawals(world, WITHDRAWAL_CLOCK), {
     withdrawalId: id,
     owner,
     amount: DEAL_AMOUNT,

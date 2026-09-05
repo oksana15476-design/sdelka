@@ -11,14 +11,21 @@ import {
 import {
   type Approval,
   type ClientAccountFacts,
+  type Instant,
   type LockedPortion,
+  type NonTerminalWithdrawalStatus,
   type Rejection,
   type SourceAccountRef,
+  type WithdrawalClockPolicy,
+  type WithdrawalContext,
   type WithdrawalEvent,
   type WithdrawalState,
   createWithdrawal,
   isTerminalTrancheStatus,
+  isTerminalWithdrawalStatus,
+  isWithdrawalStalled,
   reduceWithdrawal,
+  withdrawalStateAge,
 } from '@sdelka/domain';
 import {
   type ClientKey,
@@ -115,6 +122,24 @@ export interface WithdrawalRuntime {
    * см. `withdrawalActionContext`.
    */
   readonly blockedBy: ActorRef | null;
+  /**
+   * След о том, что заявку уже подняли дежурному. `null` — не поднимали.
+   *
+   * Нужен ровно для одного: задача о простое заводится **один раз на простой**, а
+   * не на каждый проход часов. Ключ следа — статус вместе с моментом входа в
+   * него: перешла заявка в другое состояние — простой начался заново и задача
+   * будет новой; остался тот же (`paying_out --payout_result(unknown)-->
+   * paying_out`, внутренний самопереход) — простой тот же, и второй задачи о нём
+   * не появится.
+   */
+  readonly stall: WithdrawalStallMark | null;
+}
+
+/** След поднятой задачи: какой простой уже показан дежурному. */
+export interface WithdrawalStallMark {
+  readonly taskId: string;
+  readonly status: NonTerminalWithdrawalStatus;
+  readonly enteredAt: Instant;
 }
 
 /**
@@ -131,10 +156,22 @@ export interface WithdrawalRuntime {
 export interface WithdrawalWorld {
   readonly world: World;
   readonly withdrawals: ReadonlyMap<string, WithdrawalRuntime>;
+  /**
+   * Часы заявок: срок операции и норматив простоя.
+   *
+   * Лежат на сцене, а не приезжают аргументом в каждый шаг, по той же причине,
+   * по которой сессии лежат в мире: политика, переданная в шаг, — это политика,
+   * которую вызывающий собрал сам, и тогда норматив у каждого шага свой.
+   *
+   * Аргумент **обязателен**: величина принадлежит владельцу и приходит версией
+   * настройки (`withdrawal-clock.ts`). Умолчание здесь означало бы норматив, до
+   * которого можно докатиться, забыв параметр.
+   */
+  readonly clock: WithdrawalClockPolicy;
 }
 
-export function withWithdrawals(world: World): WithdrawalWorld {
-  return { world, withdrawals: new Map<string, WithdrawalRuntime>() };
+export function withWithdrawals(world: World, clock: WithdrawalClockPolicy): WithdrawalWorld {
+  return { world, withdrawals: new Map<string, WithdrawalRuntime>(), clock };
 }
 
 function runtimeOf(scene: WithdrawalWorld, withdrawalId: string): WithdrawalRuntime {
@@ -153,6 +190,17 @@ function replace(
   const next = new Map(scene.withdrawals);
   next.set(withdrawalId, runtime);
   return next;
+}
+
+/**
+ * Момент и таблица сроков для шага автомата.
+ *
+ * Собирается **из сцены**, а не из аргумента вызывающего: «сейчас» у мира одно
+ * (`world.now`), норматив — владельца. Свободные поля здесь означали бы шаг, у
+ * которого своё время и свой срок.
+ */
+function withdrawalContext(scene: WithdrawalWorld): WithdrawalContext {
+  return { now: scene.world.now, deadlinePolicy: scene.clock.deadline };
 }
 
 /* ------------------------------------------------------------------------- */
@@ -362,7 +410,10 @@ export function requestWithdrawal(
     throw new Error(`app.withdrawal.duplicate:${spec.withdrawalId}`);
   }
   const runtime: WithdrawalRuntime = {
-    state: createWithdrawal(spec.withdrawalId),
+    // Дедлайн ставится вместе с заявкой: нетерминальной заявки без срока не
+    // существует по типу (`client-account.ts`), и часы владельца — единственный
+    // источник его длины.
+    state: createWithdrawal(spec.withdrawalId, scene.world.now, scene.clock.deadline),
     owner: spec.owner,
     amount: spec.amount,
     sourceAccount: spec.sourceAccount === undefined ? KNOWN_SOURCE_ACCOUNT : spec.sourceAccount,
@@ -371,12 +422,17 @@ export function requestWithdrawal(
     approvals: Object.freeze([]),
     approvalRecords: Object.freeze([]),
     blockedBy: null,
+    stall: null,
   };
   const next = new Map(scene.withdrawals);
   next.set(spec.withdrawalId, runtime);
   // Запрос вывода деньги не двигает: он их только называет. Шаг всё равно
   // запечатывается — «инварианты после каждого шага» не знает исключений.
-  return { world: sealed({ ...scene.world, checks: scene.world.checks }), withdrawals: next };
+  return {
+    world: sealed({ ...scene.world, checks: scene.world.checks }),
+    withdrawals: next,
+    clock: scene.clock,
+  };
 }
 
 /**
@@ -405,6 +461,7 @@ export function approveWithdrawal(
       approvals: [...runtime.approvals, { userId: person.accountId }],
       approvalRecords: [...runtime.approvalRecords, approval.value],
     }),
+    clock: scene.clock,
   };
 }
 
@@ -449,7 +506,7 @@ export function applyWithdrawalEvent<E extends WithdrawalEvent>(
     requireWithdrawalQuorum(runtime);
   }
   const facts = withdrawalFacts(scene, withdrawalId);
-  const result = reduceWithdrawal(runtime.state, event, facts);
+  const result = reduceWithdrawal(runtime.state, event, facts, withdrawalContext(scene));
   if (!result.ok) {
     throw new Error(`app.withdrawal.rejected:${result.error.code}:${result.error.failedGuards.join(',')}`);
   }
@@ -492,6 +549,7 @@ export function applyWithdrawalEvent<E extends WithdrawalEvent>(
   });
 
   return {
+    clock: scene.clock,
     world: sealed({ ...world, seq, journal, chain, checks: world.checks }),
     withdrawals: replace(scene, withdrawalId, moved),
   };
@@ -594,7 +652,12 @@ export function rejectWithdrawalEvent(
   event: WithdrawalEvent,
 ): Rejection {
   const runtime = runtimeOf(scene, withdrawalId);
-  const result = reduceWithdrawal(runtime.state, event, withdrawalFacts(scene, withdrawalId));
+  const result = reduceWithdrawal(
+    runtime.state,
+    event,
+    withdrawalFacts(scene, withdrawalId),
+    withdrawalContext(scene),
+  );
   if (result.ok) {
     throw new Error(`app.withdrawal.unexpected_transition:${result.value.state.status}`);
   }

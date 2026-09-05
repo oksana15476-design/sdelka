@@ -45,7 +45,7 @@ import {
 import { isoDate, money, rational } from '@sdelka/money';
 import { expect, it } from 'vitest';
 import { pgWorldStore } from '../../src/store/pg-store.ts';
-import type { WorldStore } from '../../src/store/port.ts';
+import type { JournalScope, WorldStore } from '../../src/store/port.ts';
 import type {
   DealSnapshot,
   PayoutSnapshot,
@@ -83,6 +83,19 @@ import { savepointStore } from './support/store.ts';
  * объявления `accrues`, `converts` и `funds` в `sdelka.ledger_entry` не было.
  * Завела `0021_entry_declarations.sql`.
  */
+
+/**
+ * Охват чтения — **весь журнал**, и он назван словом.
+ *
+ * Набор проверяет таблицу целиком: он идёт в откатываемой транзакции, где кроме
+ * его же записей ничего нет. Пропуском аргумента этого больше не получить —
+ * охват у чтения обязателен (`src/store/port.ts`, `JournalScope`).
+ */
+const WHOLE_JOURNAL: JournalScope = Object.freeze({
+  kind: 'everything',
+  reasonKey: 'db.test.whole_journal',
+});
+
 const { run, title, pool } = await dbSuite('хранилище: сквозной сценарий');
 
 const GEL = 'GEL' as const;
@@ -431,7 +444,7 @@ run(title, () => {
 
       /* --- Мир поднимается из базы заново --- */
       const reloaded = await store.transact(async (tx) => ({
-        journal: await tx.readJournal(),
+        journal: await tx.readJournal(WHOLE_JOURNAL),
         chain: await tx.readChain(CHAIN),
         deal: await tx.loadDeal(DEAL),
         tranche: await tx.loadTranche(DEAL, TRANCHE),
@@ -652,7 +665,7 @@ run(title, () => {
 
       /* --- Мир поднимается из базы заново --- */
       const reloaded = await store.transact(async (tx) => ({
-        journal: await tx.readJournal(),
+        journal: await tx.readJournal(WHOLE_JOURNAL),
         chain: await tx.readChain(CHAIN),
         deal: await tx.loadDeal(DEAL),
         tranche: await tx.loadTranche(DEAL, TRANCHE),
@@ -711,7 +724,7 @@ run(title, () => {
         );
       });
       await expect(doomed).rejects.toThrow();
-      const after = await store.transact(async (tx) => tx.readJournal());
+      const after = await store.transact(async (tx) => tx.readJournal(WHOLE_JOURNAL));
       expect(after.entries).toEqual([]);
     });
   });
@@ -729,7 +742,7 @@ run(title, () => {
       throw new Error('шаг решил, что дальше нельзя');
     });
     await expect(failed).rejects.toThrow('шаг решил, что дальше нельзя');
-    const after = await store.transact(async (tx) => tx.readJournal());
+    const after = await store.transact(async (tx) => tx.readJournal(WHOLE_JOURNAL));
     expect(after.entries.some((item) => item.id === entry.id)).toBe(false);
   });
 });

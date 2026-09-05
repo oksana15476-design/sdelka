@@ -85,6 +85,20 @@ describe('котировка гасится при движении рынка �
   it('срок истёк — котировка просрочена', () => {
     const report = quoteStatus(makeQuote(), RATES.reference.value, at(3 * 60 * 60 * 1000));
     expect(report.status).toBe('expired');
+    // Причина называется, а не подразумевается: «срок истёк» и «рынок ушёл»
+    // ведут клиента к разным действиям — подождать новую котировку или
+    // пересогласовать курс, — и подменить одну другой значит послать его не туда.
+    expect(report.reasons).toEqual([INTAKE_REASON_KEYS.quoteExpired]);
+  });
+
+  it('у каждого статуса своя причина, и она одна', () => {
+    const moved = rationalFromDecimalString('2.7500');
+    expect(quoteStatus(makeQuote(), moved, at(60_000)).reasons).toEqual([
+      INTAKE_REASON_KEYS.quoteVoidedByMarketMove,
+    ]);
+    expect(quoteStatus(makeQuote(), RATES.reference.value, at(60_000)).reasons).toEqual([
+      INTAKE_REASON_KEYS.quoteFirm,
+    ]);
   });
 
   it('оба условия сразу — показывается уход рынка, а не часы', () => {
@@ -122,7 +136,12 @@ describe('конвертация невозможна без явного под
     const decision = decideConversion(makeQuote(), RATES.reference.value, null, at(60_000), 'trunc');
     expect(decision.allowed).toBe(false);
     expect(decision.converted).toBeNull();
-    expect(decision.reasons).toContain(INTAKE_REASON_KEYS.quoteConfirmationMissing);
+    // Отказ несёт свою причину **и** состояние котировки: клиенту показывается,
+    // что подтвердить, и что именно он подтверждает.
+    expect(decision.reasons).toEqual([
+      INTAKE_REASON_KEYS.quoteConfirmationMissing,
+      INTAKE_REASON_KEYS.quoteFirm,
+    ]);
   });
 
   it('подтверждение выдано на другую котировку — не подходит', () => {
@@ -154,6 +173,9 @@ describe('конвертация невозможна без явного под
     );
     expect(decision.allowed).toBe(false);
     expect(decision.converted).toBeNull();
+    // Причина отказа — истечение срока, а не отсутствие подтверждения:
+    // подтверждение было, и требовать его заново клиента только запутает.
+    expect(decision.reasons).toEqual([INTAKE_REASON_KEYS.quoteExpired]);
   });
 
   it('твёрдая котировка с подтверждением конвертируется', () => {
@@ -167,6 +189,10 @@ describe('конвертация невозможна без явного под
     expect(decision.allowed).toBe(true);
     expect(decision.converted?.target.currency).toBe('GEL');
     expect(decision.converted?.rates).toBe(RATES);
+    // Разрешённая конвертация помечена твёрдостью котировки. Причина «рынок
+    // ушёл» на разрешённой операции — прямое противоречие в том, что видит
+    // клиент: деньги сконвертированы по курсу, объявленному недействительным.
+    expect(decision.reasons).toEqual([INTAKE_REASON_KEYS.quoteFirm]);
   });
 });
 

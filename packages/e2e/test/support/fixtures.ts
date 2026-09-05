@@ -49,8 +49,10 @@ import {
   type RegistryApplicationCard,
   type RegistryExtract,
   type RegistryPort,
+  PROVISIONAL_WITHDRAWAL_CLOCK_VALUE,
   toClientKey,
 } from '@sdelka/app';
+import type { WithdrawalClockPolicy } from '@sdelka/domain';
 
 /**
  * Фикстуры сквозного контура.
@@ -65,6 +67,16 @@ import {
 export const NOW: Instant = instant(Date.UTC(2026, 8, 3, 10, 0, 0));
 export const POLICY = POLICY_2026_09_03;
 export const POLICY_VERSION = POLICY.version;
+
+/**
+ * Часы заявки на вывод в сквозных сценариях.
+ *
+ * ⚠ **Временное значение владельца, а не число сценария** (`DECISIONS-REVIEW.md`
+ * §H4 **[открыто]**). Сценарий, придумавший себе норматив, проверяет
+ * придуманное; как эта величина берётся из журнала версий настроек, показывает
+ * `withdrawal-stall.test.ts`.
+ */
+export const WITHDRAWAL_CLOCK: WithdrawalClockPolicy = PROVISIONAL_WITHDRAWAL_CLOCK_VALUE;
 
 export const GEL: CurrencyCode = 'GEL';
 export const USD: CurrencyCode = 'USD';

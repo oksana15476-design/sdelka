@@ -1,6 +1,7 @@
 import { type AuditChain, type AuditRecord, verifyChain } from '@sdelka/audit';
 import type {
   DealSnapshot,
+  JournalScope,
   PayoutSnapshot,
   TrancheSnapshot,
   WithdrawalSnapshot,
@@ -138,9 +139,17 @@ class MemoryTransaction implements WorldTransaction {
     return { written, repeated };
   }
 
-  async readJournal(): Promise<Journal> {
+  /**
+   * Журнал в названном охвате — **то же правило отбора, что у `pgWorldStore`**:
+   * начало идентификатора, и ничего больше. Точное правило («запись этой
+   * цепочки») знает слой приложения, а не хранилище, и применяет его подъём
+   * мира; здесь отбор грубый намеренно — реализация в памяти обязана отдавать
+   * то же, что база, включая её грубость.
+   */
+  async readJournal(scope: JournalScope): Promise<Journal> {
     let journal = emptyJournal;
     for (const entry of this.#rows.entries.values()) {
+      if (scope.kind === 'chain' && !entry.id.startsWith(scope.entryIdPrefix)) continue;
       journal = appendEntry(journal, entry);
     }
     return journal;

@@ -1,7 +1,15 @@
 import { type CurrencyCode, type Money, compare, isPositive, money } from '@sdelka/money';
 import type { Approval } from './guards';
 import { withdrawalIdempotencyKey } from './ids';
-import type { Instant } from './instant';
+import {
+  type Deadline,
+  type DurationMs,
+  type Instant,
+  DAY,
+  HOUR,
+  deadline,
+  plus,
+} from './instant';
 import { type Rejection, type Result, RejectionCode, failure, ok, rejection } from './result';
 import type { PayoutOutcome, ReconciliationOutcome } from './tranche-events';
 
@@ -190,6 +198,21 @@ export function isTerminalWithdrawalStatus(
   return (TERMINAL_WITHDRAWAL_STATUSES as readonly string[]).includes(status);
 }
 
+export type NonTerminalWithdrawalStatus = Exclude<WithdrawalStatus, TerminalWithdrawalStatus>;
+
+/**
+ * Нетерминальные статусы перечнем — **выведены** из двух уже существующих, а не
+ * набраны третьим списком. Третий список это третье место, где перечень
+ * расходится: у транша ровно так и разъехались таблица часов и таблица
+ * переходов.
+ */
+export const NON_TERMINAL_WITHDRAWAL_STATUSES: readonly NonTerminalWithdrawalStatus[] =
+  Object.freeze(
+    WITHDRAWAL_STATUSES.filter(
+      (status): status is NonTerminalWithdrawalStatus => !isTerminalWithdrawalStatus(status),
+    ),
+  );
+
 export type WithdrawalEvent =
   | { readonly type: 'withdrawal_approved' }
   | { readonly type: 'withdrawal_blocked'; readonly reason: string }
@@ -274,19 +297,204 @@ export const WITHDRAWAL_TRANSITIONS: readonly WithdrawalTransition[] = Object.fr
   transition('blocked', 'withdrawal_cancelled', 'cancelled'),
 ]);
 
-export interface WithdrawalState {
-  readonly status: WithdrawalStatus;
-  readonly withdrawalId: string;
-  /** Ключ детерминирован по выводу: ни попытки, ни времени в нём нет. */
-  readonly idempotencyKey: string;
+/**
+ * Состояние заявки на вывод.
+ *
+ * **Дедлайн лежит внутри нетерминального варианта** — тем же приёмом, что у
+ * транша (`tranche.ts`, `FUNCTIONAL.md` инвариант 7): «нетерминальная заявка без
+ * дедлайна» не собирается, потому что такого варианта союза нет. До сих пор его
+ * не было вовсе: заявка могла стоять сколько угодно, и никто об этом не узнавал
+ * (`DECISIONS-REVIEW.md` §H4).
+ *
+ * Отметок времени две, и смешивать их нельзя (`STATE-MACHINES.md` §5):
+ *
+ * - `deadline` — **срок операции**. Двигается: повторный `payout_result(unknown)`
+ *   пересчитывает его, потому что банк ответил и отсчёт пошёл заново.
+ * - `enteredAt` — момент входа в состояние. **Не двигается** внутренним
+ *   самопереходом, и именно по нему считается возраст и эскалация. Считай
+ *   возраст по дедлайну — застрявшая в «неизвестно» заявка выглядела бы вечно
+ *   свежей и не попадала бы в очередь разбора никогда.
+ */
+export type WithdrawalState =
+  | {
+      readonly status: NonTerminalWithdrawalStatus;
+      readonly withdrawalId: string;
+      /** Ключ детерминирован по выводу: ни попытки, ни времени в нём нет. */
+      readonly idempotencyKey: string;
+      readonly deadline: Deadline;
+      readonly enteredAt: Instant;
+    }
+  | {
+      readonly status: TerminalWithdrawalStatus;
+      readonly withdrawalId: string;
+      readonly idempotencyKey: string;
+    };
+
+export function nonTerminalWithdrawalState(
+  status: NonTerminalWithdrawalStatus,
+  withdrawalId: string,
+  at: Deadline,
+  enteredAt: Instant,
+): WithdrawalState {
+  return Object.freeze({
+    status,
+    withdrawalId,
+    idempotencyKey: withdrawalIdempotencyKey(withdrawalId),
+    deadline: at,
+    enteredAt,
+  });
 }
 
-export function createWithdrawal(withdrawalId: string): WithdrawalState {
+/**
+ * Терминальная заявка часов не имеет вовсе: ни дедлайна, ни возраста. Выплаченный
+ * и отменённый вывод не эскалируют, и спрашивать о них часы нечего.
+ */
+export function terminalWithdrawalState(
+  status: TerminalWithdrawalStatus,
+  withdrawalId: string,
+): WithdrawalState {
   return Object.freeze({
-    status: 'requested',
+    status,
     withdrawalId,
     idempotencyKey: withdrawalIdempotencyKey(withdrawalId),
   });
+}
+
+/* ------------------------------------------------------------------------- */
+/* Часы заявки                                                               */
+/* ------------------------------------------------------------------------- */
+
+/** Сроки операции по нетерминальным состояниям заявки. */
+export type WithdrawalDeadlinePolicy = Readonly<
+  Record<NonTerminalWithdrawalStatus, DurationMs>
+>;
+
+/** Нормативы простоя: после какого возраста заявку поднимают человеку. */
+export type WithdrawalEscalationPolicy = Readonly<
+  Record<NonTerminalWithdrawalStatus, DurationMs>
+>;
+
+/**
+ * Часы заявки целиком: срок операции и норматив простоя.
+ *
+ * Две таблицы, а не одна, и по той же причине, по которой их две у транша:
+ * дедлайн двигается ответом банка, норматив — нет. Одно число на обе роли
+ * означало бы, что каждый неответ банка обнуляет и норматив тоже.
+ */
+export interface WithdrawalClockPolicy {
+  readonly deadline: WithdrawalDeadlinePolicy;
+  readonly escalation: WithdrawalEscalationPolicy;
+}
+
+/**
+ * ⚠ **ВРЕМЕННОЕ ЗНАЧЕНИЕ, НЕ РЕШЕНИЕ ВЛАДЕЛЬЦА.**
+ *
+ * Ни одного из этих восьми чисел нет ни в одном документе проекта: `H4` в
+ * `DECISIONS-REVIEW.md` прямо называет норматив вывода **числом владельца** и
+ * оставляет его открытым, `CABINETS-REDESIGN.md` §6.5 — тоже. Значения взяты
+ * **по аналогии** с таблицами транша (`DEFAULT_DEADLINE_POLICY`,
+ * `DEFAULT_ESCALATION_POLICY`) — то есть это перенос чужого умолчания, а не
+ * выбор:
+ *
+ * - `requested` — сутки, как `pending` у транша: заявка заведена, денег никуда
+ *   не двигали;
+ * - `approved` — четыре часа на отправку поручения, как `release_pending`:
+ *   подписи собраны, дальше дело человека, и это самое дорогое ожидание для
+ *   клиента — деньги уже обещаны;
+ * - `paying_out` — сутки на ответ банка, эскалация на вторые: выход отсюда
+ *   гарантирует ежедневная сверка, и в норматив попадает ровно та заявка,
+ *   которая застряла между повторами `unknown`;
+ * - `blocked` — четыре часа, как `release_blocked`: выход зависит **только** от
+ *   человека, поэтому норматив самый короткий.
+ *
+ * Пока владелец не ответил, значение живёт версией настройки
+ * (`@sdelka/settings`), а не константой в коде: подставленное сюда число —
+ * временное умолчание, и всякий, кто его читает, обязан видеть это слово.
+ *
+ * Вопрос — `DECISIONS-REVIEW.md` §H4 **[открыто]**.
+ */
+export const PROVISIONAL_WITHDRAWAL_CLOCK: WithdrawalClockPolicy = Object.freeze({
+  deadline: Object.freeze({
+    requested: DAY,
+    approved: (4 * HOUR) as DurationMs,
+    paying_out: DAY,
+    blocked: DAY,
+  }),
+  escalation: Object.freeze({
+    requested: DAY,
+    approved: (4 * HOUR) as DurationMs,
+    paying_out: (2 * DAY) as DurationMs,
+    blocked: (4 * HOUR) as DurationMs,
+  }),
+});
+
+/**
+ * **Часы заявки не двигают деньги ни из одного состояния — и это выражено
+ * типом, а не значением.**
+ *
+ * У транша таблица часов частичная: три состояния наступление срока уводит
+ * дальше автоматически. У вывода таких состояний нет **ни одного**, и тип
+ * `Record<…, null>` не даёт их появиться правкой значения:
+ *
+ * - `requested` и `approved` — деньги клиента лежат в свободной части его же
+ *   счёта, и автоматический выход отсюда был бы либо выпуском поручения без
+ *   человека, либо отменой заявки без основания;
+ * - `paying_out` — красная линия №8: «неизвестно» у выплаты легально, и повтор
+ *   из него запрещён без прохождения через сверку. Событие по сроку здесь и
+ *   есть тот автоматический повтор, ради запрета которого правило написано;
+ * - `blocked` — то же, что `release_blocked` у транша: автоматический выход из
+ *   разбора — дефект, ради запрета которого состояние существует.
+ *
+ * Наступление срока поднимает **человека** (`isWithdrawalStalled` → очередь
+ * разбора `@sdelka/compliance`), и другого исхода у часов вывода нет.
+ */
+export const WITHDRAWAL_CLOCK_EVENTS: Readonly<Record<NonTerminalWithdrawalStatus, null>> =
+  Object.freeze({
+    requested: null,
+    approved: null,
+    paying_out: null,
+    blocked: null,
+  });
+
+/**
+ * Возраст состояния заявки в миллисекундах — от входа в него, а не от дедлайна.
+ * `null` у терминальной: у закрытой заявки возраста нет, её не эскалируют.
+ *
+ * Число, а не `DurationMs`: ноль и отрицательное — законные значения (заявка
+ * только что вошла в состояние; часы дежурного разошлись с записью), а
+ * `DurationMs` строго положителен по построению.
+ */
+export function withdrawalStateAge(state: WithdrawalState, now: Instant): number | null {
+  return 'enteredAt' in state ? now - state.enteredAt : null;
+}
+
+/**
+ * Простояла ли заявка дольше норматива. Отдельно от дедлайна: дедлайн — срок
+ * операции, норматив — часы внимания дежурного (`STATE-MACHINES.md` §5).
+ */
+export function isWithdrawalStalled(
+  state: WithdrawalState,
+  now: Instant,
+  policy: WithdrawalEscalationPolicy,
+): boolean {
+  if (!('enteredAt' in state)) return false;
+  return now - state.enteredAt >= policy[state.status];
+}
+
+/**
+ * Заявка на вывод. Дедлайн ставится сразу: состояния без него не существует.
+ */
+export function createWithdrawal(
+  withdrawalId: string,
+  now: Instant,
+  policy: WithdrawalDeadlinePolicy,
+): WithdrawalState {
+  return nonTerminalWithdrawalState(
+    'requested',
+    withdrawalId,
+    deadline(plus(now, policy.requested)),
+    now,
+  );
 }
 
 export interface WithdrawalTransitionResult {
@@ -300,10 +508,51 @@ function eventOutcome(event: WithdrawalEvent): PayoutOutcome | null {
   return null;
 }
 
+/**
+ * Что нужно шагу сверх фактов: **момент и таблица сроков**.
+ *
+ * Отдельный аргумент, а не поле фактов: факты отвечают на вопрос «можно ли»
+ * (остаток, счёт-источник, подписи), контекст — «когда». Смешать их значило бы
+ * разрешить вызывающему подать вместе с остатком и своё «сейчас».
+ */
+export interface WithdrawalContext {
+  readonly now: Instant;
+  readonly deadlinePolicy: WithdrawalDeadlinePolicy;
+}
+
+/**
+ * Состояние после перехода: часы переставляются здесь и только здесь.
+ *
+ * **Самопереход — внутренний переход, а не выход и повторный вход.** Такой у
+ * машины вывода ровно один: `paying_out --payout_result(unknown)--> paying_out`.
+ * Дедлайн он пересчитывает — банк ответил, отсчёт пошёл заново, — а `enteredAt`
+ * оставляет прежним: иначе каждый неответ банка обнулял бы возраст, и заявка,
+ * застрявшая в «неизвестно», не попадала бы в очередь разбора никогда. Это то же
+ * правило, что у транша, и то же, что в `queue.ts` комплаенса.
+ */
+function nextWithdrawalState(
+  state: WithdrawalState,
+  to: WithdrawalStatus,
+  context: WithdrawalContext,
+): WithdrawalState {
+  if (isTerminalWithdrawalStatus(to)) {
+    return terminalWithdrawalState(to, state.withdrawalId);
+  }
+  const internal = to === state.status;
+  const enteredAt = internal && 'enteredAt' in state ? state.enteredAt : context.now;
+  return nonTerminalWithdrawalState(
+    to,
+    state.withdrawalId,
+    deadline(plus(context.now, context.deadlinePolicy[to])),
+    enteredAt,
+  );
+}
+
 export function reduceWithdrawal(
   state: WithdrawalState,
   event: WithdrawalEvent,
   facts: ClientAccountFacts,
+  context: WithdrawalContext,
 ): Result<WithdrawalTransitionResult, Rejection> {
   if (isTerminalWithdrawalStatus(state.status)) {
     return failure(rejection(RejectionCode.terminalState, [], { status: state.status }));
@@ -335,7 +584,7 @@ export function reduceWithdrawal(
       continue;
     }
     return ok({
-      state: Object.freeze({ ...state, status: candidate.to }),
+      state: nextWithdrawalState(state, candidate.to, context),
       failedGuards: Object.freeze([]),
     });
   }

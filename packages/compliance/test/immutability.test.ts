@@ -166,6 +166,7 @@ const task = (taskId: string, hoursAgo: number): ReviewTask =>
     dealId: 'deal-1',
     trancheId: null,
     partyId: null,
+    withdrawalId: null,
     rankAmount: money('GEL', 10_000_000n),
     enteredAt: (NOW - hoursAgo * HOUR_MS) as typeof NOW,
     deadlineAt: null,

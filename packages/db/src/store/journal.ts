@@ -35,7 +35,7 @@ import { accountKindRow } from '../accounts.ts';
 import { DbError, DbErrorCode } from '../errors.ts';
 import { type PoolClient, toBigInt } from '../pool.ts';
 import { translating } from './errors.ts';
-import type { WriteOutcome } from './port.ts';
+import type { JournalScope, WriteOutcome } from './port.ts';
 
 /**
  * Журнал учёта в базе и обратно.
@@ -660,7 +660,21 @@ const SELECT_ALL_ENTRIES = `
    ORDER BY seq`;
 
 /**
- * Журнал целиком.
+ * Записи одного охвата.
+ *
+ * Отбор — `left(entry_id, …) = …`, а не `LIKE`: в идентификаторе цепочки
+ * допустимы `_` и `%` (алфавит `sdelka.audit_chain`, `0007_audit.sql`), а они
+ * же — служебные знаки шаблона. `LIKE` по неэкранированному началу отдавал бы
+ * не тот охват ровно тогда, когда это дороже всего: тихо и правдоподобно.
+ */
+const SELECT_SCOPED_ENTRIES = `
+  SELECT ${ENTRY_COLUMN_LIST}
+    FROM sdelka.ledger_entry
+   WHERE left(entry_id, char_length($1::text)) = $1::text
+   ORDER BY seq`;
+
+/**
+ * Журнал в названном охвате.
  *
  * Порядок — по `seq`, то есть по порядку, в котором факты стали известны, а не
  * по `occurred_at`: возраст открытой позиции по обмену и возраст транзита
@@ -674,10 +688,17 @@ const SELECT_ALL_ENTRIES = `
  * не просто похож на записанный: он **снова проходит** все проверки учёта, и
  * журнал, который база приняла бы, а код нет, обнаруживается на чтении, а не в
  * отчётности через месяц.
+ *
+ * **Охват обязателен.** Записи всех миров лежат в одной таблице; какие из них
+ * нужны, знает вызывающий, а не запрос. «Весь журнал» остаётся выразимым —
+ * `{ kind: 'everything' }` — но написанным, а не полученным по умолчанию.
  */
-export async function readJournal(client: PoolClient): Promise<Journal> {
+export async function readJournal(client: PoolClient, scope: JournalScope): Promise<Journal> {
   return translating(async () => {
-    const head = await client.query<EntryRow>(SELECT_ALL_ENTRIES);
+    const head =
+      scope.kind === 'everything'
+        ? await client.query<EntryRow>(SELECT_ALL_ENTRIES)
+        : await client.query<EntryRow>(SELECT_SCOPED_ENTRIES, [scope.entryIdPrefix]);
     if (head.rows.length === 0) return emptyJournal;
     const ids = head.rows.map((row) => row.entry_id);
     const postings = await client.query<PostingRow>(SELECT_POSTINGS, [ids]);

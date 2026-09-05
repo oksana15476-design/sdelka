@@ -254,10 +254,15 @@ suite.run(suite.title, () => {
     if (pool === null) return;
     await withRollback(pool, async (client) => {
       await seed(client);
+      // Часы обязательны у нетерминальной заявки (`0022`, `withdrawal_state_shape`):
+      // «нетерминальное состояние без дедлайна» невыразимо в базе так же, как
+      // у транша. Здесь проверяется частичный уникальный индекс, а не часы, —
+      // поэтому обе заявки получают одинаковые корректные отметки времени.
       const insert = `INSERT INTO sdelka.withdrawal
         (withdrawal_id, party_id, status, idempotency_key, amount_minor, currency,
-         source_account_fingerprint)
-        VALUES ($1, 'p-buyer', $2, $3, 100000, 'GEL', $4)`;
+         source_account_fingerprint, deadline_at, entered_at)
+        VALUES ($1, 'p-buyer', $2, $3, 100000, 'GEL', $4,
+                timestamptz '2026-09-10 00:00:00+00', timestamptz '2026-09-05 00:00:00+00')`;
       const fingerprint = 'a'.repeat(64);
       await client.query(insert, ['w1', 'requested', KEY, fingerprint]);
       let failed = false;

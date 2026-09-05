@@ -158,11 +158,26 @@ export interface DualControlReasons<K extends string = ReasonKey> {
  */
 export function dualControlFailures<K extends string = ReasonKey>(
   control: DualControl,
+  reasons: Pick<DualControlReasons<K>, 'awaits'>,
+): readonly K[];
+export function dualControlFailures<K extends string = ReasonKey>(
+  control: DualControl,
   reasons: DualControlReasons<K>,
+  actorId: string | null,
+): readonly K[];
+export function dualControlFailures<K extends string = ReasonKey>(
+  control: DualControl,
+  reasons: Pick<DualControlReasons<K>, 'awaits'> & Partial<DualControlReasons<K>>,
   actorId: string | null = null,
 ): readonly K[] {
   const failures: K[] = [];
-  if (actorId !== null && actorId === control.preparedBy) {
+  // `notDistinct` спрашивается только вместе с актором, и это сказано формой
+  // вызова, а не соглашением: у двухаргументной формы такой причины в типе нет
+  // вовсе. Прежде она требовалась всегда, и периметр без актора обязан был
+  // завести ключ, который никогда не мог быть показан, — приём так и жил с
+  // мёртвой проводкой `intake.match.manual_approver_not_distinct`, а нашёл её
+  // мутационный прогон, а не чтение.
+  if (actorId !== null && reasons.notDistinct !== undefined && actorId === control.preparedBy) {
     failures.push(reasons.notDistinct);
   }
   if (!dualControlSatisfied(control)) {

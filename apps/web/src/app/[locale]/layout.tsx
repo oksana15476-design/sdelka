@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation';
 import { type Locale, DEFAULT_LOCALE, LOCALE_DIRECTION, LOCALES, isLocale } from '@/i18n/locales';
 import { dictionaryOf, t } from '@/i18n/translate';
 import { AppShell } from '@/ui/chrome';
+import { PublicShell } from '@/ui/public-chrome';
 import { preloadedFonts } from '@/ui/fonts';
 import { viewerCard } from '@/fixtures/store';
 import { getNotifications, unreadCount } from '@/fixtures/screens';
@@ -56,11 +57,22 @@ export default async function LocaleLayout({
   }
   const l = { dict: dictionaryOf(locale), locale };
   const path = (await headers()).get('x-sdelka-path') ?? `/${locale}`;
+  /**
+   * Публичные страницы — четвёртое место, и оно не кабинет: у него нет ни
+   * разделов, ни карточки человека, ни ссылки внутрь продукта. Каркас выбирается
+   * по адресу тем же способом, что консоль и кабинет владельца, потому что
+   * сегмент маршрута до корневого макета не доходит.
+   *
+   * Ссылки «войти» здесь нет намеренно: аутентификации в продукте не существует
+   * вовсе, а публичная ссылка в кабинет превратила бы известный блокер в
+   * эксплуатируемый (`LANDING.md` §6.4, критерий ПЛ9).
+   */
+  const isPublic = path.startsWith(`/${locale}/landing`);
   const console = path.includes('/ops');
   // Кабинет владельца — своё рабочее место со своей навигацией: разделов
   // консоли в нём нет, и счётчика клиентских уведомлений тоже (E16-1).
   const owner = path.includes('/owner');
-  const unread = console || owner ? 0 : unreadCount(await getNotifications());
+  const unread = console || owner || isPublic ? 0 : unreadCount(await getNotifications());
   return (
     <html lang={locale} dir={LOCALE_DIRECTION[locale]}>
       <head>
@@ -73,15 +85,21 @@ export default async function LocaleLayout({
         ))}
       </head>
       <body>
-        <AppShell
-          l={l}
-          path={path}
-          viewer={viewerCard()}
-          variant={console ? 'console' : owner ? 'owner' : 'client'}
-          unread={unread}
-        >
-          {children}
-        </AppShell>
+        {isPublic ? (
+          <PublicShell l={l} path={path}>
+            {children}
+          </PublicShell>
+        ) : (
+          <AppShell
+            l={l}
+            path={path}
+            viewer={viewerCard()}
+            variant={console ? 'console' : owner ? 'owner' : 'client'}
+            unread={unread}
+          >
+            {children}
+          </AppShell>
+        )}
       </body>
     </html>
   );

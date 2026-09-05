@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   type AllocationInput,
+  type AllocationPlan,
   type ChargesBearer,
   CHARGES_BEARERS,
   INTAKE_REASON_KEYS,
@@ -39,6 +40,9 @@ describe('пришло ровно требуемое', () => {
     expect(plan.toTranche.minor).toBe(REQUIRED.minor);
     expect(plan.shortfall.minor).toBe(0n);
     expect(plan.freeAfter.minor).toBe(0n);
+    // Причина одна и ровно эта: «пришло сколько нужно» и «пришло больше» ведут
+    // к разным разговорам с клиентом — о возврате излишка во втором случае.
+    expect(plan.reasons).toEqual([INTAKE_REASON_KEYS.allocationExact]);
   });
 });
 
@@ -65,6 +69,13 @@ describe('недоплата в пределах допуска — случай
     expect(plan.kind).toBe('shortfall_absorbed');
     expect(plan.toTranche.minor).toBe(REQUIRED.minor);
     expect(plan.shortfall.minor).toBe(5_000n);
+    // Исход и причина недостачи, в этом порядке. Причина «не хватило» на плане,
+    // где транш зачислен полностью, отправила бы оператора искать доплату,
+    // которой никто не должен.
+    expect(plan.reasons).toEqual([
+      INTAKE_REASON_KEYS.allocationShortfallAbsorbed,
+      INTAKE_REASON_KEYS.shortfallCauseCorrespondent,
+    ]);
   });
 
   it('допуск плюс одна минорная единица уже не проходит', () => {
@@ -86,7 +97,14 @@ describe('недоплата в пределах допуска — случай
   it('часть суммы уже накоплена — причина о накоплении есть', () => {
     const plan = run({ incoming: gel(1_000n), freeBefore: gel(1_000n) });
     expect(plan.kind).toBe('insufficient');
-    expect(plan.reasons).toContain(INTAKE_REASON_KEYS.allocationAccumulating);
+    // Четыре причины и в этом порядке: чем кончилось, что уже накоплено, из-за
+    // чего не хватило и чего ждём. Оператор читает их подряд как объяснение.
+    expect(plan.reasons).toEqual([
+      INTAKE_REASON_KEYS.allocationInsufficient,
+      INTAKE_REASON_KEYS.allocationAccumulating,
+      INTAKE_REASON_KEYS.shortfallCauseCorrespondent,
+      INTAKE_REASON_KEYS.shortfallAwaitsTopUp,
+    ]);
   });
 
   it('недостача вынесена отдельным полем, а не спрятана в сумме транша', () => {
@@ -185,6 +203,21 @@ describe('отрицательные суммы отвергаются', () => {
   it('отрицательный допуск не разносится', () => {
     expect(() => allocateIncoming(input({ tolerance: gel(-1n) }))).toThrow();
   });
+
+  it('отрицательный свободный остаток не разносится, а не читается как недобор', () => {
+    // Отрицательного остатка клиента не бывает — это инвариант базы. Пришедший
+    // сюда минус означает испорченные данные, и без проверки он молча уменьшил
+    // бы накопленное: платёж, которого хватало, стал бы «недостаточным».
+    expect(() => allocateIncoming(input({ freeBefore: gel(-1n) }))).toThrow(
+      'intake.amount.negative',
+    );
+  });
+
+  it('отрицательное требование не разносится', () => {
+    expect(() => allocateIncoming(input({ required: gel(-1n) }))).toThrow(
+      'intake.amount.negative',
+    );
+  });
 });
 
 describe('сходимость плана', () => {
@@ -193,5 +226,38 @@ describe('сходимость плана', () => {
     const plan = allocateIncoming(args);
     const forged = { ...plan, shortfall: gel(0n) };
     expect(allocationBalances(args, forged)).toBe(false);
+  });
+
+  it('план, где транш отдаёт деньги клиенту, не сходится', () => {
+    // `на_транш − недостача` отрицательно: платформа якобы донесла больше, чем
+    // весь транш, и разница ушла клиенту. Остальная арифметика при этом сходится
+    // — тождество выполняется, вид плана свой, — и упасть проверка обязана
+    // именно на знаке.
+    const args: AllocationInput = {
+      required: gel(100n),
+      freeBefore: gel(-1_000n),
+      incoming: gel(0n),
+      tolerance: gel(0n),
+      chargesBearer: 'shared',
+    };
+    const forged: AllocationPlan = {
+      kind: 'shortfall_absorbed',
+      toClientFree: gel(0n),
+      toTranche: gel(100n),
+      shortfall: gel(1_100n),
+      missing: gel(0n),
+      freeAfter: gel(0n),
+      reasons: Object.freeze([INTAKE_REASON_KEYS.allocationShortfallAbsorbed]),
+    };
+    expect(allocationBalances(args, forged)).toBe(false);
+  });
+
+  it('план, спрятавший поступление от счёта клиента, не сходится', () => {
+    // Всё поступление обязано лечь на счёт клиента — это и есть то место, где
+    // деньги остаются отзывными. План, где `toClientFree` меньше пришедшего,
+    // объявляет часть денег ничьими.
+    const args = input();
+    const plan = allocateIncoming(args);
+    expect(allocationBalances(args, { ...plan, toClientFree: gel(0n) })).toBe(false);
   });
 });

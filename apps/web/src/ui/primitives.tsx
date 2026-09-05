@@ -146,6 +146,25 @@ export function Row({
  * · `deal.paying.where.frozen.disclosure` — M-18, раскрытие о приостановке.
  * · `assurance.revocationClosed` — закрытая отзывность у получателя.
  * · `trust.weDoNot.7` — заявление о регулируемом статусе (Ю-37, ⛔).
+ *
+ * Публичные страницы (`docs/product/LANDING.md` §5.1) добавили пять слотов, и
+ * все пять — преддоговорная информация, то есть текст, который обязан
+ * существовать на государственном языке и который пишет юрист, а не главред:
+ *
+ * · `landing.legal.status` — «кто мы»: строка о статусе верна ровно с даты его
+ *   получения, а стартуем мы на партнёрской лицензии. Обтекаемая формулировка о
+ *   статусе хуже отсутствующей, поэтому блок Л6 не публикуется целиком.
+ * · `landing.legal.rules` — три правила Ю-25 (возврат только на счёт-источник,
+ *   платёж от третьего лица останавливается, реквизиты не меняются в последние
+ *   72 часа). Обязаны существовать **до** первого внесения денег.
+ * · `landing.legal.price` — ответ «сколько это стоит»: числом или диапазоном.
+ *   Числа тарифа на странице делают её преддоговорной информацией целиком
+ *   (развилка владельца Р2, `DECISIONS-REVIEW.md` §N).
+ * · `landing.legal.whoWeAre`, `landing.legal.ifWeClose` — два вопроса, ответы на
+ *   которые описывают правовое положение клиента, а не работу экрана.
+ * · `landing.legal.consent` — согласие на обработку данных в форме заявки.
+ *   ⚠ Пока слота нет, форма собирать данные не должна: сегодня она их и не
+ *   собирает — поля без `name`, отправляется только шаг (`ui/landing.tsx`).
  */
 export const PENDING_LEGAL_SLOTS: readonly string[] = Object.freeze([
   'deal.paying.where.payoutUnknown.revocation',
@@ -153,6 +172,12 @@ export const PENDING_LEGAL_SLOTS: readonly string[] = Object.freeze([
   'deal.paying.where.frozen.disclosure',
   'assurance.revocationClosed',
   'trust.weDoNot.7',
+  'landing.legal.status',
+  'landing.legal.rules',
+  'landing.legal.price',
+  'landing.legal.whoWeAre',
+  'landing.legal.ifWeClose',
+  'landing.legal.consent',
 ]);
 
 export function legalSlotPending(bodyKey: string): boolean {

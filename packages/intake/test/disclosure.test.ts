@@ -76,6 +76,28 @@ describe('раскрытие допуска — записанный факт, �
     const effective = effectiveTolerance(REQUIRED, PROPOSED_INTAKE_POLICY, stale, NOW);
     expect(effective.amount.minor).toBe(0n);
   });
+
+  it('объявленная величина в другой валюте — тоже устаревший факт, а не старая политика', () => {
+    // Сумма та же, а объявленный допуск в долларах: применить его к требованию
+    // в лари можно только через курс, то есть через внешний факт, которого в
+    // объявлении не было. Причина именно «факт устарел»: «старая политика»
+    // сказала бы оператору, что величину надо сверить с нынешней, а сверять
+    // нечего.
+    const foreign = disclosure({ tolerance: usd(5_000n) });
+    const effective = effectiveTolerance(REQUIRED, PROPOSED_INTAKE_POLICY, foreign, NOW);
+    expect(effective.amount.minor).toBe(0n);
+    expect(effective.reasons).toEqual([INTAKE_REASON_KEYS.toleranceDisclosureStale]);
+  });
+
+  it('объявленный ноль — это «допуск нулевой», а не «допуск не раскрыт»', () => {
+    // Ноль объявлен и показан стороне: строгое равенство суммы. Причина «не
+    // раскрыт» на этом же нуле означала бы, что обещания не было вовсе, — а оно
+    // было, и A2 доказывается именно им.
+    const strict = disclosure({ tolerance: gel(0n) });
+    const effective = effectiveTolerance(REQUIRED, PROPOSED_INTAKE_POLICY, strict, NOW);
+    expect(effective.amount.minor).toBe(0n);
+    expect(effective.reasons).toEqual([INTAKE_REASON_KEYS.toleranceZero]);
+  });
 });
 
 describe('смена политики не расширяет допуск задним числом', () => {
@@ -104,6 +126,13 @@ describe('смена политики не расширяет допуск за�
     });
     const effective = effectiveTolerance(REQUIRED, narrowed, disclosure(), NOW);
     expect(effective.amount.minor).toBe(0n);
-    expect(effective.reasons).toContain(INTAKE_REASON_KEYS.toleranceCurrencyNotDeclared);
+    // Две причины, и обе нужны: первая объясняет, почему нынешняя политика даёт
+    // ноль, вторая — что объявление было и оно от прежней политики. Одна без
+    // другой читается либо как «мы ничего не обещали», либо как «обещание
+    // потеряли».
+    expect(effective.reasons).toEqual([
+      INTAKE_REASON_KEYS.toleranceCurrencyNotDeclared,
+      INTAKE_REASON_KEYS.toleranceDisclosureOlderPolicy,
+    ]);
   });
 });

@@ -1,13 +1,18 @@
+import type { PolicyVersionId, ReviewTask } from '@sdelka/compliance';
 import {
   type EscalationPolicy,
   type Instant,
+  type NonTerminalWithdrawalStatus,
   type TrancheEvent,
   type TrancheState,
   DEFAULT_ESCALATION_POLICY,
   dueTrancheEvent,
   isEscalated,
   isTerminalTrancheStatus,
+  isTerminalWithdrawalStatus,
+  isWithdrawalStalled,
   trancheStateAge,
+  withdrawalStateAge,
 } from '@sdelka/domain';
 import {
   type TrancheEventOptions,
@@ -16,7 +21,8 @@ import {
   applyTrancheEvent,
 } from './flow';
 import { clockAuthority } from './authority';
-import { type TrancheRuntime, type World, trancheOf } from './world';
+import type { WithdrawalRuntime, WithdrawalWorld } from './withdrawal';
+import { type TrancheRuntime, type World, sealed, trancheOf } from './world';
 
 /**
  * Планировщик: **вызывающий у часов транша**.
@@ -173,6 +179,147 @@ export function tick(
   }
 
   return { world: next, fired, escalated };
+}
+
+/* ------------------------------------------------------------------------- */
+/* Часы заявок на вывод                                                      */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Заявка, простоявшая дольше норматива, — и задача, которой она видна дежурному.
+ *
+ * ⚠ **Тик заявку не двигает ничем.** У машины вывода нет ни одного события,
+ * порождаемого сроком (`WITHDRAWAL_CLOCK_EVENTS` — `Record<…, null>`, и это тип,
+ * а не значение), поэтому здесь **нет и не может быть** вызова
+ * `applyWithdrawalEvent`. Это прямое требование красной линии №8: заявка,
+ * стоящая в `paying_out` после `payout_result(unknown)`, не повторяется от того,
+ * что прошло время, — из «неизвестно» выводит только сверка
+ * (`reconciliation_resolved`), то есть внешний факт и человек.
+ */
+export interface StalledWithdrawal {
+  readonly withdrawalId: string;
+  readonly status: NonTerminalWithdrawalStatus;
+  /** Возраст состояния в миллисекундах — от входа в него, а не от дедлайна. */
+  readonly ageMs: number;
+  readonly task: ReviewTask;
+}
+
+export interface WithdrawalTickOptions {
+  /** Версия политики, под которой задача попала в очередь (`CORE.md` Ф11). */
+  readonly policy: PolicyVersionId;
+}
+
+export interface WithdrawalTickResult {
+  readonly scene: WithdrawalWorld;
+  /** Заявки, поднятые дежурному этим проходом. Пустой список — норматив цел. */
+  readonly stalled: readonly StalledWithdrawal[];
+}
+
+function stallTaskId(withdrawalId: string, enteredAt: Instant): string {
+  // Детерминированный ключ, а не счётчик: тот же простой той же заявки обязан
+  // давать тот же номер задачи, иначе повтор прохода часов после перезапуска
+  // заведёт вторую задачу о том же.
+  return `task-withdrawal-${withdrawalId}-${enteredAt}`;
+}
+
+function stallTask(
+  runtime: WithdrawalRuntime,
+  status: NonTerminalWithdrawalStatus,
+  enteredAt: Instant,
+  now: Instant,
+  deadlineAt: Instant,
+  options: WithdrawalTickOptions,
+): ReviewTask {
+  return {
+    taskId: stallTaskId(runtime.state.withdrawalId, enteredAt),
+    kind: 'withdrawal_stalled',
+    // Сделки у вывода нет вовсе — см. `ReviewTask.dealId`.
+    dealId: null,
+    trancheId: null,
+    // У заявки известен **ключ счёта** владельца остатка, а не идентификатор
+    // лица; `partyId` здесь был бы ложью типом. Предмет задачи называет
+    // `withdrawalId`.
+    partyId: null,
+    withdrawalId: runtime.state.withdrawalId,
+    // Ранжирования по сумме нет: очередь ранжирует в своей валюте, а пересчёт
+    // требует официального курса на дату — внешнего факта, которого у часов нет
+    // (`ReviewTask.rankAmount`, `FUNCTIONAL.md` §4.3.1). Выдуманный курс в
+    // приоритете дежурного хуже отсутствующего.
+    rankAmount: null,
+    // Возраст задачи — возраст **простоя**, а не момент, когда часы до неё
+    // дошли: иначе заявка, простоявшая неделю, попадала бы в очередь свежей и
+    // ждала бы норматив второй раз.
+    enteredAt,
+    // Срок операции двигается (повтор `unknown` его пересчитывает) и в
+    // приоритете очереди не участвует — ровно то, для чего это поле заведено.
+    deadlineAt,
+    // Не `hold` и не `block`: эскалация ничего не удерживает и статуса заявки не
+    // меняет — она поднимает заявку человеку. `hold` в задаче читался бы как
+    // наложенное удержание, которого машина не накладывала.
+    severity: 'review',
+    assigneeId: null,
+    policyVersionId: options.policy,
+  };
+}
+
+/**
+ * Один проход часов по живым заявкам: кто простоял дольше норматива.
+ *
+ * **Очередь одна.** Задача кладётся в `world.tasks` — ту же очередь разбора
+ * `@sdelka/compliance`, которой живут задачи комплаенса и приёма; второй очереди
+ * «для выводов» здесь нет, и ранжирование (`prioritize`) достаётся заявке
+ * бесплатно вместе с эскалацией по возрасту.
+ *
+ * **Ровно один раз на простой.** След о поднятой задаче лежит на самой заявке
+ * (`WithdrawalRuntime.stall`) и ключом имеет пару «статус, момент входа». Проход
+ * часов идемпотентен: сколько бы раз он ни прошёл по стоящей заявке, задача
+ * останется одна. Переход в другое состояние начинает новый простой — и тогда
+ * задача будет новая, потому что момент входа другой.
+ */
+export function tickWithdrawals(
+  scene: WithdrawalWorld,
+  options: WithdrawalTickOptions,
+): WithdrawalTickResult {
+  const now = scene.world.now;
+  const stalled: StalledWithdrawal[] = [];
+  const withdrawals = new Map(scene.withdrawals);
+  const tasks: ReviewTask[] = [];
+
+  for (const [withdrawalId, runtime] of scene.withdrawals) {
+    const state = runtime.state;
+    if (isTerminalWithdrawalStatus(state.status)) continue;
+    if (!('enteredAt' in state)) continue;
+    if (!isWithdrawalStalled(state, now, scene.clock.escalation)) continue;
+    const mark = runtime.stall;
+    if (mark !== null && mark.status === state.status && mark.enteredAt === state.enteredAt) {
+      continue;
+    }
+    const task = stallTask(runtime, state.status, state.enteredAt, now, state.deadline.at, options);
+    withdrawals.set(withdrawalId, {
+      ...runtime,
+      stall: { taskId: task.taskId, status: state.status, enteredAt: state.enteredAt },
+    });
+    tasks.push(task);
+    stalled.push({
+      withdrawalId,
+      status: state.status,
+      ageMs: withdrawalStateAge(state, now) ?? 0,
+      task,
+    });
+  }
+
+  if (tasks.length === 0) {
+    return { scene, stalled: Object.freeze([]) };
+  }
+  const world = sealed({
+    ...scene.world,
+    tasks: [...scene.world.tasks, ...tasks],
+    checks: scene.world.checks,
+  });
+  return {
+    scene: { world, withdrawals, clock: scene.clock },
+    stalled: Object.freeze(stalled),
+  };
 }
 
 /**

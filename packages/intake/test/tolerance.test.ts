@@ -33,6 +33,15 @@ describe('допуск: берётся меньшее из абсолюта и �
     expect(toleranceAmount(resolution, 'GEL').minor).toBe(500n);
   });
 
+  it('ненулевой допуск называет себя применённым, а не нулевым', () => {
+    // Оператор различает «допуск применён» и «допуск равен нулю» по причине, а
+    // не по сумме: вторая говорит, что послабления нет вовсе, и разбирать
+    // недостачу в тетри он будет как недостачу сверх допуска.
+    const policy = withTolerance({ absolute: [money('GEL', 5_000n)], shareBp: 50 });
+    const resolution = toleranceFor(gel(100_000_000n), policy);
+    expect(resolution.reasons).toEqual([INTAKE_REASON_KEYS.toleranceApplied]);
+  });
+
   it('доля усекается, а не округляется вверх: послабление не округляют в свою пользу', () => {
     const policy = withTolerance({ absolute: [money('GEL', 1_000_000n)], shareBp: 50 });
     // 33 333 × 0,5% = 166,665 минорных единиц → 166.

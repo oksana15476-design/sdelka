@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type NameMatch,
+  type NameMatchDegree,
+  NAME_MATCH_DEGREES,
+} from '@sdelka/compliance';
+import {
   type CandidateSignals,
   type IntakePolicy,
   type ReferenceMatch,
@@ -19,6 +24,38 @@ const REFERENCE = paymentReference({ dealCode: 'D7K2M9Q4', trancheCode: 'T1' });
 
 const ABSENT_REFERENCE: ReferenceMatch = matchReference(REFERENCE, null, POLICY);
 const EXACT_REFERENCE: ReferenceMatch = matchReference(REFERENCE, REFERENCE, POLICY);
+const FOREIGN_REFERENCE: ReferenceMatch = matchReference(
+  REFERENCE,
+  paymentReference({ dealCode: 'ZZZZZZZZ', trancheCode: '99' }),
+  POLICY,
+);
+const DAMAGED_REFERENCE: ReferenceMatch = matchReference(
+  REFERENCE,
+  `${(REFERENCE as string).slice(0, 4)}XYZ${(REFERENCE as string).slice(7)}`,
+  POLICY,
+);
+
+/**
+ * Совпадение имени заданной степени, собранное напрямую.
+ *
+ * Степени — закрытый перечень `@sdelka/compliance`, и приёму важно только одно:
+ * какие из них считаются достаточно сильными, чтобы добавить надбавку. Собирать
+ * каждую степень настоящим сравнением значило бы подбирать пары имён под
+ * классификатор чужого пакета — и проверять в итоге его, а не таблицу приёма.
+ * Пары настоящих имён остаются в фикстурах и работают рядом.
+ */
+function nameOfDegree(degree: NameMatchDegree): NameMatch {
+  return Object.freeze({
+    degree,
+    scoreBp: 9_000,
+    features: Object.freeze({ levenshteinBp: 9_000, trigramBp: 9_000, jaroWinklerBp: 9_000 }),
+    best: null,
+    ambiguities: Object.freeze([]),
+    georgianSpellingCount: 1,
+    reasons: Object.freeze([]),
+    sufficientAlone: false,
+  });
+}
 
 function candidate(overrides: Partial<CandidateSignals> = {}): CandidateSignals {
   return {
@@ -63,6 +100,40 @@ describe('имя в одиночку кандидата не даёт никог
     );
     expect(withBadName.scoreBp).toBe(base.scoreBp);
   });
+
+  it('какие степени совпадения имени дают надбавку — перечень целиком', () => {
+    // Перечень закрытый, и проверяется он целиком: степень, молча переехавшая из
+    // «надбавки нет» в «надбавка есть», двигает кандидата через порог
+    // автосопоставления — то есть относит деньги к сделке по имени.
+    const table = NAME_MATCH_DEGREES.map((degree) => {
+      const base = scoreCandidate(candidate({ amountFits: true }), POLICY);
+      const withName = scoreCandidate(
+        candidate({ amountFits: true, senderName: nameOfDegree(degree) }),
+        POLICY,
+      );
+      return [degree, withName.scoreBp - base.scoreBp];
+    });
+    const bonusBp = POLICY.matching.weights.senderNameBonusPercent * 100;
+    expect(table).toEqual([
+      ['not_comparable', 0],
+      ['none', 0],
+      ['weak', 0],
+      ['strong', bonusBp],
+      ['identical_after_latinization', bonusBp],
+      ['identical_in_source_alphabet', bonusBp],
+    ]);
+  });
+
+  it('надбавка за имя названа причиной и там, где вес уже набран', () => {
+    // Причина «имя — вторичный признак» обязана стоять на кандидате, которого
+    // имя двигало: оператор по ней видит, из чего сложился вес. Без неё
+    // надбавка невидима, и кандидат выглядит сильнее, чем есть.
+    const scored = scoreCandidate(
+      candidate({ amountFits: true, senderName: STRONG_NAME_MATCH }),
+      POLICY,
+    );
+    expect(scored.reasons).toEqual([INTAKE_REASON_KEYS.matchNameSecondaryOnly]);
+  });
 });
 
 describe('референс потерян — сопоставление работает по совокупности', () => {
@@ -77,16 +148,73 @@ describe('референс потерян — сопоставление раб�
     const result = matchIncoming([withoutReference], POLICY);
     expect(result.outcome).toBe('auto_matched');
     expect(result.matched?.signals.trancheId).toBe('t1');
+    // Причина сопоставления идёт первой, за ней — признаки, из которых сложился
+    // вес выбранного кандидата: оператор обязан видеть, на чём стоит решение,
+    // принятое без него.
+    expect(result.reasons).toEqual([
+      INTAKE_REASON_KEYS.matchAuto,
+      INTAKE_REASON_KEYS.matchSourceAccountSeen,
+    ]);
   });
 
   it('одной суммы для автосопоставления мало', () => {
     const result = matchIncoming([candidate({ amountFits: true })], POLICY);
     expect(result.outcome).toBe('unmatched');
+    expect(result.reasons).toEqual([INTAKE_REASON_KEYS.matchNoCandidate]);
   });
 
   it('точный референс проходит и в одиночку', () => {
     const result = matchIncoming([candidate({ reference: EXACT_REFERENCE })], POLICY);
     expect(result.outcome).toBe('auto_matched');
+  });
+});
+
+describe('из чего сложился вес — видно по причинам', () => {
+  it('точный референс назван причиной, и именно точный', () => {
+    const scored = scoreCandidate(candidate({ reference: EXACT_REFERENCE }), POLICY);
+    expect(scored.reasons).toEqual([INTAKE_REASON_KEYS.referenceExact]);
+  });
+
+  it('искажённый референс назван искажённым, а не точным и не отсутствующим', () => {
+    // Разница не косметическая: искажённый референс сам по себе основанием для
+    // сопоставления не является, а точный является. Оператор принимает решение
+    // по этой строке.
+    expect(DAMAGED_REFERENCE.degree).toBe('damaged');
+    const scored = scoreCandidate(candidate({ reference: DAMAGED_REFERENCE }), POLICY);
+    expect(scored.reasons).toEqual([INTAKE_REASON_KEYS.referenceDamaged]);
+  });
+
+  it('чужой и отсутствующий референс веса не дают и причины о себе не оставляют', () => {
+    // «Референс другой сделки» и «референса нет» весят одинаково — ноль, — и
+    // вес кандидата в обоих случаях набирается только остальными признаками.
+    expect(FOREIGN_REFERENCE.degree).toBe('foreign');
+    const foreign = scoreCandidate(
+      candidate({ reference: FOREIGN_REFERENCE, amountFits: true }),
+      POLICY,
+    );
+    const absent = scoreCandidate(
+      candidate({ reference: ABSENT_REFERENCE, amountFits: true }),
+      POLICY,
+    );
+    expect(foreign.scoreBp).toBe(POLICY.matching.weights.amountFitsPercent * 100);
+    expect(foreign.scoreBp).toBe(absent.scoreBp);
+    expect(foreign.reasons).toEqual([]);
+  });
+
+  it('знакомый счёт-источник назван причиной', () => {
+    const scored = scoreCandidate(candidate({ sourceAccountSeen: true }), POLICY);
+    expect(scored.reasons).toEqual([INTAKE_REASON_KEYS.matchSourceAccountSeen]);
+  });
+
+  it('признаки перечислены в одном порядке: сначала референс, потом счёт', () => {
+    const scored = scoreCandidate(
+      candidate({ reference: EXACT_REFERENCE, sourceAccountSeen: true }),
+      POLICY,
+    );
+    expect(scored.reasons).toEqual([
+      INTAKE_REASON_KEYS.referenceExact,
+      INTAKE_REASON_KEYS.matchSourceAccountSeen,
+    ]);
   });
 });
 
@@ -104,6 +232,9 @@ describe('два кандидата выше порога — автосопос
     expect(result.outcome).toBe('ambiguous');
     expect(result.matched).toBeNull();
     expect(result.aboveThreshold).toHaveLength(2);
+    // Причина ровно одна и это «выбрать из нескольких». «Кандидатов нет»
+    // послало бы оператора искать сделку, которая уже найдена дважды.
+    expect(result.reasons).toEqual([INTAKE_REASON_KEYS.matchAmbiguous]);
   });
 
   it('лучший из двух не побеждает даже с большим отрывом', () => {
@@ -161,6 +292,13 @@ describe('признак «сумма подходит»', () => {
 
   it('другая валюта не подходит никогда', () => {
     expect(amountFits(usd(5_000_000n), gel(5_000_000n), gel(5_000n))).toBe(false);
+  });
+
+  it('допуск в чужой валюте признака не даёт, а не сравнивается через курс', () => {
+    // Суммы равны, но допуск объявлен в долларах: сравнить его с расхождением в
+    // лари можно только курсом, а курс — внешний факт, которого в объявлении не
+    // было. Закрытый отказ, как и у поступления в чужой валюте.
+    expect(amountFits(gel(5_000_000n), gel(5_000_000n), usd(5_000n))).toBe(false);
   });
 });
 
