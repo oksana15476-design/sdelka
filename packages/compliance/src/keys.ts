@@ -99,6 +99,13 @@ export const REASON_KEYS = {
   beneficiaryOwnershipEvidenceMissing: 'compliance.beneficiary.ownership_evidence_missing',
   beneficiaryChangeInReleaseWindow: 'compliance.beneficiary.change_in_release_window',
   beneficiaryChangeCoolingOff: 'compliance.beneficiary.change_cooling_off',
+  /**
+   * Уведомление всем сторонам по всем каналам — отдельное условие изменения
+   * реквизитов (`PRODUCT.md` §10), и причина у него своя. Раньше здесь
+   * возвращалось «ждём второго утверждения»: оператор шёл искать второго
+   * человека, а не отправлять уведомление, и заявка стояла до истечения окна.
+   */
+  beneficiaryChangeNotificationMissing: 'compliance.beneficiary.change_notification_missing',
   beneficiaryChangeAwaitsSecondApproval: 'compliance.beneficiary.change_awaits_second_approval',
   beneficiaryChangeApproverNotDistinct: 'compliance.beneficiary.change_approver_not_distinct',
   beneficiaryChangeReverificationMissing: 'compliance.beneficiary.change_reverification_missing',

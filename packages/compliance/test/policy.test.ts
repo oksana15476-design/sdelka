@@ -52,6 +52,62 @@ describe('уровень проверки — политика с версией
     expect(zero.requiredApprovals).toBe(0);
   });
 
+  /**
+   * Числа политики — это и есть решение о риске, а не настройка удобства.
+   * Ни у одного из них нет второго места, где расхождение стало бы видно:
+   * порог, сдвинутый на единицу, не ломает ни один сценарий — он молча меняет,
+   * кого пропустят. Поэтому значения пинуются здесь целиком и вместе с
+   * идентификатором версии: **версия и набор значений обязаны меняться вместе**.
+   */
+  it('значения политики — те, что записаны в документах, и версия им соответствует', () => {
+    const hour = 60 * 60 * 1000;
+    const day = 24 * hour;
+
+    expect(POLICY.version).toBe('compliance/2026-09-03.1');
+    expect(POLICY.verificationLevel).toBe('enhanced');
+
+    expect(POLICY.nameThresholds.screening.valueBp).toBe(8_000);
+    expect(POLICY.nameThresholds.ownerReconciliation.valueBp).toBe(9_500);
+    // Цена ошибки у задач противоположна: у скрининга дорог пропуск, у сверки
+    // собственника — ложное совпадение. Один порог на обе — ошибка проектирования.
+    expect(POLICY.nameThresholds.screening.valueBp).toBeLessThan(
+      POLICY.nameThresholds.ownerReconciliation.valueBp,
+    );
+
+    expect(POLICY.sanctions.candidateThreshold.valueBp).toBe(7_000);
+    expect(POLICY.sanctions.whitelistTtl).toBe(180 * day);
+
+    expect(POLICY.beneficiary.cooldown).toBe(24 * hour);
+    expect(POLICY.beneficiary.preReleaseBlackout).toBe(72 * hour);
+
+    expect(POLICY.concentration.highRiskAggregateShareBp).toBe(2_500);
+    expect([...POLICY.concentration.highRiskJurisdictions]).toEqual(['RU', 'BY']);
+
+    // Ноль: сравниваются две заявленные величины, а не полученная с отправленной.
+    expect(POLICY.price.toleranceBp).toBe(0);
+
+    expect(POLICY.structuring.window).toBe(7 * day);
+    expect(POLICY.structuring.minPaymentCount).toBe(3);
+    expect(POLICY.structuring.threshold.currency).toBe('GEL');
+    expect(POLICY.structuring.threshold.minor).toBe(3_000_000n);
+
+    expect(POLICY.flipping.window).toBe(90 * day);
+    expect(POLICY.flipping.priceJumpBp).toBe(2_000);
+
+    expect([...POLICY.queue.escalationAfter]).toEqual([4 * hour, 24 * hour, 72 * hour]);
+    expect(POLICY.queue.rankCurrency).toBe('GEL');
+  });
+
+  it('у каждого порога есть письменное обоснование', () => {
+    for (const threshold of [
+      POLICY.nameThresholds.screening,
+      POLICY.nameThresholds.ownerReconciliation,
+      POLICY.sanctions.candidateThreshold,
+    ]) {
+      expect(threshold.rationaleDocRef).toMatch(/^docs\//u);
+    }
+  });
+
   it('политика заморожена: значения не правятся в рантайме', () => {
     expect(Object.isFrozen(POLICY_2026_09_03)).toBe(true);
     expect(Object.isFrozen(POLICY_2026_09_03.sanctions)).toBe(true);

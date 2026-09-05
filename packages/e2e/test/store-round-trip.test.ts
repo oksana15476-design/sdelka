@@ -23,6 +23,7 @@ import {
   NOW,
   POLICY_VERSION,
   SELLER,
+  THIRD_PARTY,
   conditionAct,
   partyRef,
 } from './support/fixtures';
@@ -73,6 +74,21 @@ const SETTLE_SCOPE = Object.freeze({
   dealId: 'deal-store-settle',
   trancheId: 'tranche-store-settle',
   chainId: 'chain-store-settle',
+});
+
+/**
+ * Второй мир: своя цепочка аудита, свои сделка и транш и **другой покупатель**.
+ *
+ * Другой покупатель здесь работает: столкновение на идентификаторе записи
+ * журнала перестало бы быть повтором и стало бы подменой, то есть отказом
+ * хранилища с именем, а не молчаливым `repeated`.
+ */
+const OTHER_SCOPE = Object.freeze({
+  ...REFUND_SCOPE,
+  dealId: 'deal-store-other',
+  trancheId: 'tranche-store-other',
+  chainId: 'chain-store-other',
+  buyer: THIRD_PARTY,
 });
 
 describe('хранилище: расчёт получателю проходит через базу и поднимается из неё', () => {
@@ -229,6 +245,80 @@ describe('хранилище: возврат покупателю проходи
     // базы видит тот же список, что и сценарий с базой.
     expect(plain.log.map((item) => item.unmapped)).toEqual(stored.log.map((item) => item.unmapped));
     expect(plain.log.every((item) => item.outcome.written === 0)).toBe(true);
+  });
+});
+
+/**
+ * Два мира в одном хранилище.
+ *
+ * **Почему этого набора раньше не было и почему он нужен.** Каждый сценарий
+ * выше берёт своё хранилище, и до живого Postgres дефект дожил именно поэтому:
+ * идентификатор записи журнала учёта был счётчиком **мира**
+ * (`entry-${seq}-${label}`), а счётчик начинается с нуля в каждом новом мире.
+ * У карты в памяти на тест — своя, и встретиться двум мирам было негде. Таблица
+ * в базе одна и вечная, и второй мир падал на `db.step.conflict` по
+ * `ledger_entry` на первой же денежной записи, не дойдя ни до одного расчёта.
+ *
+ * Здесь хранилище **одно на два мира** — то же условие, что в живой базе, и
+ * поэтому та же проверка стоит и в интеграционном наборе
+ * (`test/int/store-round-trip.int.test.ts`). Идентификатор теперь несёт цепочку
+ * (`app/src/ids.ts`), как всегда нёс идентификатор записи журнала аудита.
+ */
+describe('хранилище: два мира в одной базе', () => {
+  it('второй мир проходит целиком и не сталкивается с первым', async () => {
+    const store = memoryWorldStore();
+
+    const first = await refundPath(store, SCOPE);
+    const second = await refundPath(store, OTHER_SCOPE);
+
+    // Оба мира дошли до конца: возврат покупателю в каждом.
+    expect(trancheStatusOf(first.world, SCOPE.trancheId)).toBe('refunded');
+    expect(trancheStatusOf(second.world, OTHER_SCOPE.trancheId)).toBe('refunded');
+    expect(invariantViolations(first.world)).toEqual([]);
+    expect(invariantViolations(second.world)).toEqual([]);
+    // Ни один шаг не отказал и ни один не прошёл мимо базы.
+    expect(store.committed).toBe(first.log.length + second.log.length);
+
+    /*
+     * Ни одной строки, опознанной повтором: миры разные, и записи у них разные.
+     * Без этого утверждения тест прошёл бы и на идентификаторах, совпавших
+     * дословно, — второй мир просто получил бы `repeated` на чужие строки.
+     *
+     * Считается только второй мир: первый пишет в пустое хранилище по
+     * построению.
+     */
+    expect(second.log.every((item) => item.outcome.repeated === 0)).toBe(true);
+
+    /*
+     * Область имён — цепочка аудита, а не порядок вызова: у каждой записи
+     * журнала учёта в идентификаторе стоит цепочка своего мира. Именно это и
+     * делает два мира в одной таблице возможными.
+     */
+    const idsOf = (run: typeof first): readonly string[] =>
+      run.world.journal.entries.map((entry) => entry.id);
+    expect(idsOf(first).every((id) => id.startsWith(`${SCOPE.chainId}:`))).toBe(true);
+    expect(idsOf(second).every((id) => id.startsWith(`${OTHER_SCOPE.chainId}:`))).toBe(true);
+    const shared = idsOf(first).filter((id) => idsOf(second).includes(id));
+    expect(shared).toEqual([]);
+
+    /*
+     * В хранилище лежат записи **обоих** миров, а не последнего записавшего.
+     * `readJournal` области видимости не имеет вовсе (`memory-store.ts`, как и
+     * `pgWorldStore`), поэтому поднятый журнал — общий, и сравнение с миром
+     * идёт по его же области имён.
+     */
+    const restored = await restoreWorld(store, {
+      chainId: OTHER_SCOPE.chainId,
+      deals: [{ dealId: OTHER_SCOPE.dealId, trancheIds: [OTHER_SCOPE.trancheId] }],
+    });
+    expect(restoredViolations(restored)).toEqual([]);
+    expect(restored.journal.entries).toHaveLength(idsOf(first).length + idsOf(second).length);
+    expect(
+      restored.journal.entries.filter((entry) => entry.id.startsWith(`${OTHER_SCOPE.chainId}:`)),
+    ).toEqual(second.world.journal.entries);
+    // Цепочка аудита областью видимости обладает: поднимается ровно своя.
+    expect(restored.chain).toEqual(second.world.chain);
+    expect(restored.deals[0]?.deal.state.status).toBe('unwound');
   });
 });
 

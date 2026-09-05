@@ -7,6 +7,7 @@ import {
   findRecord,
 } from '@sdelka/audit';
 import { type Authority, assertOrigin, journalActor } from './authority';
+import { auditRecordId } from './ids';
 import { type World, sealed } from './world';
 
 /**
@@ -256,7 +257,7 @@ export function correctPayoutReason(
     ...world,
     seq,
     chain: appendRecord(world.chain, {
-      recordId: `${world.chain.chainId}:r${seq}`,
+      recordId: auditRecordId(world.chain.chainId, seq),
       recordedAt: auditInstant(world.now),
       actor: journalActor(authority),
       // Предмет и связи берутся у исправляемой записи, а не называются заново:

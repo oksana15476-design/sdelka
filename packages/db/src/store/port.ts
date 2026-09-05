@@ -5,6 +5,7 @@ import type {
   PartyRef,
   PayoutState,
   TrancheState,
+  WithdrawalState,
 } from '@sdelka/domain';
 import type { Journal, JournalEntry } from '@sdelka/ledger';
 import type { CurrencyCode, Money } from '@sdelka/money';
@@ -147,6 +148,44 @@ export interface PayoutSnapshot {
   readonly providerReference: string | null;
 }
 
+/**
+ * Вывод со счёта клиента — ROADMAP.md И12.2, `domain/src/client-account.ts`.
+ *
+ * **Почему снимок понадобился отдельно.** Сделка, транш и поручение через порт
+ * ложились, вывод — нет: таблица (`0005_payout.sql`) и машина из шести
+ * состояний были, методов не было. Всё, что не легло, порт называет значением
+ * (`WriteOutcome`) либо отказом с ключом; вывод не возвращал ничего — и это
+ * было единственное место во всём подключении, где возможно было молчание.
+ *
+ * Своего `withdrawalId` у снимка нет: он уже лежит в `WithdrawalState`
+ * (`createWithdrawal`), и второе поле с тем же смыслом разошлось бы с первым
+ * молча. У поручения иначе — `PayoutState` номера поручения не несёт вовсе.
+ *
+ * **Чего в снимке нет и почему.**
+ *
+ * - `holderIsPayer` (`SourceAccountRef`): колонки под него в схеме нет, и это
+ *   не пропуск. Это **факт момента утверждения**, вход guard'а
+ *   `g_source_account_known`, ровно как собранное, подписи и покрытие у транша
+ *   — их порт тоже не хранит. Записать его сюда пришлось бы значением, а
+ *   вернуть — выдуманным: хранилище, отдающее «владелец совпал с плательщиком»
+ *   по умолчанию, врёт про красную линию №9 в ту сторону, которая стоит денег.
+ * - ссылки на ответ провайдера: исходящая нога вывода не переизобретается, её
+ *   ведёт машина «Выплата» со своим `unknown` (`client-account.ts`, §2.2).
+ */
+export interface WithdrawalSnapshot {
+  readonly state: WithdrawalState;
+  /** Клиент, со счёта которого идёт вывод. Сторона целиком, а не её половина. */
+  readonly party: PartyRef;
+  readonly amount: Money<CurrencyCode>;
+  /**
+   * Отпечаток счёта-источника, а не сами реквизиты: номер счёта в открытом виде
+   * в базе не живёт (красная линия №9 плюс `compliance/src/pii.ts`). Отпечаток
+   * считает вызывающий — здесь он непрозрачная строка, и порт над общим
+   * словарём другого выбора не имеет.
+   */
+  readonly sourceAccountFingerprint: string;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Порт                                                                      */
 /* ------------------------------------------------------------------------- */
@@ -212,6 +251,22 @@ export interface WorldTransaction {
   /** То же правило сверки, что у транша: шаг объявляет, из чего уходит. */
   savePayout(snapshot: PayoutSnapshot, previous: PayoutSnapshot | null): Promise<WriteOutcome>;
   loadPayouts(dealId: string, trancheId: string): Promise<readonly PayoutSnapshot[]>;
+
+  /** То же правило сверки, что у транша и поручения. */
+  saveWithdrawal(
+    snapshot: WithdrawalSnapshot,
+    previous: WithdrawalSnapshot | null,
+  ): Promise<WriteOutcome>;
+  /**
+   * Выводы клиента — списком по стороне, а не по одному номеру.
+   *
+   * Ключ чтения тот же, которым живёт правило: `g_no_active_withdrawal` считает
+   * незавершённые выводы **по счёту клиента** (`client-account.ts`), и в схеме
+   * его зеркалит частичный уникальный индекс по `party_id`. Чтение по одному
+   * номеру ответа на этот вопрос не даёт — надо знать номера заранее, а после
+   * перезапуска их взять неоткуда.
+   */
+  loadWithdrawals(partyId: string): Promise<readonly WithdrawalSnapshot[]>;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -297,5 +352,27 @@ export function payoutSnapshotsSame(left: PayoutSnapshot, right: PayoutSnapshot)
     left.beneficiary.accountKey === right.beneficiary.accountKey &&
     left.evidenceBundleId === right.evidenceBundleId &&
     left.providerReference === right.providerReference
+  );
+}
+
+/**
+ * Равенство выводов — по всем полям снимка, а не по статусу.
+ *
+ * Сравнение «тот же номер и тот же статус» объявило бы повтором шаг, в котором
+ * поменялась сумма или счёт-источник: у вывода на пути `requested → approved`
+ * это ровно та подмена, ради запрета которой существует красная линия №9.
+ */
+export function withdrawalSnapshotsSame(
+  left: WithdrawalSnapshot,
+  right: WithdrawalSnapshot,
+): boolean {
+  return (
+    left.state.withdrawalId === right.state.withdrawalId &&
+    left.state.status === right.state.status &&
+    left.state.idempotencyKey === right.state.idempotencyKey &&
+    left.party.partyId === right.party.partyId &&
+    left.party.accountKey === right.party.accountKey &&
+    moneySame(left.amount, right.amount) &&
+    left.sourceAccountFingerprint === right.sourceAccountFingerprint
   );
 }

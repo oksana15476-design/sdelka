@@ -1,5 +1,5 @@
 import type { CurrencyCode } from '@sdelka/money';
-import { accountCode, conversionOfAccount } from './accounts';
+import { accountCode, conversionOfAccount, isClientFundsAccount } from './accounts';
 import {
   type FxExecution,
   type JournalEntry,
@@ -8,6 +8,7 @@ import {
   isClientRef,
   postingFile,
   postingMovementKey,
+  postingNaturalSign,
 } from './entry';
 import { LedgerError, LedgerErrorCode } from './errors';
 
@@ -499,6 +500,105 @@ function assertCorrectionMirrorsTarget(journal: Journal, entry: JournalEntry): v
 }
 
 /**
+ * **Исправление отматывает только то, что ещё на счёте.**
+ *
+ * Это вторая половина правила о зеркальности, и без неё первая половина
+ * неполна. `assertCorrectionMirrorsTarget` отвечает на вопрос «то ли
+ * отматывают»: те же счета, те же файлы, обратная сторона, не больше цели. Она
+ * **не может** отвечать на вопрос «а есть ли ещё что отматывать»: между целью и
+ * исправлением деньги успевают уйти, и цель об этом ничего не знает.
+ *
+ * **Проба, ради которой правило появилось** (`test/laundering.test.ts`,
+ * атака 6). Пять записей, каждая законна по отдельности, зеркальность шага 4
+ * соблюдена буквально:
+ *
+ * ```
+ * 1. поступление без плательщика          → suspense 100 000
+ * 2. identifySuspense(X)                  → 100 000 в свободной части X
+ * 3. lockForTranche(X, сделка A)          → 100 000 заперты под транш
+ * 4. correction записи 2 (точное зеркало) → свободная часть X: −100 000
+ * 5. identifySuspense(Z)                  → 100 000 в свободной части Z
+ * ```
+ *
+ * Итог прогона до правила: посторонний Z получил 100 000 свободных денег,
+ * транш A остался «обеспечен», портфельное покрытие — ровно 1/1, и единственный
+ * след — отрицательный остаток счёта X, замеченный отчётом **после** того, как
+ * запись уже в журнале. Обязательство по сделке A профинансировано деньгами,
+ * которые теперь числятся за посторонним лицом, — красная линия №1.
+ *
+ * **Почему правило именное — для исправления, а не для любой записи.** Право
+ * двигаться назад есть только у `correction`, и оно дорогое: ровно на нём три
+ * запрета конструктора записи делают исключение (`assertFeeNeverLandsOnClientFunds`,
+ * `assertNoOwnedObligationIntoIntakePool`, `assertNoPayoutFromTerminalPool` в
+ * `entry.ts`). Это исключение обязано быть оплачено связью с целью — и
+ * зеркальностью, и наличием того, что отматывают. У обычной записи такого
+ * права нет вовсе: её минус — не «отмотали лишнее», а «выплатили не своё», и
+ * его ловят три других рубежа (см. `[открыто]` ниже).
+ *
+ * Правило накрывает **клиентские средства целиком** — и обязательства, и
+ * кастодиан (`isClientFundsAccount`, то же условие `funds = 'client'`, что и в
+ * триггере базы `0003_balance.sql`): минус на номинальном счёте — такая же
+ * невозможность, как минус на счёте клиента.
+ *
+ * Остаток считается **после записи целиком**, а не по ходу проводок: внутри
+ * одной записи счёт законно проваливается ниже нуля между первой и второй
+ * проводкой, и ровно поэтому триггер базы отложенный.
+ *
+ * ⚠ **[открыто]** Общий вид этого правила — «ни одна запись не уводит клиентский
+ * счёт в минус» — сегодня **не** стоит, и это не выбор в пользу мягкости, а
+ * названная развилка. База такой минус отвергает на коммите
+ * (`assert_no_negative_balance`), шаг мира — после каждого шага
+ * (`app/world.ts`, `sealed`), отчёт — кодом `negativeClientBalance` и
+ * стоп-краном. Журнал же его принимает, и общий запрет здесь упирается не в
+ * учёт, а в две сборки **вне** этого пакета, которые кладут записи мимо
+ * порядка: проекция намерений домена (`domain/test/support/ledger-projection.ts`
+ * — расчёт проецируется на пустой журнал, без поступления и привязки) и
+ * фикстура кабинета владельца (`apps/web/src/fixtures/engine.ts` — сценарий
+ * собирается отдельным журналом, а валютная нога приписывается к нему уже
+ * после). Обе собирают журналы, которые база на коммите отвергла бы. Решение —
+ * владельца; пока оно не принято, общий запрет ломал бы сборку витрины, а не
+ * ловил бы нарушение.
+ */
+function assertCorrectionUnwindsWhatIsThere(journal: Journal, entry: JournalEntry): void {
+  if (entry.correctsEntryId === null) return;
+  const touched = new Map<string, { currency: CurrencyCode; account: string; minor: bigint }>();
+  for (const posting of entry.postings) {
+    if (!isClientFundsAccount(posting.account)) continue;
+    const account = accountCode(posting.account);
+    const currency = posting.amount.currency;
+    const key = `${account}|${currency}`;
+    touched.set(key, {
+      currency,
+      account,
+      minor: (touched.get(key)?.minor ?? 0n) + postingNaturalSign(posting),
+    });
+  }
+  if (touched.size === 0) return;
+  for (const existing of journal.entries) {
+    for (const posting of existing.postings) {
+      const key = `${accountCode(posting.account)}|${posting.amount.currency}`;
+      const state = touched.get(key);
+      if (state === undefined) continue;
+      touched.set(key, { ...state, minor: state.minor + postingNaturalSign(posting) });
+    }
+  }
+  // Обход по ключу, а не по порядку проводок: сообщение об одной и той же
+  // записи обязано быть одним и тем же, иначе дежурный видит то один счёт, то
+  // другой.
+  for (const key of [...touched.keys()].sort()) {
+    const state = touched.get(key);
+    if (state === undefined || state.minor >= 0n) continue;
+    throw new LedgerError(LedgerErrorCode.journalCorrectionUnwindsSpentFunds, {
+      id: entry.id,
+      correctsEntryId: entry.correctsEntryId,
+      account: state.account,
+      currency: state.currency,
+      balance: state.minor.toString(),
+    });
+  }
+}
+
+/**
  * Запись обязана быть записью целиком, а не «почти записью».
  *
  * Проба, ради которой проверка появилась: объект, у которого нет поля `funds`
@@ -566,6 +666,11 @@ export function appendEntry(journal: Journal, entry: JournalEntry): Journal {
   assertCorrectionMirrorsTarget(journal, entry);
   assertConversionKeyNotReused(journal, entry);
   assertShortfallFundingResolves(journal, entry);
+  // Вторая половина правила о зеркальности стоит **после** первой и после
+  // именных правил: сначала «то ли отматывают», потом «есть ли что отматывать».
+  // Обратный порядок отвечал бы «отматывать нечего» на записи, которая
+  // отматывает вообще не свою цель, то есть называл бы не ту причину.
+  assertCorrectionUnwindsWhatIsThere(journal, entry);
   return Object.freeze({ entries: Object.freeze([...journal.entries, entry]) });
 }
 

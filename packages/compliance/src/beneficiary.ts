@@ -278,11 +278,16 @@ export function openBeneficiaryChange(
   // повторная верификация владельца обязательна всё равно.
   const effects: readonly BeneficiaryEffect[] = state.locked
     ? Object.freeze([
-        { type: 'require_reverification' as const, requestId: input.requestId },
-        { type: 'notify_all_parties_all_channels' as const, requestId: input.requestId },
-        { type: 'require_second_approval' as const, requestId: input.requestId },
+        Object.freeze({ type: 'require_reverification' as const, requestId: input.requestId }),
+        Object.freeze({
+          type: 'notify_all_parties_all_channels' as const,
+          requestId: input.requestId,
+        }),
+        Object.freeze({ type: 'require_second_approval' as const, requestId: input.requestId }),
       ])
-    : Object.freeze([{ type: 'require_reverification' as const, requestId: input.requestId }]);
+    : Object.freeze([
+        Object.freeze({ type: 'require_reverification' as const, requestId: input.requestId }),
+      ]);
 
   return ok(Object.freeze({ request: Object.freeze(base), effects }));
 }
@@ -367,7 +372,7 @@ export function applyBeneficiaryChange(
       failures.push(REASON_KEYS.beneficiaryChangeCoolingOff);
     }
     if (request.notifiedAt === null) {
-      failures.push(REASON_KEYS.beneficiaryChangeAwaitsSecondApproval);
+      failures.push(REASON_KEYS.beneficiaryChangeNotificationMissing);
     }
     // Правило «две различные учётные записи, и ни одна не готовила» живёт в
     // `dual-control.ts` в единственном экземпляре: до него оно было написано

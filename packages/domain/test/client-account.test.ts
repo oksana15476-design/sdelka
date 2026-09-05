@@ -21,6 +21,9 @@ import { NOW } from './support/facts';
 
 function facts(overrides: Partial<ClientAccountFacts> = {}): ClientAccountFacts {
   return {
+    // Чей это остаток: без владельца разрешение на внутреннее движение не
+    // выдаётся вовсе (`allocation.ts`, И12.4).
+    clientKey: 'ge.passport.buyer-1',
     free: money('GEL', 1_000_000n),
     locked: [],
     requestedAmount: money('GEL', 400_000n),
@@ -182,6 +185,25 @@ describe('вывод: машина состояний', () => {
     expect(state.status).toBe('blocked');
     state = apply(state, { type: 'withdrawal_approved' });
     expect(state.status).toBe('approved');
+  });
+
+  it('не отменяет утверждённое поручение — отмена идёт через приостановку', () => {
+    // Ребро `approved → cancelled` расходилось с принятым текстом интерфейса,
+    // который утверждает о машине прямо: «перехода из утверждённой в
+    // отменённую в системе нет» (`withdraw.cancel.blocked`). Сведено к строгой
+    // стороне — к той, что уже обещана клиенту.
+    const approved = apply(createWithdrawal('w-9'), { type: 'withdrawal_approved' });
+    expect(approved.status).toBe('approved');
+    const direct = reduceWithdrawal(approved, { type: 'withdrawal_cancelled' }, facts());
+    expect(direct.ok).toBe(false);
+    if (!direct.ok) {
+      expect(direct.error.code).toBe(RejectionCode.transitionNotAllowed);
+    }
+    // Дорога к отмене остаётся, но проходит через приостановку с причиной:
+    // `withdrawal_blocked` несёт `reason`, `withdrawal_cancelled` — ничего.
+    const blocked = apply(approved, { type: 'withdrawal_blocked', reason: 'client_asked' });
+    expect(blocked.status).toBe('blocked');
+    expect(apply(blocked, { type: 'withdrawal_cancelled' }).status).toBe('cancelled');
   });
 
   it('refuses any event on a terminal state', () => {

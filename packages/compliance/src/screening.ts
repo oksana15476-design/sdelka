@@ -225,11 +225,11 @@ export function decideSanctions(
 
   const evidence: readonly EvidenceRef[] = Object.freeze([
     ...input.evidence,
-    {
+    Object.freeze({
       kind: 'screening_response' as const,
       ref: input.response.rawResponseRef,
       observedAt: input.response.screenedAt,
-    },
+    }),
   ]);
 
   const covered: SanctionsCandidate[] = [];

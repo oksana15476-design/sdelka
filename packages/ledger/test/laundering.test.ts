@@ -20,8 +20,11 @@ import {
   createJournalEntry,
   credit,
   debit,
+  coverage,
   emptyJournal,
+  freeBalance,
   fundsOwnership,
+  identifySuspense,
   isClientCustodyAccount,
   isClientObligationAccount,
   lockForTranche,
@@ -432,5 +435,93 @@ describe('атака 5: те же схемы, помеченные исправ�
       unguardedJournal([...journal.entries, entry]),
     ).map((item) => item.code);
     expect(codes).toContain('ledger.invariant.custody_surplus');
+  });
+});
+
+/**
+ * Атака 6 — своя, против уже исправленной конструкции: **исправление отматывает
+ * то, чего на счёте больше нет**.
+ *
+ * Все пять записей законны по отдельности, и зеркальность соблюдена буквально:
+ * шаг 4 — точное обратное движение шага 2 по тем же счетам и файлам, поэтому
+ * `assertCorrectionMirrorsTarget` его пропускает и обязана пропускать. Она
+ * отвечает на вопрос «то ли отматывают», а не «есть ли ещё что отматывать»:
+ * деньги ушли шагом 3, между целью и исправлением.
+ *
+ * Итог прогона до правила «счёт клиента не уходит в минус» (воспроизведён,
+ * прежде чем чинить): у постороннего лица 100 000 свободных денег, транш A
+ * по-прежнему «обеспечен», портфельное покрытие ровно 1/1, и единственный след
+ * — отрицательный остаток счёта плательщика, замеченный отчётом **после** того,
+ * как запись уже в журнале.
+ */
+describe('атака 6: исправление отматывает опознание, деньги по которому уже потрачены', () => {
+  const unidentified = () =>
+    createJournalEntry({
+      ...at('m1'),
+      kind: 'settlement',
+      memoKey: 'ledger.entry.suspense_received',
+      postings: [debit(bankNominal('GEL'), sum), credit(suspense, sum)],
+    });
+
+  /** Зеркало шага 2 — счёт в счёт, файл в файл. */
+  const undoIdentification = (meta: { id: string; occurredAt: string }) =>
+    createJournalEntry({
+      ...meta,
+      kind: 'correction',
+      correctsEntryId: 'm2',
+      memoKey: 'ledger.entry.suspense_identified',
+      postings: [
+        credit(suspense, sum),
+        debit(clientFreeAccount(buyer), sum, { clientKey: buyer }),
+        debit(bankNominal('GEL'), sum),
+        credit(bankNominal('GEL'), sum, { clientKey: buyer }),
+      ],
+    });
+
+  /** Опознали не того — законный случай §3.3, и он обязан остаться возможным. */
+  it('still lets a wrong identification be undone while the money is untouched', () => {
+    let journal = appendEntries(emptyJournal, [
+      unidentified(),
+      identifySuspense(at('m2', 5), buyer, sum),
+    ]);
+    journal = appendEntry(journal, undoIdentification(at('m3', 10)));
+    journal = appendEntry(journal, identifySuspense(at('m4', 15), stranger, sum));
+    // Деньги вернулись в пул и опознаны заново: ни одного расхождения.
+    expect(checkLedgerInvariants(journal)).toEqual([]);
+    expect(freeBalance(journal, stranger, 'GEL').minor).toBe(100_000n);
+    expect(freeBalance(journal, buyer, 'GEL').minor).toBe(0n);
+  });
+
+  it('refuses the same correction once the money has been locked under a deal', () => {
+    const journal = appendEntries(emptyJournal, [
+      unidentified(),
+      identifySuspense(at('m2', 5), buyer, sum),
+      lockForTranche(at('m3', 10), buyer, dealA, sum),
+    ]);
+    expect(checkLedgerInvariants(journal)).toEqual([]);
+    const undo = undoIdentification(at('m4', 15));
+    // Зеркальность здесь ни при чём: запись — точное обратное движение своей
+    // цели, и в мире, где деньги не тронуты, она проходит (тест выше). Ловит
+    // её остаток: отматывать нечего.
+    expectCode(
+      () => appendEntry(journal, undo),
+      LedgerErrorCode.journalCorrectionUnwindsSpentFunds,
+    );
+
+    // Что было бы дальше, не будь правила, — и почему одного отчёта мало.
+    const damaged = unguardedJournal([
+      ...journal.entries,
+      undo,
+      identifySuspense(at('m5', 20), stranger, sum),
+    ]);
+    expect(freeBalance(damaged, stranger, 'GEL').minor).toBe(100_000n);
+    // Покрытие рапортует единицу: минус на счёте плательщика ровно гасит плюс
+    // на счёте постороннего.
+    expect(coverage(damaged).map((item) => item.covered)).toEqual([true]);
+    // Единственный след, который оставался до правила, — отрицательный остаток
+    // счёта плательщика, и виден он только отчётом, уже после записи.
+    expect(checkLedgerInvariants(damaged).map((item) => item.code)).toEqual([
+      'ledger.invariant.negative_client_balance',
+    ]);
   });
 });

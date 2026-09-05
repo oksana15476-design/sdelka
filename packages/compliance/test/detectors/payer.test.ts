@@ -239,6 +239,24 @@ describe('исключение: юрлицо, где покупатель вла
       payerKyc: 'complete',
     }) as PayerRelationship;
 
+  /**
+   * Порог назван числом, а не через саму константу: проверки выше сравнивают
+   * поведение с `CONTROLLING_OWNERSHIP_BP` и потому переживают любой её сдвиг.
+   * «От 50%» — цифра из `PRODUCT.md` §10, и сдвинуть её молча нельзя.
+   */
+  it('порог владения — ровно половина', () => {
+    expect(CONTROLLING_OWNERSHIP_BP).toBe(5_000);
+  });
+
+  it('доля в 49,99% исключения не даёт, а в 50% даёт', () => {
+    expect(assess({ origin: external(document(5)), relationship: ownership(4_999) }).outcome).toBe(
+      'hold',
+    );
+    expect(assess({ origin: external(document(5)), relationship: ownership(5_000) }).outcome).toBe(
+      'review',
+    );
+  });
+
   it('срабатывает ровно на пороге 50%', () => {
     const result = assess({
       origin: external(document(5)),

@@ -114,6 +114,67 @@ describe('прогон детекторов', () => {
     expect(report.reasons).toContain('compliance.counterparty.same_identity');
   });
 
+  /**
+   * Детектор, который перестал запускаться, не выглядит как поломка: прогон
+   * возвращает решение, сводный исход считается, отчёт собирается — просто одна
+   * типология больше не проверяется. Перечень `DETECTOR_IDS` при этом остаётся
+   * прежним, поэтому сверка перечня с самим собой такого не ловит: ловит только
+   * прогон со всеми фактами сразу.
+   */
+  it('со всеми фактами прогоняются все объявленные детекторы', () => {
+    const report = runDetectors(
+      {
+        payer: {
+          buyerDocument: BUYER_DOCUMENT,
+          origin: {
+            kind: 'external_transfer',
+            payerDocument: BUYER_DOCUMENT,
+            senderNameMatch: compareNames(BUYER_NAMES, BUYER_NAMES, strong),
+          },
+          relationship: { kind: 'self' },
+          evidence: [],
+        },
+        refund: {
+          sourceAccount: ACCOUNT_SOURCE,
+          sourceHolder: BUYER_DOCUMENT,
+          requestedAccount: ACCOUNT_SOURCE,
+          requestedHolder: BUYER_DOCUMENT,
+          sanctionsFrozen: false,
+          evidence: [],
+        },
+        price: {
+          contractPrice: money('GEL', 24_000_000n),
+          platformAmount: money('GEL', 24_000_000n),
+          differentAmountRequested: false,
+          evidence: [evidence(1, 'contract')],
+        },
+        structuring: { payments: [], evidence: [] },
+        linkage: { parties: [], declaredRelationships: [], evidence: [] },
+        flipping: {
+          cadastralCode: 'code-1',
+          currentPrice: money('GEL', 24_000_000n),
+          priorTransfers: [],
+          evidence: [],
+        },
+        counterparty: {
+          participations: [
+            { partyId: 'p', role: 'payer', document: BUYER_DOCUMENT },
+            { partyId: 'r', role: 'recipient', document: document(6) },
+          ],
+          relation: { kind: 'unrelated' },
+          nameMatch: null,
+          evidence: [],
+        },
+      },
+      POLICY,
+      NOW,
+    );
+    expect(report.results.map((item) => item.id)).toEqual([...DETECTOR_IDS]);
+    expect(report.outcome).toBe('clear');
+    // Причины сводятся без повторов, но каждый детектор приносит свою.
+    expect(report.reasons).toHaveLength(DETECTOR_IDS.length);
+  });
+
   it('перечень детекторов совпадает с реализованными', () => {
     expect([...DETECTOR_IDS]).toEqual([
       'payer',

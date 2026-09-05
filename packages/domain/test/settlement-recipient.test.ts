@@ -181,9 +181,15 @@ describe('получатель расчёта приходит из акта о�
       const source = readFileSync(join(root, name), 'utf8');
       if (source.includes('as unknown as')) found.push(name);
     }
-    expect(found).toEqual(['tranche.ts']);
+    // Мест чеканки два, по одному на ambient-тип: подтверждение сторон
+    // (`tranche.ts`) и разрешение внутреннего движения (`allocation.ts`,
+    // И12.4). Больше приведений в домене нет ни одного, и каждое — единственное
+    // для своего типа.
+    expect(found).toEqual(['allocation.ts', 'tranche.ts']);
     const tranche = readFileSync(join(root, 'tranche.ts'), 'utf8');
     expect(tranche.split('as unknown as DealPartiesAttestation').length - 1).toBe(1);
+    const allocation = readFileSync(join(root, 'allocation.ts'), 'utf8');
+    expect(allocation.split('as unknown as AllocationAuthorization').length - 1).toBe(1);
     // И функция, которая его изготавливает, наружу не выходит: ни из модуля,
     // ни из пакета.
     expect(tranche).toContain('function trancheSettlementAttestation(');

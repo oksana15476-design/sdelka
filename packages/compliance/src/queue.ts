@@ -98,15 +98,17 @@ export function prioritize(
   policy: QueuePolicy,
   now: Instant,
 ): readonly RankedTask[] {
-  const ranked: RankedTask[] = tasks.map((task) => ({
-    task,
-    ageMs: taskAgeMs(task, now),
-    escalation: escalationLevel(task, now, policy),
-    rankMinor:
-      task.rankAmount !== null && task.rankAmount.currency === policy.rankCurrency
-        ? task.rankAmount.minor
-        : null,
-  }));
+  const ranked: RankedTask[] = tasks.map((task) =>
+    Object.freeze({
+      task,
+      ageMs: taskAgeMs(task, now),
+      escalation: escalationLevel(task, now, policy),
+      rankMinor:
+        task.rankAmount !== null && task.rankAmount.currency === policy.rankCurrency
+          ? task.rankAmount.minor
+          : null,
+    }),
+  );
 
   return Object.freeze(
     ranked.sort((left, right) => {

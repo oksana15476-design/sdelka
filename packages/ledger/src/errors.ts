@@ -85,6 +85,10 @@ export const LedgerErrorCode = {
   journalShortfallRecognitionMissing: 'ledger.journal.shortfall_recognition_missing',
   // Одно признание недостачи довносится второй раз.
   journalShortfallFundedTwice: 'ledger.journal.shortfall_funded_twice',
+  // Исправление отматывает то, чего на счёте уже нет: клиентский счёт после
+  // него уходит ниже нуля. Зеркальность соблюдена, а денег нет — между целью и
+  // исправлением они успели уйти, и разницу оплатил бы кто-то третий.
+  journalCorrectionUnwindsSpentFunds: 'ledger.journal.correction_unwinds_spent_funds',
 } as const;
 
 export type LedgerErrorCode = (typeof LedgerErrorCode)[keyof typeof LedgerErrorCode];

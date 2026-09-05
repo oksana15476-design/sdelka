@@ -160,11 +160,14 @@ export function toApostropheLatin(alphabet: Alphabet, text: string): string {
 
 /** Схлопывающиеся латинские знаки: сколько грузинских букв даёт каждый. */
 const COLLAPSING_GRAPHEMES: ReadonlyMap<string, readonly string[]> = new Map([
-  ['t', ['თ', 'ტ']],
-  ['k', ['ქ', 'კ']],
-  ['p', ['ფ', 'პ']],
-  ['ts', ['ც', 'წ']],
-  ['ch', ['ჩ', 'ჭ']],
+  // Перечни заморожены: они не копируются, а уходят в `NameAmbiguity` по ссылке,
+  // и правка через отчёт меняла бы таблицу латинизации для всех последующих
+  // сравнений в процессе.
+  ['t', Object.freeze(['თ', 'ტ'])],
+  ['k', Object.freeze(['ქ', 'კ'])],
+  ['p', Object.freeze(['ფ', 'პ'])],
+  ['ts', Object.freeze(['ც', 'წ'])],
+  ['ch', Object.freeze(['ჩ', 'ჭ'])],
 ]);
 
 /** Многознаковые графемы разбираются жадно: `kh` — это ხ, а не `k` + `h`. */
@@ -407,7 +410,7 @@ export function compareNames(
   options: NameComparisonOptions,
 ): NameMatch {
   const weights = options.weights ?? DEFAULT_NAME_FEATURE_WEIGHTS;
-  const empty: NameFeatures = { levenshteinBp: 0, trigramBp: 0, jaroWinklerBp: 0 };
+  const empty: NameFeatures = Object.freeze({ levenshteinBp: 0, trigramBp: 0, jaroWinklerBp: 0 });
   if (left.length === 0 || right.length === 0) {
     return Object.freeze({
       degree: 'not_comparable',
@@ -432,11 +435,11 @@ export function compareNames(
       // В одном алфавите сравниваем исходные формы, иначе — паспортное пространство.
       const leftKey = sameAlphabet ? fullForm(a).toLowerCase() : toPassportLatin(a.alphabet, fullForm(a));
       const rightKey = sameAlphabet ? fullForm(b).toLowerCase() : toPassportLatin(b.alphabet, fullForm(b));
-      const features: NameFeatures = {
+      const features: NameFeatures = Object.freeze({
         levenshteinBp: levenshteinBp(leftKey, rightKey),
         trigramBp: trigramBp(leftKey, rightKey),
         jaroWinklerBp: jaroWinklerBp(leftKey, rightKey),
-      };
+      });
       const score = combineFeatures(features, weights);
       const exactInSourceAlphabet = sameAlphabet && leftKey === rightKey && leftKey !== '';
       const better =

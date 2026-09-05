@@ -50,6 +50,79 @@ describe('поддержка ограничена типами', () => {
   });
 });
 
+/**
+ * Перечень полномочий роли — сам предмет защиты, а не её описание.
+ *
+ * Расширение перечня ловит компилятор: `Role<C>` параметризован объединением
+ * полномочий роли, и лишнее значение в массиве не соберётся. **Сужение он не
+ * ловит**: массив покороче типу соответствует. А сужение — это тихая потеря
+ * доступа у той роли, которая обязана работать: аналитик без `lift_block`
+ * оставляет снятие блокировки некому, и очередь встаёт без единой ошибки.
+ * Поэтому перечни зафиксированы поимённо.
+ */
+describe('перечни полномочий ролей зафиксированы', () => {
+  it('оператор готовит, но не утверждает', () => {
+    expect([...OPERATOR_ROLE.capabilities]).toEqual([
+      'read_deal',
+      'read_party',
+      'read_beneficiary',
+      'write_beneficiary',
+      'run_screening',
+    ]);
+  });
+
+  it('утверждающий утверждает, но не готовит и не скринит', () => {
+    expect([...APPROVER_ROLE.capabilities]).toEqual([
+      'read_deal',
+      'read_party',
+      'read_beneficiary',
+      'approve_beneficiary_change',
+      'approve_payout',
+    ]);
+  });
+
+  it('аналитик разбирает и снимает блокировку, но не утверждает выплату', () => {
+    expect([...ANALYST_ROLE.capabilities]).toEqual([
+      'read_deal',
+      'read_party',
+      'read_beneficiary',
+      'run_screening',
+      'adjudicate_screening',
+      'lift_block',
+    ]);
+  });
+
+  it('представитель по доверенности только читает', () => {
+    expect([...REPRESENTATIVE_ROLE.capabilities]).toEqual(['read_deal', 'read_party']);
+  });
+
+  it('клиент ведёт свои реквизиты и подтверждает код тестового перевода', () => {
+    expect([...CLIENT_ROLE.capabilities]).toEqual([
+      'read_deal',
+      'write_beneficiary',
+      'confirm_test_transfer_code',
+    ]);
+  });
+
+  it('ни одна роль не готовит и не утверждает изменение реквизитов одновременно', () => {
+    const roles = [
+      SUPPORT_ROLE,
+      OPERATOR_ROLE,
+      APPROVER_ROLE,
+      ANALYST_ROLE,
+      REPRESENTATIVE_ROLE,
+      CLIENT_ROLE,
+    ];
+    for (const role of roles) {
+      const capabilities: readonly string[] = role.capabilities;
+      expect(
+        capabilities.includes('write_beneficiary') &&
+          capabilities.includes('approve_beneficiary_change'),
+      ).toBe(false);
+    }
+  });
+});
+
 describe('представитель по доверенности', () => {
   it('не меняет реквизиты', () => {
     // @ts-expect-error представитель не имеет полномочия write_beneficiary
@@ -119,6 +192,34 @@ describe('работа от имени клиента', () => {
     expect(result.error).toBe('compliance.role.impersonation_consent_missing');
   });
 
+  /**
+   * Пустая ссылка — это отсутствие ссылки, а не короткая ссылка: согласие
+   * клиента подтверждается документом, и строка нулевой длины на него не
+   * указывает. Иначе поле заполняется автоматически «пустым» и сессия от имени
+   * клиента выдаётся без согласия — с виду по правилам.
+   */
+  it('пустая ссылка на согласие согласием не считается', () => {
+    const result = grantImpersonation(
+      authority,
+      { grantId: 'g1', partyId: 'party-1', consentRef: '', ttlMs: 60_000 },
+      NOW,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe('compliance.role.impersonation_consent_missing');
+  });
+
+  it('неположительный срок — отказ по сроку, а не по согласию', () => {
+    const result = grantImpersonation(
+      authority,
+      { grantId: 'g1', partyId: 'party-1', consentRef: 'consent-1', ttlMs: 0 },
+      NOW,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe('compliance.role.impersonation_expired');
+  });
+
   it('срок ограничен сверху и виден в записи', () => {
     const result = grantImpersonation(
       authority,
@@ -141,6 +242,26 @@ describe('работа от имени клиента', () => {
     if (!result.ok) throw new Error('ожидалась выдача');
     expect(isImpersonationValid(result.value, NOW)).toBe(true);
     expect(isImpersonationValid(result.value, instant(NOW + 2_000) as Instant)).toBe(false);
+  });
+});
+
+describe('срок работы от имени клиента — часть определения', () => {
+  /**
+   * Тридцать минут названы числом, а не выражением из тех же множителей:
+   * иначе проверка повторяет определение и переживает любую его правку.
+   */
+  it('верхняя граница — тридцать минут', () => {
+    expect(MAX_IMPERSONATION_TTL_MS).toBe(1_800_000);
+  });
+
+  it('запрошенный час обрезается до тридцати минут', () => {
+    const result = grantImpersonation(
+      authorize(support, 'act_on_behalf'),
+      { grantId: 'g2', partyId: 'party-1', consentRef: 'consent-1', ttlMs: 60 * 60 * 1000 },
+      NOW,
+    );
+    if (!result.ok) throw new Error('ожидалась выдача');
+    expect(result.value.expiresAt - result.value.grantedAt).toBe(1_800_000);
   });
 });
 

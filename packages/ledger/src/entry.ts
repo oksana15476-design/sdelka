@@ -576,6 +576,25 @@ function signedMinor(posting: Posting): bigint {
   return posting.direction === 'debit' ? posting.amount.minor : -posting.amount.minor;
 }
 
+/**
+ * Остаток в **естественном знаке счёта**: актив и расход — Дт минус Кт,
+ * обязательство и доход — Кт минус Дт. Так «отрицательный остаток клиентского
+ * счёта» означает ровно то, что означает в инварианте, а не зависит от того, с
+ * какой стороны смотреть.
+ *
+ * Модель знака одна на весь пакет и живёт **здесь**, рядом с моделью проводки:
+ * её спрашивают и отчёт об остатках (`balance.ts`), и правило журнала
+ * «исправление отматывает только то, что ещё на счёте» (`journal.ts`). Две
+ * копии этой функции разошлись бы молча — и разошлись бы ровно в знаке, то
+ * есть в ту сторону, где расхождение выглядит как норма.
+ */
+export function postingNaturalSign(posting: Posting): bigint {
+  const type = accountType(posting.account);
+  const debitPositive = type === 'asset' || type === 'expense';
+  const signed = signedMinor(posting);
+  return debitPositive ? signed : -signed;
+}
+
 /** Дт минус Кт по каждой валюте отдельно. */
 export function balanceByCurrency(postings: readonly Posting[]): ReadonlyMap<CurrencyCode, bigint> {
   const totals = new Map<CurrencyCode, bigint>();

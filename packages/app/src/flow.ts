@@ -129,6 +129,7 @@ import {
   requireSamePerson,
   trancheSubject,
 } from './authority';
+import { auditRecordId, journalEntryId } from './ids';
 import {
   type DealOrigin,
   type ObservationOrigin,
@@ -219,7 +220,10 @@ export function emptyWorld(seed: WorldSeed): World {
 function nextMeta(world: World, label: string): { readonly meta: EntryMeta; readonly seq: number } {
   const seq = world.seq + 1;
   return {
-    meta: { id: `entry-${seq}-${label}`, occurredAt: new Date(world.now).toISOString() },
+    meta: {
+      id: journalEntryId(world.chain.chainId, seq, label),
+      occurredAt: new Date(world.now).toISOString(),
+    },
     seq,
   };
 }
@@ -239,7 +243,7 @@ function record(world: World, input: AuditRecordInput): AuditChain {
 }
 
 function auditId(world: World, seq: number): string {
-  return `${world.chain.chainId}:r${seq}`;
+  return auditRecordId(world.chain.chainId, seq);
 }
 
 export function advance(world: World, milliseconds: number): World {
@@ -1499,7 +1503,7 @@ function applyIntents(
         const amount = next.facts.collectedAmount ?? next.facts.requiredAmount;
         seq += 1;
         chain = appendRecord(chain, {
-          recordId: `${chain.chainId}:r${seq}`,
+          recordId: auditRecordId(chain.chainId, seq),
           recordedAt: auditInstant(world.now),
           actor,
           subject: auditRef('payout', intent.idempotencyKey),
@@ -1552,7 +1556,7 @@ function applyIntents(
         // до его появления поручение видно в цепочке этим переходом, а его
         // исход — записью `payout_result` с тем же предметом.
         chain = appendRecord(chain, {
-          recordId: `${chain.chainId}:r${seq}`,
+          recordId: auditRecordId(chain.chainId, seq),
           recordedAt: auditInstant(world.now),
           actor,
           subject: auditRef('payout', intent.idempotencyKey),
@@ -1591,7 +1595,7 @@ function applyIntents(
         seq += 1;
         const projected = projectLedgerIntent(intent, {
           meta: {
-            id: `entry-${seq}-${intent.template}`,
+            id: journalEntryId(chain.chainId, seq, intent.template),
             occurredAt: new Date(world.now).toISOString(),
           },
           deductions: next.deductions,
@@ -1620,10 +1624,13 @@ function applyIntents(
         // начисления уводит `fee:receivable` в минус и ловится инвариантом.
         const occurredAt = new Date(world.now).toISOString();
         seq += 1;
-        const accrualMeta: EntryMeta = { id: `entry-${seq}-fee-accrued`, occurredAt };
+        const accrualMeta: EntryMeta = {
+          id: journalEntryId(chain.chainId, seq, 'fee-accrued'),
+          occurredAt,
+        };
         seq += 1;
         const projected = projectSettlementIntent(intent, {
-          meta: { id: `entry-${seq}-settlement`, occurredAt },
+          meta: { id: journalEntryId(chain.chainId, seq, 'settlement'), occurredAt },
           accrualMeta,
           deductions: next.deductions,
           tariffVersionId: next.tariffVersionId,
@@ -1649,7 +1656,7 @@ function applyIntents(
 
   seq += 1;
   chain = appendRecord(chain, {
-    recordId: `${chain.chainId}:r${seq}`,
+    recordId: auditRecordId(chain.chainId, seq),
     recordedAt: auditInstant(world.now),
     actor,
     subject: auditRef('tranche', runtime.trancheId),
@@ -1805,7 +1812,7 @@ function applyTrancheEventInternal(
       seq += 1;
       const outcome = event.type === 'payout_result' ? event.outcome : event.outcome;
       chain = appendRecord(chain, {
-        recordId: `${chain.chainId}:r${seq}`,
+        recordId: auditRecordId(chain.chainId, seq),
         recordedAt: auditInstant(world.now),
         actor,
         subject: auditRef('payout', last.idempotencyKey),

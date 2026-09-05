@@ -12,6 +12,7 @@
  */
 import type { DealPartiesAttestation } from '@sdelka/ledger';
 import type { CurrencyCode, Money } from '@sdelka/money';
+import { allocationMatches } from './allocation';
 import { type ConditionAct, conditionActsEqual } from './condition-act';
 import type { FreezeReason, UnfreezeTarget } from './freeze';
 import { type GuardId, type GuardInput, type TrancheFacts, evaluateGuard } from './guards';
@@ -787,7 +788,22 @@ function entryIntents(
         // не было, — удвоив и обязательство перед клиентом, и отнесение
         // кастодиана. Обеспечение при этом сходится с обеих сторон, поэтому ни
         // один инвариант учёта такую запись не поймал бы.
-        ...(event.type === 'funds_received' ? ledger('funds_received') : []),
+        /**
+         * Внутреннее движение зачисления не порождает (И12.4): деньги уже
+         * лежат в свободной части счёта этого же клиента, и на сделку их
+         * относит запирание на входе в `reserved`. Вторая проводка зачисления
+         * придумала бы поступление, которого не было, и отнесла бы на
+         * номинальный счёт сумму, которой банк не получал: в модели покрытие
+         * сошлось бы, с выпиской — нет (красная линия №3).
+         *
+         * Разбор стоит **здесь**, а не маршрутом зачисления в приложении:
+         * маршрут был опцией вызывающего, то есть ответ на вопрос «зачислять
+         * ли» давал тот же, кто задавал вопрос. Разрешение построить нечем
+         * (`allocation.ts`), поэтому здесь ответ вытекает из события.
+         */
+        ...(event.type === 'funds_received' && event.allocation === undefined
+          ? ledger('funds_received')
+          : []),
         /**
          * Расфиксация — по **событию**, а не по статусу, тем же приёмом, что
          * зачисление строкой выше. `reserve_expired` — единственное событие,
@@ -1112,6 +1128,42 @@ export function reduceTranche(
           status: state.status,
           conditionType: event.conditionType,
           actConditionType: act.conditionType,
+        }),
+      );
+    }
+  }
+
+  /**
+   * Внутреннее движение (И12.4): разрешение обязано быть выдано **этому**
+   * траншу, **этому** плательщику и **на эту** сумму.
+   *
+   * Сверка рядом с `conditionActSubstituted` и по той же причине: разрешение
+   * приходит снаружи вместе с событием, и без сверки поле события декоративно.
+   * Разрешение, полученное на сделку Б, годилось бы тогда для сделки В — а
+   * вместе с ним и пропуск зачисления, то есть транш В принял бы деньги,
+   * которых на счёте клиента для него нет, и списал бы их запиранием на входе в
+   * `reserved`, уведя свободную часть в минус.
+   *
+   * Плательщик берётся оттуда же, откуда его берут проводки
+   * (`payerAccountKey`), — второго места, откуда взять ответ, нет.
+   */
+  if (event.type === 'funds_received' && event.allocation !== undefined) {
+    const movement = {
+      clientKey: payerAccountKey(context),
+      dealId: context.dealId,
+      trancheId: context.trancheId,
+      amount: event.amount,
+    };
+    if (!allocationMatches(event.allocation, movement)) {
+      return failure(
+        rejection(RejectionCode.allocationNotAuthorized, [], {
+          status: state.status,
+          dealId: context.dealId,
+          trancheId: context.trancheId,
+          clientKey: movement.clientKey,
+          authorizedDealId: event.allocation.dealId,
+          authorizedTrancheId: event.allocation.trancheId,
+          authorizedClientKey: event.allocation.clientKey,
         }),
       );
     }

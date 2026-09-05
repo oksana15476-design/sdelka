@@ -17,6 +17,7 @@ import {
   journalActor,
 } from './authority';
 import { type TrancheEventOptions, applyDealEvent, rejectDealEvent } from './flow';
+import { auditRecordId } from './ids';
 import {
   type UnwindApproval,
   type UnwindReview,
@@ -179,7 +180,7 @@ export function requestUnwind(
     seq,
     deals: withDeal(world, { ...deal, unwindReview: review }),
     chain: appendRecord(world.chain, {
-      recordId: `${world.chain.chainId}:r${seq}`,
+      recordId: auditRecordId(world.chain.chainId, seq),
       recordedAt: auditInstant(world.now),
       actor: journalActor(authority),
       subject: auditRef('deal', dealId),
@@ -232,7 +233,7 @@ export function approveUnwind(
       unwindReview: { ...review, approvals: [...review.approvals, approval] },
     }),
     chain: appendRecord(world.chain, {
-      recordId: `${world.chain.chainId}:r${seq}`,
+      recordId: auditRecordId(world.chain.chainId, seq),
       recordedAt: auditInstant(world.now),
       actor: journalActor(authority),
       subject: auditRef('deal', dealId),

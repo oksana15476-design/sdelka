@@ -9,6 +9,7 @@ import {
   type ThawedTrancheStatus,
   type TrancheState,
   type TrancheStatus,
+  type WithdrawalStatus,
   DomainError,
   RejectionCode,
   dealState,
@@ -28,14 +29,16 @@ import {
   type DealSnapshot,
   type PayoutSnapshot,
   type TrancheSnapshot,
+  type WithdrawalSnapshot,
   type WriteOutcome,
   dealSnapshotsSame,
   payoutSnapshotsSame,
   trancheSnapshotsSame,
+  withdrawalSnapshotsSame,
 } from './port.ts';
 
 /**
- * Состояние сделки, транша и поручения.
+ * Состояние сделки, транша, поручения и вывода со счёта клиента.
  *
  * **Как здесь устроена идемпотентность и почему именно так.**
  *
@@ -604,6 +607,156 @@ async function payoutRepeatOrConflict(
   throw new DbError(DbErrorCode.stepStateConflict, {
     relation: 'payout',
     id: snapshot.payoutId,
+    expected: snapshot.state.status,
+    actual: current?.state.status ?? '',
+  });
+}
+
+/* ------------------------------------------------------------------------- */
+/* Вывод со счёта клиента                                                    */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Вывод — четвёртая часть состояния, и до сих пор единственная, которой у порта
+ * не было вовсе. Таблица (`0005_payout.sql`) и машина из шести состояний
+ * (`domain/src/client-account.ts`) существовали, метода не было: всё, что не
+ * ложилось, порт называл значением или отказом с ключом, а вывод не возвращал
+ * ничего.
+ *
+ * Правило записи то же, что у транша и поручения, и повторено не по инерции:
+ * меняется **только статус**, всё остальное — тождество вывода. Сторона, сумма,
+ * ключ идемпотентности (`withdrawalIdempotencyKey`, функция номера вывода) и
+ * отпечаток счёта-источника заданы в момент заявки; вывод, у которого поменялась
+ * любая из них, — другой вывод под тем же номером, а не следующий шаг того же.
+ * Для отпечатка это прямо красная линия №9: подменённый на пути
+ * `requested → approved` счёт-источник — это перевод не тому.
+ */
+interface WithdrawalRow {
+  readonly withdrawal_id: string;
+  readonly party_id: string;
+  readonly party_account_key: string;
+  readonly status: string;
+  readonly idempotency_key: string;
+  readonly amount_minor: string;
+  readonly currency: string;
+  readonly source_account_fingerprint: string;
+}
+
+const WITHDRAWAL_SOURCE = `
+  SELECT w.withdrawal_id, w.party_id, p.account_key AS party_account_key, w.status,
+         w.idempotency_key, w.amount_minor, w.currency, w.source_account_fingerprint
+    FROM sdelka.withdrawal w
+    JOIN sdelka.party p ON p.party_id = w.party_id`;
+
+const SELECT_WITHDRAWALS_BY_PARTY = `${WITHDRAWAL_SOURCE}
+   WHERE w.party_id = $1
+   ORDER BY w.withdrawal_id`;
+
+const SELECT_WITHDRAWAL_BY_ID = `${WITHDRAWAL_SOURCE}
+   WHERE w.withdrawal_id = $1`;
+
+function withdrawalOfRow(row: WithdrawalRow): WithdrawalSnapshot {
+  return Object.freeze({
+    state: Object.freeze({
+      status: row.status as WithdrawalStatus,
+      withdrawalId: row.withdrawal_id,
+      idempotencyKey: row.idempotency_key,
+    }),
+    party: Object.freeze({ partyId: row.party_id, accountKey: row.party_account_key }),
+    amount: money(assertCurrencyCode(row.currency), toBigInt(row.amount_minor)),
+    sourceAccountFingerprint: row.source_account_fingerprint,
+  });
+}
+
+export async function loadWithdrawals(
+  client: PoolClient,
+  partyId: string,
+): Promise<readonly WithdrawalSnapshot[]> {
+  return translating(async () => {
+    const result = await client.query<WithdrawalRow>(SELECT_WITHDRAWALS_BY_PARTY, [partyId]);
+    return Object.freeze(result.rows.map(withdrawalOfRow));
+  });
+}
+
+export async function saveWithdrawal(
+  client: PoolClient,
+  snapshot: WithdrawalSnapshot,
+  previous: WithdrawalSnapshot | null,
+): Promise<WriteOutcome> {
+  return translating(async () => {
+    await saveParty(client, snapshot.party);
+    if (previous === null) {
+      const inserted = await client.query(
+        `INSERT INTO sdelka.withdrawal (
+           withdrawal_id, party_id, status, idempotency_key,
+           amount_minor, currency, source_account_fingerprint
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (withdrawal_id) DO NOTHING`,
+        [
+          snapshot.state.withdrawalId,
+          snapshot.party.partyId,
+          snapshot.state.status,
+          snapshot.state.idempotencyKey,
+          snapshot.amount.minor.toString(),
+          snapshot.amount.currency,
+          snapshot.sourceAccountFingerprint,
+        ],
+      );
+      if (inserted.rowCount !== 0) return Object.freeze({ written: 1, repeated: 0 });
+      return withdrawalRepeatOrConflict(client, snapshot);
+    }
+    // Тождество вывода стоит в `WHERE` целиком, а не сверяется отдельной
+    // проверкой до запроса: сверка «в коде» читает то, что уже могло измениться,
+    // и между чтением и записью помещается чужой шаг. Здесь сравнение и запись
+    // — один оператор, а несовпадение разбирается тем же способом, что у
+    // транша: цель шага уже лежит — повтор, лежит другое — отказ с именем.
+    const updated = await client.query(
+      `UPDATE sdelka.withdrawal SET status = $2
+        WHERE withdrawal_id = $1
+          AND status = $3
+          AND party_id = $4
+          AND idempotency_key = $5
+          AND amount_minor = $6
+          AND currency = $7
+          AND source_account_fingerprint = $8`,
+      [
+        snapshot.state.withdrawalId,
+        snapshot.state.status,
+        previous.state.status,
+        snapshot.party.partyId,
+        snapshot.state.idempotencyKey,
+        snapshot.amount.minor.toString(),
+        snapshot.amount.currency,
+        snapshot.sourceAccountFingerprint,
+      ],
+    );
+    if (updated.rowCount !== 0) return Object.freeze({ written: 1, repeated: 0 });
+    return withdrawalRepeatOrConflict(client, snapshot);
+  });
+}
+
+/**
+ * Разбор по номеру вывода, а не по стороне.
+ *
+ * Чтение по стороне здесь не годится: конфликт бывает и такой, где в базе под
+ * тем же номером лежит вывод **другого** клиента, — по стороне из снимка он не
+ * нашёлся бы, и отказ доложил бы «в базе ничего» вместо «в базе чужое».
+ */
+async function withdrawalRepeatOrConflict(
+  client: PoolClient,
+  snapshot: WithdrawalSnapshot,
+): Promise<WriteOutcome> {
+  const result = await client.query<WithdrawalRow>(SELECT_WITHDRAWAL_BY_ID, [
+    snapshot.state.withdrawalId,
+  ]);
+  const row = result.rows[0];
+  const current = row === undefined ? null : withdrawalOfRow(row);
+  if (current !== null && withdrawalSnapshotsSame(current, snapshot)) {
+    return Object.freeze({ written: 0, repeated: 1 });
+  }
+  throw new DbError(DbErrorCode.stepStateConflict, {
+    relation: 'withdrawal',
+    id: snapshot.state.withdrawalId,
     expected: snapshot.state.status,
     actual: current?.state.status ?? '',
   });

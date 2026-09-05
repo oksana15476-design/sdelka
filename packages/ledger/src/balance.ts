@@ -24,21 +24,9 @@ import {
   type TrancheRef,
   clientAccountFile,
   isClientRef,
+  postingNaturalSign,
 } from './entry';
 import { type Journal } from './journal';
-
-/**
- * Остаток в естественном знаке счёта: актив и расход — Дт минус Кт,
- * обязательство и доход — Кт минус Дт. Так «отрицательный остаток клиентского
- * счёта» означает ровно то, что означает в инварианте, а не зависит от того,
- * с какой стороны смотреть.
- */
-function naturalSign(account: Account, posting: Posting): bigint {
-  const type = accountType(account);
-  const debitPositive = type === 'asset' || type === 'expense';
-  const signed = posting.direction === 'debit' ? posting.amount.minor : -posting.amount.minor;
-  return debitPositive ? signed : -signed;
-}
 
 function eachPosting(journal: Journal): readonly Posting[] {
   return journal.entries.flatMap((entry) => entry.postings);
@@ -54,7 +42,7 @@ export function accountBalance(
   for (const posting of eachPosting(journal)) {
     if (posting.amount.currency !== currency) continue;
     if (accountCode(posting.account) !== code) continue;
-    total += naturalSign(posting.account, posting);
+    total += postingNaturalSign(posting);
   }
   return money(currency, total);
 }
@@ -69,7 +57,7 @@ export function accountBalances(journal: Journal): readonly AccountBalance[] {
   const totals = new Map<string, bigint>();
   for (const posting of eachPosting(journal)) {
     const key = `${accountCode(posting.account)}|${posting.amount.currency}`;
-    totals.set(key, (totals.get(key) ?? 0n) + naturalSign(posting.account, posting));
+    totals.set(key, (totals.get(key) ?? 0n) + postingNaturalSign(posting));
   }
   return [...totals.entries()]
     .map(([key, total]) => {
@@ -129,11 +117,11 @@ export function coverage(journal: Journal): readonly CoverageByCurrency[] {
     // исключается симметрично обеим сторонам, потому что его считает
     // `unclaimedCoverage`.
     if (isClientCustodyAccount(account) && poolDirection(account) !== 'terminal') {
-      custody.set(currency, (custody.get(currency) ?? 0n) + naturalSign(account, posting));
+      custody.set(currency, (custody.get(currency) ?? 0n) + postingNaturalSign(posting));
     } else if (isClientObligationAccount(account) && poolDirection(account) !== 'terminal') {
       obligations.set(
         currency,
-        (obligations.get(currency) ?? 0n) + naturalSign(account, posting),
+        (obligations.get(currency) ?? 0n) + postingNaturalSign(posting),
       );
     }
   }
@@ -175,7 +163,7 @@ export function unclaimedCoverage(journal: Journal): readonly CoverageByCurrency
     if (poolDirection(account) === 'terminal' && accountType(account) === 'liability') {
       obligations.set(
         currency,
-        (obligations.get(currency) ?? 0n) + naturalSign(account, posting),
+        (obligations.get(currency) ?? 0n) + postingNaturalSign(posting),
       );
       continue;
     }
@@ -191,7 +179,7 @@ export function unclaimedCoverage(journal: Journal): readonly CoverageByCurrency
       isPlatformBankAccount(account) ||
       (poolDirection(account) === 'terminal' && accountType(account) === 'asset')
     ) {
-      custody.set(currency, (custody.get(currency) ?? 0n) + naturalSign(account, posting));
+      custody.set(currency, (custody.get(currency) ?? 0n) + postingNaturalSign(posting));
     }
   }
   const currencies = new Set<CurrencyCode>([...custody.keys(), ...obligations.keys()]);
@@ -269,7 +257,7 @@ export function coverageByTranche(journal: Journal): readonly TrancheCoverage[] 
         obligations,
         { dealId: account.dealId, trancheId: account.trancheId },
         currency,
-        naturalSign(account, posting),
+        postingNaturalSign(posting),
       );
     } else if (
       isClientCustodyAccount(account) &&
@@ -278,7 +266,7 @@ export function coverageByTranche(journal: Journal): readonly TrancheCoverage[] 
     ) {
       // Кастодиан, отнесённый к клиенту вне сделки, в файл транша не попадает:
       // это второй вид файла, он считается `coverageByFundsSource`.
-      bump(custody, posting.attribution, currency, naturalSign(account, posting));
+      bump(custody, posting.attribution, currency, postingNaturalSign(posting));
     }
   }
 
@@ -458,7 +446,7 @@ export function coverageByFundsSource(journal: Journal): readonly FundsSourceCov
     const source = sourceOfPosting(posting);
     if (source === null) continue;
     const target = isClientCustodyAccount(posting.account) ? custody : obligations;
-    bump(target, source, posting.amount.currency, naturalSign(posting.account, posting));
+    bump(target, source, posting.amount.currency, postingNaturalSign(posting));
   }
 
   const result: FundsSourceCoverage[] = [];
@@ -553,7 +541,7 @@ export function clientStatement(journal: Journal, owner: ClientKey): ClientState
     // счёт, заведённый завтра, попадёт в выписку сам.
     const file = clientAccountFile(account);
     if (file === null || isClientRef(file)) {
-      free.set(currency, (free.get(currency) ?? 0n) + naturalSign(account, posting));
+      free.set(currency, (free.get(currency) ?? 0n) + postingNaturalSign(posting));
       continue;
     }
     const deal: TrancheRef = { dealId: file.dealId, trancheId: file.trancheId };
@@ -561,10 +549,10 @@ export function clientStatement(journal: Journal, owner: ClientKey): ClientState
     const bucket = locked.get(key) ?? { deal, totals: new Map<CurrencyCode, bigint>() };
     bucket.totals.set(
       currency,
-      (bucket.totals.get(currency) ?? 0n) + naturalSign(account, posting),
+      (bucket.totals.get(currency) ?? 0n) + postingNaturalSign(posting),
     );
     locked.set(key, bucket);
-    lockedTotal.set(currency, (lockedTotal.get(currency) ?? 0n) + naturalSign(account, posting));
+    lockedTotal.set(currency, (lockedTotal.get(currency) ?? 0n) + postingNaturalSign(posting));
   }
 
   const lockedList: LockedPortion[] = [];
@@ -667,9 +655,9 @@ export function feePositions(journal: Journal): readonly FeePosition[] {
     };
     const currency = posting.amount.currency;
     if (account.kind === 'fee_income') {
-      bucket(deal, currency).accrued += naturalSign(account, posting);
+      bucket(deal, currency).accrued += postingNaturalSign(posting);
     } else if (account.kind === 'fee_receivable') {
-      bucket(deal, currency).receivable += naturalSign(account, posting);
+      bucket(deal, currency).receivable += postingNaturalSign(posting);
     } else if (account.kind === 'transit_fee') {
       const target = bucket(deal, currency);
       if (posting.direction === 'debit') {
@@ -751,7 +739,7 @@ export function openFeeReceivables(journal: Journal): readonly FeeReceivablePosi
         lockedTouched.add(lockedKey);
         lockedTotal.set(
           lockedKey,
-          (lockedTotal.get(lockedKey) ?? 0n) + naturalSign(account, posting),
+          (lockedTotal.get(lockedKey) ?? 0n) + postingNaturalSign(posting),
         );
         continue;
       }
@@ -774,7 +762,7 @@ export function openFeeReceivables(journal: Journal): readonly FeeReceivablePosi
         lastMovedAt: entry.occurredAt,
         total: 0n,
       };
-      state.total += naturalSign(account, posting);
+      state.total += postingNaturalSign(posting);
       state.lastMovedAt = entry.occurredAt;
       open.set(feeKey, state);
     }
@@ -861,7 +849,7 @@ export function openFxPositions(journal: Journal): readonly FxPosition[] {
       const currency = posting.amount.currency;
       state.balances.set(
         currency,
-        (state.balances.get(currency) ?? 0n) + naturalSign(posting.account, posting),
+        (state.balances.get(currency) ?? 0n) + postingNaturalSign(posting),
       );
       state.lastMovedAt = entry.occurredAt;
       open.set(key, state);
@@ -929,7 +917,7 @@ export function openTransitPositions(journal: Journal): readonly TransitPosition
       const key = `${accountCode(account)}|${posting.amount.currency}`;
       touched.add(key);
       const state = open.get(key) ?? { openedAt: entry.occurredAt, total: 0n };
-      state.total += naturalSign(account, posting);
+      state.total += postingNaturalSign(posting);
       open.set(key, state);
     }
     for (const key of touched) {

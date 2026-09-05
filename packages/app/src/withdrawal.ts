@@ -51,6 +51,7 @@ import {
   authorizeWithContext,
   journalActor,
 } from './authority';
+import { auditRecordId, journalEntryId } from './ids';
 import { type WithdrawalOrigin, withdrawalOriginsOf } from './origins';
 import { type World, payerOf, sealed } from './world';
 
@@ -419,7 +420,10 @@ export interface WithdrawalStepOptions {
 function meta(world: World, label: string): { readonly meta: EntryMeta; readonly seq: number } {
   const seq = world.seq + 1;
   return {
-    meta: { id: `entry-${seq}-${label}`, occurredAt: new Date(world.now).toISOString() },
+    meta: {
+      id: journalEntryId(world.chain.chainId, seq, label),
+      occurredAt: new Date(world.now).toISOString(),
+    },
     seq,
   };
 }
@@ -479,7 +483,7 @@ export function applyWithdrawalEvent<E extends WithdrawalEvent>(
   seq += 1;
   const subject = auditRef('payout', moved.state.idempotencyKey);
   const chain = appendRecord(world.chain, {
-    recordId: `${world.chain.chainId}:r${seq}`,
+    recordId: auditRecordId(world.chain.chainId, seq),
     recordedAt: auditInstant(world.now),
     actor: journalActor(authority),
     subject,

@@ -100,16 +100,16 @@ export function findPartyLinks(facts: LinkageFacts): readonly PartyLink[] {
       if (left === undefined || right === undefined) continue;
       const shared: SharedSignal[] = [];
       for (const value of intersect(left.accounts, right.accounts)) {
-        shared.push({ kind: 'account', label: fingerprintLabel(value) });
+        shared.push(Object.freeze({ kind: 'account', label: fingerprintLabel(value) }));
       }
       for (const value of intersect(left.devices, right.devices)) {
-        shared.push({ kind: 'device', label: fingerprintLabel(value) });
+        shared.push(Object.freeze({ kind: 'device', label: fingerprintLabel(value) }));
       }
       for (const value of intersect(left.networkAddresses, right.networkAddresses)) {
-        shared.push({ kind: 'network_address', label: fingerprintLabel(value) });
+        shared.push(Object.freeze({ kind: 'network_address', label: fingerprintLabel(value) }));
       }
       for (const value of intersect(left.phones, right.phones)) {
-        shared.push({ kind: 'phone', label: fingerprintLabel(value) });
+        shared.push(Object.freeze({ kind: 'phone', label: fingerprintLabel(value) }));
       }
       if (shared.length === 0) continue;
       links.push(

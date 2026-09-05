@@ -5,6 +5,7 @@ import {
   type PayoutLeg,
   type PayoutState,
   type TrancheState,
+  type WithdrawalState,
   boundConditionAct,
 } from '@sdelka/domain';
 import type { Journal, JournalEntry } from '@sdelka/ledger';
@@ -115,6 +116,26 @@ export interface PayoutSnapshot {
   readonly providerReference: string | null;
 }
 
+/**
+ * Вывод со счёта клиента — зеркало `WithdrawalSnapshot` из `@sdelka/db`.
+ *
+ * ⚠ Зеркало сверяется присваиванием **в обе стороны**
+ * (`packages/e2e/test/store-port.test.ts`): разошедшиеся объявления роняют типы,
+ * а не расходятся молча. Пока этого снимка здесь не было, вывод не писался
+ * вовсе и в перечне непопавшего не появлялся — единственное место во всём
+ * подключении, где возможно было молчание.
+ *
+ * Своего номера у снимка нет: он уже лежит в `WithdrawalState`. Отпечаток
+ * счёта-источника вместо самих реквизитов — номер счёта в открытом виде в базе
+ * не живёт (красная линия №9).
+ */
+export interface WithdrawalSnapshot {
+  readonly state: WithdrawalState;
+  readonly party: PartyRef;
+  readonly amount: Money<CurrencyCode>;
+  readonly sourceAccountFingerprint: string;
+}
+
 export interface WorldStore {
   transact<T>(body: (tx: WorldTransaction) => Promise<T>): Promise<T>;
 }
@@ -130,6 +151,16 @@ export interface WorldTransaction {
   loadTranche(dealId: string, trancheId: string): Promise<TrancheSnapshot | null>;
   savePayout(snapshot: PayoutSnapshot, previous: PayoutSnapshot | null): Promise<WriteOutcome>;
   loadPayouts(dealId: string, trancheId: string): Promise<readonly PayoutSnapshot[]>;
+  saveWithdrawal(
+    snapshot: WithdrawalSnapshot,
+    previous: WithdrawalSnapshot | null,
+  ): Promise<WriteOutcome>;
+  /**
+   * Списком по стороне, а не по одному номеру: правило `g_no_active_withdrawal`
+   * считает незавершённые выводы по счёту клиента, и чтение по номеру ответа на
+   * этот вопрос не даёт — номера после перезапуска взять неоткуда.
+   */
+  loadWithdrawals(partyId: string): Promise<readonly WithdrawalSnapshot[]>;
 }
 
 /**

@@ -68,35 +68,53 @@ export function runDetectors(
   const version = policy.version;
 
   if (facts.payer !== null) {
-    results.push({ id: 'payer', decision: assessPayer(facts.payer, version, now) });
+    results.push(Object.freeze({ id: 'payer', decision: assessPayer(facts.payer, version, now) }));
   }
   if (facts.refund !== null) {
-    results.push({ id: 'refund', decision: assessRefundDestination(facts.refund, version, now) });
+    results.push(
+      Object.freeze({
+        id: 'refund',
+        decision: assessRefundDestination(facts.refund, version, now),
+      }),
+    );
   }
   if (facts.price !== null) {
-    results.push({ id: 'price', decision: assessPrice(facts.price, version, policy.price, now) });
+    results.push(
+      Object.freeze({
+        id: 'price',
+        decision: assessPrice(facts.price, version, policy.price, now),
+      }),
+    );
   }
   if (facts.structuring !== null) {
-    results.push({
-      id: 'structuring',
-      decision: assessStructuring(facts.structuring, version, policy.structuring, now),
-    });
+    results.push(
+      Object.freeze({
+        id: 'structuring',
+        decision: assessStructuring(facts.structuring, version, policy.structuring, now),
+      }),
+    );
   }
   if (facts.linkage !== null) {
-    results.push({ id: 'linkage', decision: assessLinkage(facts.linkage, version, now) });
+    results.push(
+      Object.freeze({ id: 'linkage', decision: assessLinkage(facts.linkage, version, now) }),
+    );
   }
   if (facts.flipping !== null) {
-    results.push({
-      id: 'flipping',
-      decision: assessFlipping(facts.flipping, version, policy.flipping, now),
-    });
+    results.push(
+      Object.freeze({
+        id: 'flipping',
+        decision: assessFlipping(facts.flipping, version, policy.flipping, now),
+      }),
+    );
   }
 
   if (facts.counterparty !== null) {
-    results.push({
-      id: 'counterparty',
-      decision: assessCounterparty(facts.counterparty, version, now),
-    });
+    results.push(
+      Object.freeze({
+        id: 'counterparty',
+        decision: assessCounterparty(facts.counterparty, version, now),
+      }),
+    );
   }
 
   const reasons: ReasonKey[] = [];

@@ -1,4 +1,5 @@
 import type { CurrencyCode, Money } from '@sdelka/money';
+import type { AllocationAuthorization } from './allocation';
 import type { ConditionAct } from './condition-act';
 import type { ComplianceFreezeReason, UnfreezeTarget } from './freeze';
 import type { ReleaseConditionType } from './release-condition';
@@ -22,6 +23,25 @@ export type TrancheEvent =
       readonly amount: Money<CurrencyCode>;
       readonly sender: string;
       readonly reference: string;
+      /**
+       * Деньги пришли **не снаружи**, а со свободной части счёта того же
+       * клиента (`ROADMAP.md` И12.4, `allocation.ts`).
+       *
+       * Поле не флаг, а разрешение с ambient-ключом: построить его кодом
+       * нельзя, единственный источник — `planAllocationToDeal`, где проверен
+       * свободный остаток. Поэтому «внутреннее поступление» невыразимо в обход
+       * проверки остатка, а не «проверяется, если приложение попросит».
+       *
+       * Что меняется от его присутствия: зачисления на счёт клиента не
+       * происходит (`tranche.ts`, вход в `collected`) — деньги уже на нём.
+       * Вторая проводка зачисления придумала бы поступление, которого не было,
+       * и дебетовала бы номинальный счёт на сумму, которой банк не получал:
+       * покрытие сошлось бы в модели и разошлось с выпиской (красная линия №3).
+       *
+       * Отсутствие поля означает внешний перевод — прежнее поведение, и все
+       * вызывающие вне домена читаются так же, как читались.
+       */
+      readonly allocation?: AllocationAuthorization;
     }
   | { readonly type: 'reserve_requested' }
   | { readonly type: 'reserve_expired' }

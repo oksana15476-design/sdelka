@@ -10,6 +10,7 @@ import type {
   DealSnapshot,
   PayoutSnapshot,
   TrancheSnapshot,
+  WithdrawalSnapshot,
   WorldStore,
   WorldTransaction,
   WriteOutcome,
@@ -18,9 +19,11 @@ import {
   loadDeal,
   loadPayouts,
   loadTranche,
+  loadWithdrawals,
   saveDeal,
   savePayout,
   saveTranche,
+  saveWithdrawal,
 } from './state.ts';
 
 /**
@@ -89,6 +92,17 @@ class PgTransaction implements WorldTransaction {
 
   loadPayouts(dealId: string, trancheId: string): Promise<readonly PayoutSnapshot[]> {
     return loadPayouts(this.#client, dealId, trancheId);
+  }
+
+  saveWithdrawal(
+    snapshot: WithdrawalSnapshot,
+    previous: WithdrawalSnapshot | null,
+  ): Promise<WriteOutcome> {
+    return saveWithdrawal(this.#client, snapshot, previous);
+  }
+
+  loadWithdrawals(partyId: string): Promise<readonly WithdrawalSnapshot[]> {
+    return loadWithdrawals(this.#client, partyId);
   }
 }
 

@@ -1,3 +1,4 @@
+export * from './allocation';
 export * from './beneficiary';
 export * from './client-account';
 export * from './command-journal';

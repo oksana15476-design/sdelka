@@ -3,10 +3,12 @@ import type {
   DealSnapshot,
   PayoutSnapshot,
   TrancheSnapshot,
+  WithdrawalSnapshot,
   WorldStore,
   WorldTransaction,
   WriteOutcome,
 } from '@sdelka/app';
+import { isTerminalWithdrawalStatus } from '@sdelka/domain';
 import { type Journal, type JournalEntry, appendEntry, emptyJournal } from '@sdelka/ledger';
 
 /**
@@ -81,6 +83,7 @@ interface Rows {
   readonly deals: Map<string, DealSnapshot>;
   readonly tranches: Map<string, TrancheSnapshot>;
   readonly payouts: Map<string, PayoutSnapshot>;
+  readonly withdrawals: Map<string, WithdrawalSnapshot>;
 }
 
 function emptyRows(): Rows {
@@ -90,6 +93,7 @@ function emptyRows(): Rows {
     deals: new Map(),
     tranches: new Map(),
     payouts: new Map(),
+    withdrawals: new Map(),
   };
 }
 
@@ -100,6 +104,7 @@ function copy(rows: Rows): Rows {
     deals: new Map(rows.deals),
     tranches: new Map(rows.tranches),
     payouts: new Map(rows.payouts),
+    withdrawals: new Map(rows.withdrawals),
   };
 }
 
@@ -294,6 +299,50 @@ class MemoryTransaction implements WorldTransaction {
       [...this.#rows.payouts.values()].filter(
         (payout) => payout.dealId === dealId && payout.state.trancheId === trancheId,
       ),
+    );
+  }
+
+  async saveWithdrawal(
+    snapshot: WithdrawalSnapshot,
+    previous: WithdrawalSnapshot | null,
+  ): Promise<WriteOutcome> {
+    const id = snapshot.state.withdrawalId;
+    const current = this.#rows.withdrawals.get(id) ?? null;
+    if (previous === null ? current === null : current !== null && same(current, previous)) {
+      // Зеркало частичного уникального индекса по стороне: незавершённый вывод
+      // у клиента один. Правило то же, что читает `g_no_active_withdrawal`, —
+      // здесь оно стоит потому, что реализация в памяти обязана отказывать там
+      // же, где отказывает база, иначе сравнение двух хранилищ ничего не стоит.
+      if (!isTerminalWithdrawalStatus(snapshot.state.status)) {
+        for (const other of this.#rows.withdrawals.values()) {
+          if (other.state.withdrawalId === id) continue;
+          if (
+            other.party.partyId === snapshot.party.partyId &&
+            !isTerminalWithdrawalStatus(other.state.status)
+          ) {
+            throw new MemoryStoreError(STORE_ERROR.conflict, {
+              relation: 'withdrawal',
+              id,
+              constraint: 'withdrawal_one_active_per_party',
+            });
+          }
+        }
+      }
+      this.#rows.withdrawals.set(id, snapshot);
+      return { written: 1, repeated: 0 };
+    }
+    if (current !== null && same(current, snapshot)) return { written: 0, repeated: 1 };
+    throw new MemoryStoreError(STORE_ERROR.stateConflict, {
+      relation: 'withdrawal',
+      id,
+      expected: snapshot.state.status,
+      actual: current?.state.status ?? '',
+    });
+  }
+
+  async loadWithdrawals(partyId: string): Promise<readonly WithdrawalSnapshot[]> {
+    return Object.freeze(
+      [...this.#rows.withdrawals.values()].filter((item) => item.party.partyId === partyId),
     );
   }
 }

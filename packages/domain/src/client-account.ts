@@ -10,8 +10,13 @@ import type { PayoutOutcome, ReconciliationOutcome } from './tranche-events';
  *
  * Домен остатки **не считает**: их считает `@sdelka/ledger`
  * (`freeBalance`, `clientStatement`), домен читает готовое — ровно как с
- * `facts.coverageOk`. Здесь живут только решения: можно ли вывести, можно ли
- * направить свободные деньги на другую сделку, и в каком состоянии вывод.
+ * `facts.coverageOk`. Здесь живут только решения: можно ли вывести и в каком
+ * состоянии вывод.
+ *
+ * Внутреннее движение «свободные деньги на свою сделку» (И12.4) вынесено в
+ * `allocation.ts`: наружу оно не уходит, машины у него нет, исполняет его
+ * автомат транша получающей сделки — общего с выводом у них только проверка
+ * свободного остатка.
  */
 
 /**
@@ -55,6 +60,22 @@ export interface LockedPortion {
 export const WITHDRAWAL_REQUIRED_APPROVALS = 2;
 
 export interface ClientAccountFacts {
+  /**
+   * Чей это остаток — ключ счёта клиента (`client:{клиент}:free` в учёте).
+   *
+   * Выводу поле не нужно: заявка уже привязана к клиенту тем, что её завели, и
+   * второго ответа на вопрос «чей вывод» в машине нет. Нужно оно внутреннему
+   * движению (`allocation.ts`, И12.4): разрешение обязано называть владельца
+   * остатка, который проверили, иначе транш примет разрешение, выданное по
+   * чужому счёту, и спишет с того, кого назвал вызывающий.
+   *
+   * ⚠ Поле необязательное **только ради вызывающих вне домена**, собиравших
+   * факты до появления внутреннего движения. Без него разрешение не выдаётся
+   * вовсе (`RejectionCode.allocationOwnerUnknown`), поэтому пропуск не
+   * ослабляет правило, а закрывает дорогу. Когда `packages/app` начнёт называть
+   * владельца, поле обязано стать обязательным.
+   */
+  readonly clientKey?: string;
   /** Свободная часть остатка. Считает ledger (`freeBalance`), домен читает. */
   readonly free: Money<CurrencyCode>;
   /** Запертые части: у каждой свой транш и своя отсечка. */
@@ -216,8 +237,31 @@ export const WITHDRAWAL_TRANSITIONS: readonly WithdrawalTransition[] = Object.fr
   transition('requested', 'withdrawal_cancelled', 'cancelled'),
 
   transition('approved', 'withdrawal_dispatched', 'paying_out', ['g_no_active_withdrawal']),
+  /**
+   * Из `approved` отмены нет, и это **отсутствие ребра, а не проверка**.
+   *
+   * Ребро было, и оно расходилось с принятым текстом интерфейса, который
+   * утверждает о машине прямо: «перехода из утверждённой в отменённую в системе
+   * нет» (`withdraw.cancel.blocked`, `withdraw.review.note`). Две стороны
+   * говорили разное об одном автомате; сведено к строгой — к той, что уже
+   * обещана клиенту.
+   *
+   * Дорога к отмене при этом не пропадает: `approved --withdrawal_blocked-->
+   * blocked --withdrawal_cancelled--> cancelled`. Разница в том, что
+   * терминальную отмену утверждённого поручения теперь нельзя совершить молча —
+   * `withdrawal_blocked` несёт `reason`, а `withdrawal_cancelled` не несёт
+   * ничего. Деньги при этом не двигаются ни в одном из двух вариантов: до
+   * `paying_out` они лежат в свободной части счёта клиента, поэтому строгая
+   * сторона ничего у клиента не удерживает (красная линия №7).
+   *
+   * ⚠ **[открыто]** владельцу: может ли клиент отозвать **уже утверждённое**
+   * поручение сам, из кабинета. Если да — ребро возвращается вместе с событием,
+   * называющим отзывающего (у `withdrawal_cancelled` актора нет, и «отменил
+   * клиент» от «отменил оператор» машина сегодня не отличает), а принятый текст
+   * переписывается. Пока ответа нет, выбран строгий вариант: он никогда не
+   * мягче, и ошибка в эту сторону не стоит клиенту денег.
+   */
   transition('approved', 'withdrawal_blocked', 'blocked'),
-  transition('approved', 'withdrawal_cancelled', 'cancelled'),
 
   transition('paying_out', 'payout_result', 'paid_out', [], [], 'settled'),
   transition('paying_out', 'payout_result', 'blocked', [], [], 'rejected'),
@@ -301,57 +345,6 @@ export function reduceWithdrawal(
       event: event.type,
     }),
   );
-}
-
-/* ------------------------------------------------------------------------- */
-/* Движение свободного остатка на другую сделку (И12.4)                      */
-/* ------------------------------------------------------------------------- */
-
-export interface AllocationRequest {
-  readonly dealId: string;
-  readonly trancheId: string;
-  readonly amount: Money<CurrencyCode>;
-}
-
-/**
- * Направить свободные деньги на свою сделку — И12.4.
- *
- * Функция смотрит **только** на свободную часть. Запертая под сделку А часть на
- * сделку Б не пойдёт не потому, что здесь стоит проверка, а потому, что она
- * лежит на другом счёте и в это сравнение не входит: красная линия №1 говорит
- * про обязательства, а не про людей, и свой собственный резерв на свою вторую
- * сделку не идёт — сделка А может откатиться, и деньги обязаны вернуться.
- *
- * Отказ при недостатке свободного остатка обязателен именно **на момент
- * применения**: И12.2 задаёт порядок «резерв выигрывает, вывод создаётся на
- * остаток после резерва», и между запросом и применением свободная часть могла
- * уменьшиться.
- */
-export function planAllocationToDeal(
-  facts: ClientAccountFacts,
-  request: AllocationRequest,
-): Result<AllocationRequest, Rejection> {
-  if (facts.requestedAmount.currency !== request.amount.currency) {
-    return failure(rejection(RejectionCode.guardFailed, ['g_free_balance_sufficient'], {
-      reason: 'currency_mismatch',
-    }));
-  }
-  if (compare(facts.requestedAmount, request.amount) !== 0) {
-    // Запрос и факты обязаны говорить об одной сумме: иначе проверка остатка
-    // относилась бы к одному числу, а движение — к другому.
-    return failure(rejection(RejectionCode.guardFailed, ['g_free_balance_sufficient'], {
-      reason: 'amount_mismatch',
-    }));
-  }
-  if (!evaluateWithdrawalGuard('g_free_balance_sufficient', facts)) {
-    return failure(
-      rejection(RejectionCode.guardFailed, ['g_free_balance_sufficient'], {
-        dealId: request.dealId,
-        trancheId: request.trancheId,
-      }),
-    );
-  }
-  return ok(request);
 }
 
 /**
