@@ -7,6 +7,7 @@ import {
   WITHDRAWAL_STATUSES,
   WITHDRAWAL_TRANSITIONS,
   isTerminalWithdrawalStatus,
+  withdrawalArrivals,
 } from '@sdelka/domain';
 import { type AllocationKind, type MatchOutcome, type QuoteStatus, QUOTE_STATUSES } from '@sdelka/intake';
 import { type CurrencyCode, type Money, money } from '@sdelka/money';
@@ -15,6 +16,7 @@ import { type DealSnapshot, getDeal } from './store';
 import { FIXTURE_DATA } from './scenarios';
 import type { LabelledGuardId } from '@/ui/guards';
 import type { WithdrawSource } from '@/view/withdraw-form';
+import type { WithdrawArrival } from '@/view/withdraw-state';
 
 /**
  * Данные экранов, которых нет в автоматах домена: пополнение, вывод, документы,
@@ -150,6 +152,22 @@ export async function getTopup(
 
 export interface WithdrawView {
   readonly status: WithdrawalStatus;
+  /**
+   * Исход поручения, с которым заявка пришла в это состояние, — **вторая
+   * половина того, что видит клиент**, и до этого захода её на экране не было
+   * вовсе.
+   *
+   * Статуса не хватает: `paying_out` — это и «поручение ушло, ответа ждём», и
+   * «ответа банка нет, исход неизвестен»; `blocked` — и «остановила наша
+   * проверка», и «банк не исполнил». Экран показывал все четыре одинаково, то
+   * есть в «неизвестно» утверждал перед клиентом больше, чем мы знаем
+   * (красная линия №8).
+   *
+   * `undefined` — исход **не записан**: `WithdrawalState` не помнит, каким
+   * ребром в состояние вошли, и заявка, прочитанная из хранилища, законно об
+   * этом молчит. Разбор значения и выбор ключей — `view/withdraw-state.ts`.
+   */
+  readonly arrival: WithdrawArrival;
   readonly amount: Money<CurrencyCode>;
   readonly fee: Money<CurrencyCode>;
   readonly source: WithdrawSource | null;
@@ -257,12 +275,32 @@ export function withdrawCancelBlockedKey(status: WithdrawalStatus): string {
   return status === 'paying_out' ? 'withdraw.cancel.blocked.sent' : 'withdraw.cancel.blocked';
 }
 
+/**
+ * Исход, с которым заявка пришла в состояние.
+ *
+ * Спрашивается у машины: `withdrawalArrivals` считает рёбра, ведущие в статус.
+ * Если ребро одно — выбора нет, и исход **известен из самого статуса**:
+ * выплаченная заявка пришла подтверждением банка, утверждённая и отменённая —
+ * не ответом банка вовсе. Догадкой это не является: другого ребра в таблице
+ * нет, и появись оно — ответ здесь изменится сам.
+ *
+ * Спросить есть о чём ровно у двух статусов: `paying_out` (ушло / ответа нет) и
+ * `blocked` (наша проверка / отказ банка). Только для них исход приходит
+ * снаружи, и только для них он может остаться неизвестным.
+ */
+function withdrawArrival(status: WithdrawalStatus, asked: WithdrawArrival): WithdrawArrival {
+  if (asked !== undefined) return asked;
+  const possible = withdrawalArrivals(status);
+  return possible.length === 1 ? possible[0] : undefined;
+}
+
 export async function getWithdraw(
   status: WithdrawalStatus,
   amount: Money<CurrencyCode>,
   options: {
     readonly source?: WithdrawSourceCase | undefined;
     readonly approvals?: number | undefined;
+    readonly arrival?: WithdrawArrival;
   } = {},
 ): Promise<WithdrawView> {
   // Число подписей приходит из адреса и потому обязано быть приведено к
@@ -282,6 +320,7 @@ export async function getWithdraw(
       : WITHDRAWAL_REQUIRED_APPROVALS);
   return {
     status,
+    arrival: withdrawArrival(status, options.arrival),
     amount,
     fee: withdrawFee(amount),
     source: withdrawSource(withdrawSourceCaseOf(options.source)),
@@ -603,8 +642,8 @@ export async function getUnfreeze(chosen: UnfreezeTarget): Promise<UnfreezeView>
  * (`IMPLEMENTATION.md` §2.3) называет шесть статусов:
  * `draft · awaiting_verification · verified · cooling · locked · rejected`.
  * В домене их четыре — `draft · name_consistent · verified · blocked`, — а
- * «охлаждение» и «заперто» это **не статусы, а два отдельных факта** той же
- * структуры `BeneficiaryLock`: `lastChangedAt` и `locked`. Разница
+ * «охлаждение» и «заперто» это **не статусы, а два отдельных факта** того же
+ * подтверждения (`BeneficiaryConfirmation`): `lastChangedAt` и `locked`. Разница
  * принципиальная: заперты могут быть и проверенные реквизиты, а охлаждение
  * идёт поверх любого статуса. Свести их в один перечень значит потерять
  * возможность проверить каждое условие поимённо (`STATE-MACHINES.md` §1.3).

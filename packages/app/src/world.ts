@@ -1,16 +1,26 @@
 import type { Anchor, AuditChain, AuditRoleId, NonEmpty, RawSourceRef } from '@sdelka/audit';
 import { verifyChain } from '@sdelka/audit';
 import type { ActorRef, ApprovalRecord, Capability, RoleId, Session } from '@sdelka/auth';
-import type { BeneficiaryState, NameObservation, ReviewTask } from '@sdelka/compliance';
+import type {
+  BeneficiaryState,
+  NameObservation,
+  PolicyVersionId,
+  ReviewTask,
+} from '@sdelka/compliance';
 import {
+  type Approval,
   type Audience,
   type ConditionAct,
   type DealFiling,
   type DealState,
   type Instant,
+  type NonTerminalWithdrawalStatus,
+  type PartyRef,
   type PayoutState,
+  type SourceAccountRef,
   type TrancheFacts,
   type TrancheState,
+  type WithdrawalState,
   boundConditionAct,
   isTerminalTrancheStatus,
   violatesSingleActivePayout,
@@ -18,6 +28,8 @@ import {
 import type { ObservationState, ObservationTaskKind } from '@sdelka/oracle';
 import {
   type ClientKey,
+  type CoverageByCurrency,
+  type InvariantViolation as LedgerInvariantViolation,
   type Journal,
   accountBalance,
   balanceByCurrency,
@@ -30,8 +42,10 @@ import {
   isFullyCovered,
   negativeClientBalances,
 } from '@sdelka/ledger';
-import type { CurrencyCode, Deduction, Money } from '@sdelka/money';
+import type { CurrencyCode, Money } from '@sdelka/money';
+import type { TariffSeries } from '@sdelka/pricing';
 import type { LedgerTemplate } from '@sdelka/domain';
+import type { TrancheTariff } from './tariff';
 
 /** Уведомление стороне. `messageKey` — ключ локализации, текста в коде нет. */
 export interface Notification {
@@ -51,15 +65,25 @@ export interface TrancheRuntime {
   readonly trancheId: string;
   readonly state: TrancheState;
   readonly facts: TrancheFacts;
-  readonly deductions: readonly Deduction[];
   /**
-   * Версия тарифного плана, по которой считается комиссия (`CORE.md` Ф16,
-   * И14.3). Уходит фактом в журнал вместе с начислением.
+   * Тариф, прилипший к этому траншу: версия, план, комиссия, брутто, нетто и
+   * строка удержания — **одним значением** (`tariff.ts`, `@sdelka/pricing`).
    *
-   * ⚠ Её место — на сделке, в `packages/domain`; пока его там нет, держит
-   * приложение. Названо в отчёте.
+   * Прежде здесь лежали два независимых поля — `deductions` и
+   * `tariffVersionId` (обычная строка), — и связи между ними не было никакой:
+   * удержание считалось по одной ставке, а запись начисления называла любую
+   * версию, какую передал вызывающий. Теперь и то и другое читается из одной
+   * котировки, а котировку выдаёт только разрешение версии на момент создания
+   * транша.
+   *
+   * `null` — у транша, **поднятого из хранилища**: версии тарифа в схеме нет
+   * (`resume.ts`, `gaps`). Это не «нулевая комиссия», а отсутствие тарифа, и
+   * расчёт по такому траншу отказывает (`requireTrancheTariff`).
+   *
+   * ⚠ Место этой величины — на сделке, в `packages/domain` (И14.3); пока его
+   * там нет, держит приложение. Названо в отчёте.
    */
-  readonly tariffVersionId: string;
+  readonly tariff: TrancheTariff | null;
   readonly payouts: readonly PayoutState[];
   /**
    * Подписи под выплатой **с уровнем роли** (`ACTORS.md` §5.2).
@@ -174,6 +198,158 @@ export interface DealRuntime {
   readonly unwindReview: UnwindReview | null;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Заявка на вывод                                                           */
+/* ------------------------------------------------------------------------- */
+
+/** След поднятой задачи: какой простой заявки уже показан дежурному. */
+export interface WithdrawalStallMark {
+  readonly taskId: string;
+  readonly status: NonTerminalWithdrawalStatus;
+  readonly enteredAt: Instant;
+}
+
+/**
+ * Заявка на вывод со счёта клиента.
+ *
+ * **Почему она живёт здесь, а не рядом с миром.** Прежде выводы носила пара
+ * `WithdrawalWorld` (`withdrawal.ts`), и цена этого была названа в самом
+ * `store.ts`: дельта шага строится **из двух значений `World`**, поэтому заявка,
+ * лежащая сбоку, в базу не попадала и в перечне непопавшего не появлялась —
+ * единственное место всего подключения, где было возможно молчание. Переезд
+ * сюда закрывает его структурой: заявка меняется только вместе с миром, а мир
+ * получается только из `sealed`/`recorded`/`resumeWorld`.
+ *
+ * Часы заявки (`WithdrawalClockPolicy`) сюда **не** переехали и не должны:
+ * норматив — величина владельца, приходящая версией настройки, а не состояние
+ * (`withdrawal-clock.ts`).
+ */
+export interface WithdrawalRuntime {
+  readonly state: WithdrawalState;
+  /**
+   * Клиент **стороной целиком**, а не ключом его счёта.
+   *
+   * Ключ счёта — половина личности (`FUNCTIONAL.md` §2.1), и обратно к лицу по
+   * нему не пройти: строка `sdelka.withdrawal` требует `party_id`, а выдумать
+   * его из ключа счёта нельзя. Тот же довод и то же устройство, что у
+   * плательщика по траншу (`TrancheFacts.buyer`, `payerOf`): один ответ на
+   * вопрос «чьи это деньги», а не два расходящихся.
+   */
+  readonly party: PartyRef;
+  readonly amount: Money<CurrencyCode>;
+  /** `null` — счёт-источник неизвестен: вывод уйдёт в `blocked`, а не наружу. */
+  readonly sourceAccount: SourceAccountRef | null;
+  readonly preparedBy: string | null;
+  /**
+   * Тот же готовивший, но лицом целиком: учётная запись **и** человек.
+   * `preparedBy` рядом — строка для фактов домена (`ClientAccountFacts`, чужой
+   * пакет); Н1 в кворуме сравнивает пару, потому что одна учётная запись и один
+   * человек — не одно и то же (`@sdelka/auth`, `ids.ts`).
+   *
+   * `null` — готовивший **неизвестен**, а не «его не было». Такова заявка,
+   * поднятая из хранилища: лица в схеме нет, и кворум по ней не набирается
+   * (`resume.ts`, `requireWithdrawalQuorum`).
+   */
+  readonly preparerRef: ActorRef | null;
+  readonly approvals: readonly Approval[];
+  /** Подписи с уровнем роли — как у транша, и по той же причине (`ACTORS.md` §5.2). */
+  readonly approvalRecords: readonly ApprovalRecord[];
+  /**
+   * Чьё действие увело вывод в `blocked`. `null` — не уводило ничьё.
+   *
+   * Нужно Н5: снимать удержание не может тот, кто его вызвал. Пока поле пусто, а
+   * состояние `blocked`, факт считается **неизвестным**, и снятие отказывает —
+   * см. `withdrawalActionContext`.
+   */
+  readonly blockedBy: ActorRef | null;
+  /**
+   * След о том, что заявку уже подняли дежурному. `null` — не поднимали.
+   *
+   * Нужен ровно для одного: задача о простое заводится **один раз на простой**, а
+   * не на каждый проход часов. Ключ следа — статус вместе с моментом входа в
+   * него: перешла заявка в другое состояние — простой начался заново и задача
+   * будет новой; остался тот же (`paying_out --payout_result(unknown)-->
+   * paying_out`, внутренний самопереход) — простой тот же, и второй задачи о нём
+   * не появится.
+   */
+  readonly stall: WithdrawalStallMark | null;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Остановка приёма новых сделок (красная линия №3)                          */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Заявка на снятие остановки: причина, основание и подписи.
+ *
+ * Устроена как разбор отката (`UnwindReview`) и по той же причине: подписи
+ * ставят разные люди в разные моменты, и мир между первой и второй подписью
+ * обязан быть выразим. Первая подпись открывает заявку, вторая — снимает
+ * остановку, если правило сошлось (`intake-halt.ts`, `liftIntakeHalt`).
+ */
+export interface IntakeHaltLift {
+  /** Ключ локализации причины. Текста в коде нет (три языка, `CLAUDE.md`). */
+  readonly reasonKey: string;
+  /**
+   * На чём основано снятие. Непусто по типу: «снятие требует сошедшейся сверки,
+   * а не объяснения» (`ACTORS.md` §7.4), а сверка — это ответ источника, а не
+   * слова снимающего.
+   */
+  readonly evidence: NonEmpty<RawSourceRef>;
+  /** Редакция политики, под которой принято решение (`CORE.md` Ф11). */
+  readonly policy: PolicyVersionId;
+  readonly openedAt: Instant;
+  /**
+   * Подписи с уровнем роли. Уровень берётся из роли сессии
+   * (`recordApproval`, `@sdelka/auth`), а не из аргумента: подписать «за
+   * уровень 2» нельзя.
+   */
+  readonly signatures: readonly ApprovalRecord[];
+}
+
+/**
+ * Приём новых сделок остановлен.
+ *
+ * **Состояние, а не вычисление.** Считать остановку из журнала на каждый вызов
+ * было бы тем же самым, что снимать её автоматически: покрытие сошлось —
+ * признак погас — приём открылся сам. Именно этого красная линия №3 не
+ * допускает: причина расхождения могла исчезнуть по-разному, и разбирается это
+ * человеком (`ACTORS.md` §7.4, и см. `DECISIONS-REVIEW.md` §T1 **[открыто]** —
+ * автоснятие документом разрешено, кодом сегодня не сделано).
+ *
+ * ⚠ **В хранилище этого состояния нет.** Колонки под остановку в схеме не
+ * существует, поэтому после перезапуска процесса поднятый мир получает
+ * остановку заново — закрытым отказом, а не открытым приёмом (`resume.ts`,
+ * `GAPS`).
+ */
+export interface IntakeHalt {
+  /**
+   * Кто или что остановило приём: человек по сессии либо машина. Разметка, а не
+   * `ActorRef | null`: «остановил автомат» и «остановившего не выяснили» —
+   * разные состояния, и от первого зависит Н5 при снятии.
+   */
+  readonly by: ActingParty;
+  readonly at: Instant;
+  /** Ключ локализации причины. Текста в коде нет. */
+  readonly reasonKey: string;
+  /**
+   * По какому факту остановлено: нарушенные инварианты учёта **с числами**.
+   * Пусто у остановки, нажатой человеком: он останавливает по своему суждению,
+   * а не по расхождению журнала.
+   */
+  readonly violations: readonly LedgerInvariantViolation[];
+  /**
+   * Покрытие по каждой валюте на момент срабатывания — целыми минорными
+   * единицами (красная линия №4). Отношение хранится тем же значением, каким
+   * его считает учёт: числитель и знаменатель, а не дробь.
+   */
+  readonly coverage: readonly CoverageByCurrency[];
+  /** Запись вечного журнала, которой остановка записана. Правке не подлежит. */
+  readonly recordId: string;
+  /** Заявка на снятие. `null` — снятия никто не поднимал. */
+  readonly lift: IntakeHaltLift | null;
+}
+
 /**
  * Задача оператору, порождённая наблюдением оракула.
  *
@@ -283,6 +459,39 @@ export interface World {
   readonly anchors: readonly Anchor[];
   readonly deals: ReadonlyMap<string, DealRuntime>;
   readonly tranches: ReadonlyMap<string, TrancheRuntime>;
+  /**
+   * Журнал версий тарифа (`@sdelka/pricing`, `@sdelka/settings`).
+   *
+   * Поле мира, а не аргумент шага, и по той же причине, по которой в мире живут
+   * сессии: журнал-аргумент — это журнал, который вызывающий собрал сам, и
+   * тогда «тарифа на этот момент не было» перестаёт существовать как состояние.
+   * Отсюда его читает `createTranche` — единственное место, где версия тарифа
+   * разрешается, — и читает **на `world.now`**, то есть на момент создания
+   * транша, а не на произвольный названный момент.
+   *
+   * Пустой журнал — законное начальное состояние и **не** умолчание: тарифа
+   * нет, и заведение транша отказывает (`SETTINGS_REFUSAL_KEYS.noVersionInEffect`).
+   */
+  readonly tariffs: TariffSeries;
+  /**
+   * Заявки на вывод со счёта клиента, по номеру заявки.
+   *
+   * Поле мира, а не карта сбоку от него: см. `WithdrawalRuntime`. Отсюда их
+   * видит дельта шага (`store.ts`, `stepDelta`) — тем же сравнением двух миров,
+   * каким она видит транши, — и поэтому «заявка ушла мимо базы» перестало быть
+   * выразимым.
+   */
+  readonly withdrawals: ReadonlyMap<string, WithdrawalRuntime>;
+  /**
+   * Приём новых сделок остановлен. `null` — приём открыт.
+   *
+   * Поле мира, а не признак, вычисляемый из журнала: остановка обязана
+   * **пережить** исчезновение своей причины (красная линия №3, `ACTORS.md`
+   * §7.4). Ставится только изнутри пакета — автоматом при закрытии банковского
+   * дня и стоп-краном человека, — снимается только двумя людьми
+   * (`intake-halt.ts`).
+   */
+  readonly halt: IntakeHalt | null;
   readonly tasks: readonly ReviewTask[];
   /** Задачи оракула: см. `ObservationTask` — почему они лежат отдельно. */
   readonly observationTasks: readonly ObservationTask[];
@@ -728,6 +937,26 @@ export function recipientOf(runtime: TrancheRuntime): ClientKey {
     throw new Error(`app.tranche.condition_act_missing:${runtime.trancheId}`);
   }
   return clientKey(act.recipient.accountKey);
+}
+
+/**
+ * Владелец остатка, с которого идёт вывод, — ключ счёта стороны.
+ *
+ * Ровно то же устройство, что у `payerOf`: ключ **выводится** из стороны, а не
+ * лежит рядом с ней вторым полем. Свободный ключ означал бы заявку, у которой
+ * деньги списываются с одного счёта, а строка в базе называет другое лицо.
+ */
+export function withdrawalOwner(runtime: WithdrawalRuntime): ClientKey {
+  return clientKey(runtime.party.accountKey);
+}
+
+export function withWithdrawal(
+  world: World,
+  runtime: WithdrawalRuntime,
+): ReadonlyMap<string, WithdrawalRuntime> {
+  const next = new Map(world.withdrawals);
+  next.set(runtime.state.withdrawalId, runtime);
+  return next;
 }
 
 export function withTranche(world: World, runtime: TrancheRuntime): ReadonlyMap<string, TrancheRuntime> {

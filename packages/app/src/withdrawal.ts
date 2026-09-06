@@ -13,7 +13,7 @@ import {
   type ClientAccountFacts,
   type Instant,
   type LockedPortion,
-  type NonTerminalWithdrawalStatus,
+  type PartyRef,
   type Rejection,
   type SourceAccountRef,
   type WithdrawalClockPolicy,
@@ -60,7 +60,14 @@ import {
 } from './authority';
 import { auditRecordId, journalEntryId } from './ids';
 import { type WithdrawalOrigin, withdrawalOriginsOf } from './origins';
-import { type World, payerOf, sealed } from './world';
+import {
+  type WithdrawalRuntime,
+  type World,
+  payerOf,
+  sealed,
+  withWithdrawal,
+  withdrawalOwner,
+} from './world';
 
 /**
  * Вывод со счёта клиента в сквозном контуре.
@@ -97,65 +104,26 @@ import { type World, payerOf, sealed } from './world';
 /* Состояние                                                                 */
 /* ------------------------------------------------------------------------- */
 
-export interface WithdrawalRuntime {
-  readonly state: WithdrawalState;
-  readonly owner: ClientKey;
-  readonly amount: Money<CurrencyCode>;
-  /** `null` — счёт-источник неизвестен: вывод уйдёт в `blocked`, а не наружу. */
-  readonly sourceAccount: SourceAccountRef | null;
-  readonly preparedBy: string | null;
-  /**
-   * Тот же готовивший, но лицом целиком: учётная запись **и** человек.
-   * `preparedBy` рядом — строка для фактов домена (`ClientAccountFacts`, чужой
-   * пакет); Н1 в кворуме сравнивает пару, потому что одна учётная запись и один
-   * человек — не одно и то же (`@sdelka/auth`, `ids.ts`).
-   */
-  readonly preparerRef: ActorRef;
-  readonly approvals: readonly Approval[];
-  /** Подписи с уровнем роли — как у транша, и по той же причине (`ACTORS.md` §5.2). */
-  readonly approvalRecords: readonly ApprovalRecord[];
-  /**
-   * Чьё действие увело вывод в `blocked`. `null` — не уводило ничьё.
-   *
-   * Нужно Н5: снимать удержание не может тот, кто его вызвал. Пока поле пусто, а
-   * состояние `blocked`, факт считается **неизвестным**, и снятие отказывает —
-   * см. `withdrawalActionContext`.
-   */
-  readonly blockedBy: ActorRef | null;
-  /**
-   * След о том, что заявку уже подняли дежурному. `null` — не поднимали.
-   *
-   * Нужен ровно для одного: задача о простое заводится **один раз на простой**, а
-   * не на каждый проход часов. Ключ следа — статус вместе с моментом входа в
-   * него: перешла заявка в другое состояние — простой начался заново и задача
-   * будет новой; остался тот же (`paying_out --payout_result(unknown)-->
-   * paying_out`, внутренний самопереход) — простой тот же, и второй задачи о нём
-   * не появится.
-   */
-  readonly stall: WithdrawalStallMark | null;
-}
-
-/** След поднятой задачи: какой простой уже показан дежурному. */
-export interface WithdrawalStallMark {
-  readonly taskId: string;
-  readonly status: NonTerminalWithdrawalStatus;
-  readonly enteredAt: Instant;
-}
+/**
+ * Заявка и след поднятой задачи объявлены **в мире** (`world.ts`), рядом с
+ * траншем и сделкой, и вывозятся отсюда для тех, кто читал их здесь.
+ *
+ * Переезд — это и есть подключение заявки к хранилищу: дельта шага строится из
+ * двух значений `World`, и карта выводов, лежавшая сбоку от мира, в неё не
+ * попадала вовсе.
+ */
+export type { WithdrawalRuntime, WithdrawalStallMark } from './world';
 
 /**
- * Мир вместе с выводами.
+ * Мир вместе с часами заявок.
  *
- * Отдельная пара, а не поле `World`. На проверку инвариантов это не влияет:
- * каждый шаг ниже проходит через `sealed()`, и деньги вывода видны учёту так
- * же, как любые другие — вывод не заводит собственного журнала.
- *
- * ⚠ Половина работы, которая осталась и названа в отчёте: свести `withdrawals`
- * в сам `World`. Пока их две структуры, «мир» можно передать дальше без
- * выводов — и тогда шаг, который их не видит, запечатается без них.
+ * Сами заявки лежат **в мире** (`World.withdrawals`); здесь остаётся то, что
+ * состоянием не является и в базу не ложится, — норматив владельца. Прежде пара
+ * несла ещё и карту выводов, и именно поэтому заявка не доезжала до базы:
+ * `stepDelta` сравнивает два `World`, а карта была снаружи.
  */
 export interface WithdrawalWorld {
   readonly world: World;
-  readonly withdrawals: ReadonlyMap<string, WithdrawalRuntime>;
   /**
    * Часы заявок: срок операции и норматив простоя.
    *
@@ -166,30 +134,24 @@ export interface WithdrawalWorld {
    * Аргумент **обязателен**: величина принадлежит владельцу и приходит версией
    * настройки (`withdrawal-clock.ts`). Умолчание здесь означало бы норматив, до
    * которого можно докатиться, забыв параметр.
+   *
+   * В `World` часы не переехали намеренно: они не состояние, их нельзя
+   * восстановить из базы и незачем — версия настройки приходит от владельца в
+   * каждый процесс заново.
    */
   readonly clock: WithdrawalClockPolicy;
 }
 
 export function withWithdrawals(world: World, clock: WithdrawalClockPolicy): WithdrawalWorld {
-  return { world, withdrawals: new Map<string, WithdrawalRuntime>(), clock };
+  return { world, clock };
 }
 
 function runtimeOf(scene: WithdrawalWorld, withdrawalId: string): WithdrawalRuntime {
-  const runtime = scene.withdrawals.get(withdrawalId);
+  const runtime = scene.world.withdrawals.get(withdrawalId);
   if (runtime === undefined) {
     throw new Error(`app.unknown_withdrawal:${withdrawalId}`);
   }
   return runtime;
-}
-
-function replace(
-  scene: WithdrawalWorld,
-  withdrawalId: string,
-  runtime: WithdrawalRuntime,
-): ReadonlyMap<string, WithdrawalRuntime> {
-  const next = new Map(scene.withdrawals);
-  next.set(withdrawalId, runtime);
-  return next;
 }
 
 /**
@@ -270,9 +232,9 @@ function currenciesOf(world: World): readonly CurrencyCode[] {
  */
 function activeWithdrawals(scene: WithdrawalWorld, self: string, owner: ClientKey): number {
   let count = 0;
-  for (const [id, runtime] of scene.withdrawals) {
+  for (const [id, runtime] of scene.world.withdrawals) {
     if (id === self) continue;
-    if (runtime.owner !== owner) continue;
+    if (withdrawalOwner(runtime) !== owner) continue;
     if (runtime.state.status !== 'paying_out') continue;
     count += 1;
   }
@@ -284,14 +246,15 @@ export function withdrawalFacts(
   withdrawalId: string,
 ): ClientAccountFacts {
   const runtime = runtimeOf(scene, withdrawalId);
+  const owner = withdrawalOwner(runtime);
   return {
-    free: freeBalance(scene.world.journal, runtime.owner, runtime.amount.currency),
-    locked: lockedPortions(scene.world, runtime.owner),
+    free: freeBalance(scene.world.journal, owner, runtime.amount.currency),
+    locked: lockedPortions(scene.world, owner),
     requestedAmount: runtime.amount,
     sourceAccount: runtime.sourceAccount,
     preparedBy: runtime.preparedBy,
     approvals: runtime.approvals,
-    activeWithdrawals: activeWithdrawals(scene, withdrawalId, runtime.owner),
+    activeWithdrawals: activeWithdrawals(scene, withdrawalId, owner),
   };
 }
 
@@ -302,10 +265,10 @@ export function withdrawalFacts(
 /**
  * Факты о прошлом для заявки на вывод.
  *
- * Отдельная функция, а не `actionContextFor(world, …)`, ровно потому, что
- * выводы живут парой `WithdrawalWorld`, а не полем `World` (названо в
- * `docs/product/APP-LAYER.md` §5 как незакрытое). Собираются они всё так же
- * **из состояния**, а не из аргументов вызывающего:
+ * Отдельная функция, а не `actionContextFor(world, …)`: та собирает факты по
+ * сделке и траншу, а у заявки на вывод нет ни того, ни другого — предметом ей
+ * служит она сама. Собираются факты всё так же **из состояния**, а не из
+ * аргументов вызывающего:
  *
  * - готовивший — из самой заявки, куда его положило разрешение;
  * - наблюдений у вывода не бывает вовсе — это «никто», утверждение, за которое
@@ -319,7 +282,12 @@ export function withdrawalActionContext(
   withdrawalId: string,
 ): ActionContext {
   const runtime = runtimeOf(scene, withdrawalId);
-  const preparer = Object.freeze([runtime.preparerRef]);
+  /*
+   * Готовивший **неизвестен**, а не «его не было», когда заявка поднята из
+   * хранилища: лица в схеме нет. `UNKNOWN_FACT` отказывает и Н1, и Н4 — тот же
+   * закрытый отказ, что у поднятого транша (`resume.ts`).
+   */
+  const preparer = runtime.preparerRef === null ? UNKNOWN_FACT : Object.freeze([runtime.preparerRef]);
   return Object.freeze({
     preparedBy: preparer,
     observedBy: Object.freeze([]),
@@ -357,7 +325,18 @@ export function authorizeWithdrawal<C extends Capability>(
 
 export interface WithdrawalSpec {
   readonly withdrawalId: string;
-  readonly owner: ClientKey;
+  /**
+   * Чья заявка — **сторона целиком**, а не ключ её счёта.
+   *
+   * Поле было `owner: ClientKey`, то есть половина личности, и половины хватало
+   * ровно до тех пор, пока заявка жила в памяти: строка `sdelka.withdrawal`
+   * требует `party_id`, а обратно из ключа счёта его не вывести. Достроить
+   * недостающую половину при записи значило бы назвать лицо, которого никто не
+   * называл; поэтому её называют здесь. Владелец остатка выводится
+   * (`withdrawalOwner`), а не приезжает вторым полем, — иначе деньги списывались
+   * бы с одного счёта, а строка называла бы другое лицо.
+   */
+  readonly party: PartyRef;
   readonly amount: Money<CurrencyCode>;
   readonly sourceAccount?: SourceAccountRef | null;
 }
@@ -406,7 +385,7 @@ export function requestWithdrawal(
   authority: Authority<'conduct_withdrawal'>,
 ): WithdrawalWorld {
   assertOrigin(['conduct_withdrawal'], authority, 'withdrawal.requested');
-  if (scene.withdrawals.has(spec.withdrawalId)) {
+  if (scene.world.withdrawals.has(spec.withdrawalId)) {
     throw new Error(`app.withdrawal.duplicate:${spec.withdrawalId}`);
   }
   const runtime: WithdrawalRuntime = {
@@ -414,7 +393,7 @@ export function requestWithdrawal(
     // существует по типу (`client-account.ts`), и часы владельца — единственный
     // источник его длины.
     state: createWithdrawal(spec.withdrawalId, scene.world.now, scene.clock.deadline),
-    owner: spec.owner,
+    party: spec.party,
     amount: spec.amount,
     sourceAccount: spec.sourceAccount === undefined ? KNOWN_SOURCE_ACCOUNT : spec.sourceAccount,
     preparedBy: actingAccount(authority),
@@ -424,13 +403,16 @@ export function requestWithdrawal(
     blockedBy: null,
     stall: null,
   };
-  const next = new Map(scene.withdrawals);
-  next.set(spec.withdrawalId, runtime);
   // Запрос вывода деньги не двигает: он их только называет. Шаг всё равно
-  // запечатывается — «инварианты после каждого шага» не знает исключений.
+  // запечатывается — «инварианты после каждого шага» не знает исключений, — и
+  // заявка попадает в мир только через `sealed`, то есть в базу поедет
+  // проверенное состояние, а не намерение.
   return {
-    world: sealed({ ...scene.world, checks: scene.world.checks }),
-    withdrawals: next,
+    world: sealed({
+      ...scene.world,
+      withdrawals: withWithdrawal(scene.world, runtime),
+      checks: scene.world.checks,
+    }),
     clock: scene.clock,
   };
 }
@@ -454,12 +436,22 @@ export function approveWithdrawal(
   if (!approval.ok) {
     throw new AuthorityError(`app.approval.level_missing:${approval.error}`);
   }
+  const signed: WithdrawalRuntime = {
+    ...runtime,
+    approvals: [...runtime.approvals, { userId: person.accountId }],
+    approvalRecords: [...runtime.approvalRecords, approval.value],
+  };
+  /*
+   * Подпись состояния заявки не двигает и в базу не ложится: колонок под
+   * подписи в схеме нет. Мир всё равно запечатывается — иначе подпись оказалась
+   * бы изменением мира мимо `sealed`, — а то, что шаг не оставил в базе следа,
+   * называет дельта (`store.ts`, `withdrawal.facts_not_storable`), а не молчит.
+   */
   return {
-    world: scene.world,
-    withdrawals: replace(scene, withdrawalId, {
-      ...runtime,
-      approvals: [...runtime.approvals, { userId: person.accountId }],
-      approvalRecords: [...runtime.approvalRecords, approval.value],
+    world: sealed({
+      ...scene.world,
+      withdrawals: withWithdrawal(scene.world, signed),
+      checks: scene.world.checks,
     }),
     clock: scene.clock,
   };
@@ -533,7 +525,10 @@ export function applyWithdrawalEvent<E extends WithdrawalEvent>(
     : false;
   const { meta: entryMeta, seq: entrySeq } = meta(world, 'withdrawal');
   const journal = settled
-    ? appendEntry(world.journal, refundToSourceAccount(entryMeta, runtime.owner, runtime.amount))
+    ? appendEntry(
+        world.journal,
+        refundToSourceAccount(entryMeta, withdrawalOwner(runtime), runtime.amount),
+      )
     : world.journal;
   let seq = settled ? entrySeq : world.seq;
 
@@ -550,8 +545,14 @@ export function applyWithdrawalEvent<E extends WithdrawalEvent>(
 
   return {
     clock: scene.clock,
-    world: sealed({ ...world, seq, journal, chain, checks: world.checks }),
-    withdrawals: replace(scene, withdrawalId, moved),
+    world: sealed({
+      ...world,
+      seq,
+      journal,
+      chain,
+      withdrawals: withWithdrawal(world, moved),
+      checks: world.checks,
+    }),
   };
 }
 

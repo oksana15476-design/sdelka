@@ -56,6 +56,7 @@ import {
   constraintValues,
   parseEnums,
   partialIndexStatuses,
+  stripComments,
   viewValues,
 } from './support/sql.ts';
 
@@ -297,6 +298,26 @@ describe('форма миграций', () => {
       (item) => Number(item[2] ?? '0'),
     );
     expect(counts.filter((value) => value > 255)).toEqual([]);
+  });
+
+  it('0023 только дописывает метки: ни прав, ни записанного не трогает', () => {
+    // Красная линия №11 и инвариант 21 разом. Расширение перечня не имеет права
+    // ни переписать записанное (`UPDATE`, `RENAME VALUE`), ни расширить права
+    // роли приложения на журнал (`GRANT`). Проверяется текстом, потому что
+    // проверка грантами требует кластера, а эта — падает у всех.
+    const migration = MIGRATIONS.find((item) => item.version === '0023');
+    expect(migration, 'миграция 0023 на месте').toBeDefined();
+    const sql = stripComments(migration?.sql ?? '');
+    for (const forbidden of ['GRANT', 'REVOKE', 'UPDATE', 'DELETE', 'RENAME VALUE', 'DROP']) {
+      expect(sql, forbidden).not.toContain(forbidden);
+    }
+    // И то, что она делает, — дописывание в конец: `BEFORE`/`AFTER` сдвинули бы
+    // порядок меток, а он зеркалится массивом `AUDIT_ROLES`.
+    const added = [...sql.matchAll(/ALTER TYPE sdelka\.audit_role ADD VALUE '([^']*)';/gu)].map(
+      (item) => item[1],
+    );
+    expect(added).toEqual([...AUDIT_ROLES].slice(8));
+    expect(sql).not.toMatch(/\b(BEFORE|AFTER)\b/u);
   });
 
   it('нумерация миграций сплошная и начинается с 0001', () => {

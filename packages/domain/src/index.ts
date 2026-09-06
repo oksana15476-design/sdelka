@@ -9,6 +9,7 @@ export * from './guards';
 export * from './ids';
 export * from './instant';
 export * from './observation';
+export * from './participation';
 export * from './intents';
 export * from './party';
 export * from './payout';

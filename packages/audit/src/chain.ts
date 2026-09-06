@@ -7,6 +7,7 @@ import {
   type AuditBody,
   type AuditRecord,
   RECORD_FORMAT_VERSION,
+  assertWritableAuditRole,
   recordDigest,
 } from './record';
 import { type AuditRef, assertNoRawIdentifiers, auditRef, auditToken } from './values';
@@ -55,6 +56,25 @@ function build(
     { actor: input.actor, subject: input.subject, related, body: input.body },
     '$',
   );
+  // Та же дверь и для выведенных из употребления ролей. Тип отсекает их у
+  // `auditActor`, но актор доезжает сюда и из хранилища, и из чужого адаптера,
+  // где типов нет; а генезис цепочки мимо `checkBodyInvariants` вообще идёт.
+  assertWritableAuditRole(input.actor.roleId, 'actor.roleId');
+  if (input.body.kind === 'role_changed') {
+    if (input.body.previous !== null) {
+      assertWritableAuditRole(input.body.previous, 'body.previous');
+    }
+    if (input.body.next !== null) assertWritableAuditRole(input.body.next, 'body.next');
+    if (input.body.order.kind === 'ordered_by') {
+      assertWritableAuditRole(input.body.order.actor.roleId, 'body.order.actor.roleId');
+    }
+  }
+  if (input.body.kind === 'beneficiary_changed') {
+    assertWritableAuditRole(input.body.approvedBy.roleId, 'body.approvedBy.roleId');
+  }
+  if (input.body.kind === 'setting_changed') {
+    assertWritableAuditRole(input.body.orderedBy.roleId, 'body.orderedBy.roleId');
+  }
   const envelope = {
     version: RECORD_FORMAT_VERSION,
     chainId,

@@ -1,5 +1,7 @@
 import {
   type StoreOption,
+  type WithdrawalStepOptions,
+  type WithdrawalWorld,
   type World,
   type Written,
   advance,
@@ -13,18 +15,22 @@ import {
   trancheOptions,
 } from '@sdelka/app';
 import { type PartyProfile, payerKeyForDomain } from '@sdelka/compliance';
-import { money } from '@sdelka/money';
+import type { WithdrawalClockPolicy } from '@sdelka/domain';
+import { type CurrencyCode, type Money, money } from '@sdelka/money';
 import {
   applyDealEvent,
   applyObservationEvent,
   applyTrancheEvent,
+  applyWithdrawalEvent,
   approve,
+  approveWithdrawal,
   createDeal,
   createTranche,
   receiveExternalPayment,
   receivePaidExtract,
   receiveTrancheFee,
   recordConditionAct,
+  requestWithdrawal,
 } from './acting';
 import { STAFF } from './actors';
 import {
@@ -37,11 +43,12 @@ import {
   DEAL_AMOUNT,
   GEL,
   NOW,
-  PLATFORM_FEE,
   POLICY,
   POLICY_VERSION,
   SELLER,
-  TARIFF_VERSION,
+  STATEMENT_SOURCE,
+  TARIFF_SERIES,
+  WITHDRAWAL_CLOCK,
   beneficiaryFor,
   cardOf,
   conditionAct,
@@ -131,7 +138,10 @@ export interface Run {
  */
 export async function openPath(store: StoreOption, chainId: string): Promise<Run> {
   const { log, record } = recorder();
-  const world = record(await openWorld(store, emptyWorld({ now: NOW, chainId })));
+  const world = record(
+    // Тариф — настройка владельца: без версии в журнале мир транша не заводит.
+    await openWorld(store, emptyWorld({ now: NOW, chainId, tariffs: TARIFF_SERIES })),
+  );
   return { world, log };
 }
 
@@ -159,12 +169,10 @@ function trancheSpec(scope: PathScope): Parameters<typeof createTranche>[1] {
     buyer: partyRef(scope.buyer),
     buyerPayerKey: payerKeyForDomain(scope.buyer.document),
     buyerNames: scope.buyer.names,
-    requiredAmount: DEAL_AMOUNT,
+    principal: DEAL_AMOUNT,
     conditionAct: conditionAct(partyRef(scope.seller)),
     createdOn: CREATED_ON,
-    deductions: PLATFORM_FEE,
-    tariffVersionId: TARIFF_VERSION,
-    beneficiary: beneficiaryFor(scope.seller, scope.beneficiarySeed),
+    beneficiary: beneficiaryFor(scope.dealId, scope.seller, scope.beneficiarySeed),
     sourceAccountKnown: true,
   };
 }
@@ -478,6 +486,128 @@ export async function settlementPath(
       applyDealEvent(now, scope.dealId, { type: 'tranches_settled' }, OPTIONS),
     ),
   );
+
+  return { world, log };
+}
+
+/* ------------------------------------------------------------------------- */
+/* Заявка на вывод                                                           */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Путь заявки на вывод через хранилище — один текст на оба прогона, как и два
+ * денежных пути выше.
+ *
+ * **Сделки у заявки нет вовсе**, и это не упрощение сценария: вывод — движение
+ * по счёту клиента, а не по сделке (`sdelka.withdrawal` ссылается только на
+ * сторону). Поэтому путь начинается с зачисления на свободную часть счёта и не
+ * заводит ни сделки, ни транша.
+ *
+ * Путь останавливается на `paying_out`: поручение ушло, ответа банка ещё нет.
+ * Ровно в этом состоянии перезапуск процесса и представляет интерес — деньги в
+ * полёте, а мир в памяти умер.
+ */
+export interface WithdrawalScope {
+  readonly chainId: string;
+  readonly withdrawalId: string;
+  readonly client: PartyProfile;
+  readonly amount: Money<CurrencyCode>;
+  readonly clock: WithdrawalClockPolicy;
+}
+
+export const WITHDRAWAL_SCOPE: WithdrawalScope = Object.freeze({
+  chainId: 'chain-store-withdrawal',
+  withdrawalId: 'wd-store-1',
+  client: BUYER,
+  amount: money('GEL', 5_000_000n),
+  clock: WITHDRAWAL_CLOCK,
+});
+
+/**
+ * Шаг заявки, поданный **шагу мира**.
+ *
+ * Заявка идёт через `stepWorld` тем же способом, что транш: функция `World →
+ * World`, дельта которой строится сравнением двух миров. Часы приезжают сюда
+ * параметром потому, что состоянием не являются и в базе их нет; всё остальное
+ * лежит в самом мире.
+ */
+export function withdrawalStep(
+  clock: WithdrawalClockPolicy,
+  run: (scene: WithdrawalWorld) => WithdrawalWorld,
+): (world: World) => World {
+  return (world: World): World => run({ world, clock }).world;
+}
+
+/** Зачисление на свободную часть счёта клиента: деньги, которые он потом выводит. */
+export async function fundedClient(
+  store: StoreOption,
+  scope: WithdrawalScope,
+  start: Run | null = null,
+): Promise<Run> {
+  const from = start ?? (await openPath(store, scope.chainId));
+  const { log, record } = recorder(from.log);
+  const world = record(
+    await stepWorld(store, from.world, (now) =>
+      receiveExternalPayment(now, toClientKey(scope.client.document), scope.amount),
+    ),
+  );
+  return { world, log };
+}
+
+/**
+ * Заявка, доведённая до `paying_out`: заведена, подписана дважды, утверждена,
+ * поручение отправлено. Каждый шаг — своя транзакция и своя дельта.
+ */
+export async function withdrawalPath(
+  store: StoreOption,
+  scope: WithdrawalScope,
+  start: Run | null = null,
+): Promise<Run> {
+  const funded = await fundedClient(store, scope, start);
+  const { log, record } = recorder(funded.log);
+  let world = funded.world;
+  const step: WithdrawalStepOptions = { policy: POLICY_VERSION, evidence: [STATEMENT_SOURCE] };
+
+  world = record(
+    await stepWorld(
+      store,
+      world,
+      withdrawalStep(scope.clock, (scene) =>
+        requestWithdrawal(scene, {
+          withdrawalId: scope.withdrawalId,
+          party: partyRef(scope.client),
+          amount: scope.amount,
+        }),
+      ),
+    ),
+  );
+
+  // Две подписи разных лиц: `g_approvals_sufficient` и
+  // `g_withdrawal_approvers_distinct`. В базе следа не оставляют — колонок нет,
+  // и дельта называет это `withdrawal.facts_not_storable`.
+  for (const actor of [STAFF.controller, STAFF.head]) {
+    world = record(
+      await stepWorld(
+        store,
+        world,
+        withdrawalStep(scope.clock, (scene) =>
+          approveWithdrawal(scene, scope.withdrawalId, actor),
+        ),
+      ),
+    );
+  }
+
+  for (const event of ['withdrawal_approved', 'withdrawal_dispatched'] as const) {
+    world = record(
+      await stepWorld(
+        store,
+        world,
+        withdrawalStep(scope.clock, (scene) =>
+          applyWithdrawalEvent(scene, scope.withdrawalId, { type: event }, step),
+        ),
+      ),
+    );
+  }
 
   return { world, log };
 }

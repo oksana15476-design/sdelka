@@ -42,17 +42,34 @@ export function policyRef(value: string): PolicyRef {
 /* ------------------------------------------------------------------------- */
 
 /**
- * Роли. Источник истины — `compliance/src/roles.ts` (`RoleId`); дубль вынужден
- * тем, что пакет аудита не зависит от `compliance`. Добавлены две роли, которых
- * там нет и быть не может: `system` — переход по дедлайну и прочее действие без
- * человека, `oracle` — наблюдение из реестра (`STATE-MACHINES.md` §8: событие
- * `condition_established` порождается оракулом, а не оператором).
+ * Роли журнала. Дубль перечня ролей доступа (`auth/src/roles.ts`) вынужден тем,
+ * что пакет аудита не зависит ни от кого: журнал обязан пережить переделку
+ * доступа. Молчаливым расхождение не является — сверку ведёт
+ * `auth/test/legacy.test.ts`, тот пакет видит оба перечня, и значение,
+ * появившееся здесь без строки в карте, роняет его.
  *
- * Расхождение перечней молчаливое: сверить их тестом отсюда нельзя, для этого
- * нужен пакет, видящий оба. См. отчёт по задаче.
+ * Две метки человеку не принадлежат и в перечне доступа быть не могут:
+ * `system` — переход по дедлайну и прочее действие без человека, `oracle` —
+ * наблюдение из реестра (`STATE-MACHINES.md` §8: `condition_established`
+ * порождается источником, а не оператором).
+ *
+ * ## Семь меток дописаны в конец (`0023`), и ни одна не переписана
+ *
+ * До этого перечень был восьмизначным, и пять ролей доступа —
+ * `oracle_operator`, `compliance_officer`, `principal`, `auditor`,
+ * `client_counsel` — не отображались в него никуда: действие такой роли
+ * записать было **нечем** (`ACTORS.md` §13). Практическое следствие было не
+ * крайним случаем, а обычным путём: `manage_settings` есть ровно у `principal`,
+ * то есть изменение настройки владельцем не записывалось вовсе (E16-12).
+ *
+ * Порядок меток — зеркало `sdelka.audit_role`, а `ALTER TYPE ... ADD VALUE`
+ * умеет только дописывать в конец. Поэтому новые семь стоят после прежних
+ * восьми, а не на своих местах по смыслу (та же оговорка у `application_card` в
+ * `raw-source.ts` и у видов записей выше).
  */
 export const AUDIT_ROLES = [
   'operator',
+  /** Прежняя метка обоих уровней утверждения. Читается, не пишется — см. ниже. */
   'approver',
   'compliance_analyst',
   'support',
@@ -60,22 +77,82 @@ export const AUDIT_ROLES = [
   'client',
   'system',
   'oracle',
+  /* --- Дописаны миграцией `0023`, порядком `ROLE_IDS` из `auth`. --- */
+  'oracle_operator',
+  'compliance_officer',
+  'financial_controller',
+  'head_of_operations',
+  'principal',
+  'auditor',
+  'client_counsel',
 ] as const;
 export type AuditRoleId = (typeof AUDIT_ROLES)[number];
 
+/**
+ * Метки, которые больше **не пишутся**, но обязаны читаться.
+ *
+ * `approver` был одной ролью на оба уровня утверждения, а уровня два и они
+ * принадлежат разным людям с разными полномочиями (`ACTORS.md` §1 расхождение
+ * №5 — класс «дефект», §5.2 — **[решение]**: `financial_controller` даёт
+ * уровень 1, `head_of_operations` — уровень 2, ни одна роль не даёт оба).
+ * Запись «утвердил approver» не отвечает на вопрос, кто утвердил, — то есть не
+ * доказывает «четыре глаза» ровно там, где журнал ради этого и ведётся.
+ *
+ * Почему метка остаётся в перечне, а не переименовывается: **журнал не
+ * редактируется** (красная линия №11). `ALTER TYPE ... RENAME VALUE` переписал
+ * бы уже записанные строки — не текст записи, так её прочтение, а прочтение
+ * записи задним числом и есть её правка. Прежние записи остаются как есть и
+ * читаются как есть; новые пишутся под настоящей ролью.
+ *
+ * Что из этого следует и не лечится: **какие именно два уровня стоят за старой
+ * записью `approver`, восстановить нечем.** Это цена того, что расщепление
+ * сделано после первых записей, а не до них; чинить её задним числом
+ * запрещено той же красной линией.
+ */
+export const RETIRED_AUDIT_ROLES = ['approver'] as const;
+export type RetiredAuditRoleId = (typeof RETIRED_AUDIT_ROLES)[number];
+
+/** Роль, под которой можно записать **новое** действие. */
+export type WritableAuditRoleId = Exclude<AuditRoleId, RetiredAuditRoleId>;
+
+export function isRetiredAuditRole(roleId: string): roleId is RetiredAuditRoleId {
+  return (RETIRED_AUDIT_ROLES as readonly string[]).includes(roleId);
+}
+
 export interface AuditActor {
+  /**
+   * Роль **прочитанной** записи: перечень полный, включая выведенные из
+   * употребления метки. Иначе запись, сделанную до `0023`, нельзя было бы
+   * поднять из хранилища, не солгав о ней.
+   */
   readonly actorId: string;
   readonly roleId: AuditRoleId;
   /** Полномочие, под которым совершено действие. `null` для `system` и `oracle`. */
   readonly capability: string | null;
 }
 
+/**
+ * Актор новой записи. Роль — только та, под которой сегодня пишут.
+ *
+ * Рубежа два, и второй не лишний: тип отсекает `approver` на сборке, проверка —
+ * на границе процесса, где типов нет (роль, приехавшая строкой из хранилища или
+ * из чужого адаптера). Ошибка здесь неисправима по построению: запись,
+ * прошедшая в цепочку, остаётся в ней навсегда.
+ */
 export function auditActor(
   actorId: string,
-  roleId: AuditRoleId,
+  roleId: WritableAuditRoleId,
   capability: string | null = null,
 ): AuditActor {
+  assertWritableAuditRole(roleId, 'actor');
   return Object.freeze({ actorId, roleId, capability });
+}
+
+/** Отказ, а не подстановка похожей роли: `ACTORS.md` §K5, красная линия №11. */
+export function assertWritableAuditRole(roleId: string, field: string): void {
+  if (isRetiredAuditRole(roleId)) {
+    throw new AuditError(AuditErrorCode.auditRoleRetired, { roleId, field });
+  }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -135,14 +212,51 @@ export interface DecisionMadeBody {
   readonly evidence: NonEmpty<RawSourceRef>;
 }
 
-export interface StateTransitionBody {
-  readonly kind: 'state_transition';
-  readonly machine: 'tranche' | 'payout' | 'deal' | 'party_check' | 'oracle_observation';
-  readonly from: string;
-  readonly to: string;
-  readonly eventKey: string;
-  readonly failedGuards: readonly string[];
+/**
+ * Покрытие клиентских средств по одной валюте — **двумя целыми**, а не дробью
+ * (красная линия №4). Числа переезжают в запись такими, какими их посчитал
+ * учёт: сравнение `custody >= obligations` целочисленное, а отношение нужно
+ * только читающему.
+ */
+export interface CoverageMeasurement {
+  readonly currency: string;
+  readonly custody: AuditAmount;
+  readonly obligations: AuditAmount;
 }
+
+/**
+ * Переход автомата.
+ *
+ * Ветвь `intake` — **остановка приёма новых сделок** (красная линия №3,
+ * `ACTORS.md` §7.4: «с записью `state_transition` от `system`»). Она отделена
+ * от прочих машин не ради разметки, а ради одного обязательного поля: остановка
+ * без **чисел покрытия** через год не восстанавливает решение — «приём
+ * остановился» без ответа на вопрос «насколько не сошлось» читается как сбой, а
+ * не как измерение. У пяти машин сделки таких чисел нет и быть не может,
+ * поэтому поле обязательно ровно в той ветви, где оно осмысленно, а не
+ * необязательно во всех.
+ */
+export type StateTransitionBody =
+  | {
+      readonly kind: 'state_transition';
+      readonly machine: 'tranche' | 'payout' | 'deal' | 'party_check' | 'oracle_observation';
+      readonly from: string;
+      readonly to: string;
+      readonly eventKey: string;
+      readonly failedGuards: readonly string[];
+    }
+  | {
+      readonly kind: 'state_transition';
+      readonly machine: 'intake';
+      /** `accepting` или `halted`: третьего состояния у приёма нет. */
+      readonly from: 'accepting' | 'halted';
+      readonly to: 'accepting' | 'halted';
+      readonly eventKey: string;
+      /** Коды нарушенных инвариантов учёта. Пусто у стоп-крана, нажатого человеком. */
+      readonly failedGuards: readonly string[];
+      /** Числа покрытия на момент измерения. Пустым не бывает: измерение было. */
+      readonly coverage: readonly CoverageMeasurement[];
+    };
 
 /**
  * Тип условия — закрытый перечень внешних фактов (`STATE-MACHINES.md` §8).
@@ -365,28 +479,30 @@ export type RoleChangeOrder =
  * нельзя. Совпадение `previous` и `next` отвергается при добавлении в цепочку
  * (`chain.ts`): запись о смене, в которой ничего не сменилось, — ложь.
  *
- * ⚠ Роль здесь — `AuditRoleId`, восемь значений. Перечень `auth` шире
- * (двенадцать плюс два нечеловеческих актора), и `financial_controller` с
- * `head_of_operations` оба отображаются в `approver`, а `principal`, `auditor`,
- * `client_counsel`, `compliance_officer` и `oracle_operator` не отображаются
- * никуда. Это известное расхождение `ACTORS.md` §13 (миграция
- * `sdelka.audit_role`), а не свойство этой записи; сверка — в
- * `auth/src/journal.ts` и `auth/test/journal.test.ts`.
+ * Роль здесь — `WritableAuditRoleId`: **новая** запись о смене роли пишется
+ * только под ролью, которая сегодня существует. Прежние записи, где стоит
+ * выведенная из употребления метка, читаются как есть — тип прочитанной записи
+ * шире типа записываемой, и это разделение проходит через весь пакет
+ * (`AuditActor.roleId` против аргумента `auditActor`).
+ *
+ * Расхождение перечней `ACTORS.md` §13 закрыто миграцией `0023`: каждая роль
+ * доступа имеет роль журнала, сверка — в `auth/src/journal.ts` и
+ * `auth/test/journal.test.ts`.
  */
 export type RoleChangedBody =
   | {
       readonly kind: 'role_changed';
       /** Первичное назначение: прежней роли не было. */
       readonly previous: null;
-      readonly next: AuditRoleId;
+      readonly next: WritableAuditRoleId;
       readonly order: RoleChangeOrder;
       readonly reasonKey: string;
     }
   | {
       readonly kind: 'role_changed';
-      readonly previous: AuditRoleId;
+      readonly previous: WritableAuditRoleId;
       /** `null` — роль снята без замены: доступа у записи больше нет. */
-      readonly next: AuditRoleId | null;
+      readonly next: WritableAuditRoleId | null;
       readonly order: RoleChangeOrder;
       readonly reasonKey: string;
     };

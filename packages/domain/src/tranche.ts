@@ -1044,7 +1044,16 @@ export function reduceTranche(
   }
 
   const previousEnteredAt: Instant = 'enteredAt' in state ? state.enteredAt : context.now;
-  const input: GuardInput = { facts: context.facts, event, now: context.now };
+  // Сделка едет в guard'ы отсюда, из контекста, а не из фактов: на ней стоит
+  // ключ участия получателя, и подавать его вместе с фактами значило бы дать
+  // приложению право назвать участие, по которому проверяются его же реквизиты
+  // (`guards.ts`, `recipientParticipation`).
+  const input: GuardInput = {
+    facts: context.facts,
+    event,
+    now: context.now,
+    dealId: context.dealId,
+  };
   const boundAct = boundConditionAct(state);
 
   // Изменение условия — не переход, а перепривязка акта, поэтому оно разбирается

@@ -18,7 +18,8 @@ import {
   receiveExternalPayment,
   receivePaidExtract,
 } from './acting';
-import { type CurrencyCode, type Deduction, type Money, money } from '@sdelka/money';
+import { type CurrencyCode, type Money, money } from '@sdelka/money';
+import type { TariffSeries } from '@sdelka/pricing';
 import {
   APPLICATION_ID,
   BUYER,
@@ -71,8 +72,12 @@ export interface PathOptions {
    * (два процента); задан — едет фактом транша до записи расчёта.
    */
   readonly feeCeilingPolicy?: FeeCeilingPolicy;
-  /** Удержания по траншу. По умолчанию — `PLATFORM_FEE`, 1,5 %. */
-  readonly deductions?: readonly Deduction[];
+  /**
+   * Журнал версий тарифа. По умолчанию — `TARIFF_SERIES`: одна версия, 1,5 %.
+   * Сценарий, которому нужен другой тариф, объявляет его **версией**, а не
+   * ставкой рядом с траншем.
+   */
+  readonly tariffs?: TariffSeries;
   readonly world?: World;
 }
 
@@ -90,17 +95,25 @@ export async function toCollected(options: PathOptions): Promise<Advanced> {
     ...(options.feeCeilingPolicy === undefined
       ? {}
       : { feeCeilingPolicy: options.feeCeilingPolicy }),
-    ...(options.deductions === undefined ? {} : { deductions: options.deductions }),
+    ...(options.tariffs === undefined ? {} : { tariffs: options.tariffs }),
     ...(options.world === undefined ? {} : { world: options.world }),
   });
+  /*
+   * Покупатель переводит **брутто транша**, а не сумму сделки. При тарифе,
+   * который несёт получатель, это одно и то же число; при плательщике-покупателе
+   * брутто больше на комиссию, и платёж суммой сделки не открывает транш
+   * (`g_amount_sufficient`). Величина берётся из фактов транша, то есть из той
+   * же котировки, по которой считается расчёт, — второго её источника нет.
+   */
+  const required = trancheOf(opened.world, options.trancheId).facts.requiredAmount;
   let world = applyTrancheEvent(opened.world, options.trancheId, { type: 'instructions_issued' }, OPTIONS).world;
-  world = receiveExternalPayment(world, opened.buyerKey, amount);
+  world = receiveExternalPayment(world, opened.buyerKey, required);
   world = applyTrancheEvent(
     world,
     options.trancheId,
     {
       type: 'funds_received',
-      amount,
+      amount: required,
       sender: payerKeyForDomain(buyer.document),
       reference: `payment-${options.trancheId}`,
     },

@@ -1091,6 +1091,21 @@ DPO по перечню ст. 33 не обязателен (§2). Срок 3 р�
 
 ## 13. Рекомендуемый следующий коммит
 
+> **Состояние на 2026-09-06 — сделана часть про журнал.** `sdelka.audit_role`
+> дописан семью метками (`0023_audit_role_split.sql`): пять ролей, которым записи
+> не было вовсе (`oracle_operator`, `compliance_officer`, `principal`, `auditor`,
+> `client_counsel`), плюс расщепление `approver` на `financial_controller` и
+> `head_of_operations` — расхождение №5 из §1 **[установлено,
+> `packages/auth/test/journal.test.ts`, `packages/db/test/int/audit-role-split.int.test.ts`]**.
+> Прежняя метка `approver` **не переименована, а выведена из употребления**: под
+> ней читают прежние записи и не делают новых — журнал не редактируется
+> (красная линия №11). Переименования `client → party` и `oracle → oracle_source`
+> по той же причине **не сделаны** и вынесены владельцу
+> (`DECISIONS-REVIEW.md` §O1). Тест сверки перечней есть
+> (`packages/auth/test/legacy.test.ts`, `packages/db/test/enums.test.ts`).
+> Не сделано из перечисленного ниже: вынос перечня в общий пакет и снятие
+> `write_beneficiary` с оператора в `packages/compliance`.
+
 **Один перечень ролей и тест, который ловит расхождение.**
 
 Что входит: вынос перечня в общий пакет; расширение до 13 + 2; переименования

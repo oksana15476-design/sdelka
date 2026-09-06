@@ -24,7 +24,7 @@ import {
   DAY_MS,
   GEL,
   POLICY_VERSION,
-  TARIFF_VERSION,
+  TARIFF_VERSION_ID,
 } from './support/fixtures';
 import { toPayingOut } from './support/paths';
 
@@ -68,7 +68,7 @@ describe('комиссия и выписка по сделке', () => {
     const accrual = world.journal.entries.find(
       (entry) => entry.memoKey === 'ledger.entry.fee_accrued',
     );
-    expect(accrual?.accrues?.tariffVersionId).toBe(TARIFF_VERSION);
+    expect(accrual?.accrues?.tariffVersionId).toBe(TARIFF_VERSION_ID);
     expect(accrual?.accrues?.fee.minor).toBe(FEE);
 
     // --- Три величины ---

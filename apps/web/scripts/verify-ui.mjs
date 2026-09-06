@@ -544,6 +544,46 @@ function declaredWithdrawalStatuses() {
   return [...block[1].matchAll(/'(\w+)'/gu)].map((match) => match[1]);
 }
 
+/**
+ * Пары «состояние × исход поручения» — тоже из домена, и по той же причине.
+ *
+ * Статуса на экране вывода **не хватает**: `paying_out` — это и «поручение ушло,
+ * ответа ждём», и «ответа банка нет, исход неизвестен»; `blocked` — и
+ * «остановила наша проверка», и «банк не исполнил». Четыре положения, два
+ * статуса. Обход по одним статусам снимал два снимка вместо четырёх, и строки
+ * «неизвестно» не видел ни разу — то есть красная линия №8 на экране не
+ * проверялась ничем.
+ *
+ * Читается таблица переходов, а не перечень положений: `outcome` стоит у ребра,
+ * и новое ребро с новым исходом попадёт в обход само.
+ */
+function declaredWithdrawalSituations() {
+  const file = resolve(DOMAIN_SRC, 'client-account.ts');
+  if (!existsSync(file)) {
+    fail('вывод', 'packages/domain/src/client-account.ts не найден — исходы поручения в обход не попали');
+    return [];
+  }
+  const block = readFileSync(file, 'utf8').match(
+    /export const WITHDRAWAL_TRANSITIONS[^=]*=\s*Object\.freeze\(\[([\s\S]*?)\n\]\);/u,
+  );
+  if (block === null) {
+    fail('вывод', 'таблица WITHDRAWAL_TRANSITIONS не найдена — исходы поручения в обход не попали');
+    return [];
+  }
+  const pairs = new Map();
+  for (const line of block[1].split('\n')) {
+    const edge = line.match(/^\s*transition\('\w+',\s*'\w+',\s*'(\w+)'(.*)$/u);
+    if (edge === null) continue;
+    const outcome = edge[2].match(/'(settled|rejected|unknown)'/u);
+    const pair = [edge[1], outcome === null ? 'none' : outcome[1]];
+    pairs.set(pair.join(':'), pair);
+  }
+  if (pairs.size === 0) {
+    fail('вывод', 'в таблице переходов не разобрано ни одного ребра — исходы поручения в обход не попали');
+  }
+  return [...pairs.values()];
+}
+
 const DESKTOP = { width: 1280, height: 900 };
 const MOBILE = { width: 360, height: 780 };
 /**
@@ -658,6 +698,22 @@ function routes() {
   add('withdraw-submitted', '/withdraw?amount=1000&currency=GEL&step=submitted', { desktop: DESKTOP }, ['ru']);
   for (const state of declaredWithdrawalStatuses()) {
     add(`withdraw-state-${state}`, `/withdraw?state=${state}`, { desktop: DESKTOP }, ['ka']);
+  }
+  /**
+   * Исход поручения рядом со статусом — четыре положения вместо двух.
+   *
+   * Снимок без исхода остаётся выше и означает своё: исход **не записан**, и
+   * экран говорит общими словами. Здесь снимаются положения, где он известен, —
+   * в том числе то самое «ответа банка нет», ради которого существует красная
+   * линия №8, и запрет повтора из него.
+   */
+  for (const [state, outcome] of declaredWithdrawalSituations()) {
+    add(
+      `withdraw-state-${state}-${outcome}`,
+      `/withdraw?state=${state}&outcome=${outcome}`,
+      { desktop: DESKTOP },
+      ['ka'],
+    );
   }
   /* Одна подпись из двух: ступень набрана наполовину, и это положение не
      совпадает ни с «нет подписей», ни с «утверждено». */

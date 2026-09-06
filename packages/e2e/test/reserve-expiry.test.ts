@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dueTrancheEvent } from '@sdelka/domain';
+import { type PartyRef, dueTrancheEvent } from '@sdelka/domain';
 import { STAFF } from './support/actors';
 import {
   type ClientKey,
@@ -19,12 +19,14 @@ import {
   applyTrancheEvent,
 } from './support/acting';
 import {
+  BUYER,
   DAY_MS,
   DEAL_AMOUNT,
   GEL,
   POLICY_VERSION,
   STATEMENT_SOURCE,
   WITHDRAWAL_CLOCK,
+  partyRef,
 } from './support/fixtures';
 import { toReserved } from './support/paths';
 import {
@@ -61,12 +63,12 @@ const WITHDRAWAL_STEP: WithdrawalStepOptions = {
  */
 function preparedWithdrawal(
   world: Parameters<typeof withWithdrawals>[0],
-  owner: ClientKey,
+  party: PartyRef,
   id: string,
 ): WithdrawalWorld {
   let scene = requestWithdrawal(withWithdrawals(world, WITHDRAWAL_CLOCK), {
     withdrawalId: id,
-    owner,
+    party,
     amount: DEAL_AMOUNT,
   });
   scene = approveWithdrawal(scene, id, STAFF.controller);
@@ -110,7 +112,7 @@ describe('снятие резерва по сроку', () => {
     // Пока запирание стояло на входе в `collected`, это обещание было ложным с
     // другой стороны — забрать было нельзя ничего, а экран говорил, что можно.
     expect(
-      rejectWithdrawalEvent(preparedWithdrawal(world, buyer, 'wd-reserve-held'), 'wd-reserve-held', {
+      rejectWithdrawalEvent(preparedWithdrawal(world, partyRef(BUYER), 'wd-reserve-held'), 'wd-reserve-held', {
         type: 'withdrawal_approved',
       }).failedGuards,
     ).toEqual(['g_free_balance_sufficient']);
@@ -157,12 +159,12 @@ describe('снятие резерва по сроку', () => {
 
     // --- Клиент выбирает: вывести… ---
     const released = applyWithdrawalEvent(
-      preparedWithdrawal(world, buyer, 'wd-reserve-released'),
+      preparedWithdrawal(world, partyRef(BUYER), 'wd-reserve-released'),
       'wd-reserve-released',
       { type: 'withdrawal_approved' },
       WITHDRAWAL_STEP,
     );
-    expect(released.withdrawals.get('wd-reserve-released')?.state.status).toBe('approved');
+    expect(released.world.withdrawals.get('wd-reserve-released')?.state.status).toBe('approved');
 
     // --- …или провести заново ---
     const again = applyTrancheEvent(world, TRANCHE, { type: 'reserve_requested' }, OPTIONS);

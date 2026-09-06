@@ -29,10 +29,12 @@ import {
 } from './support/acting';
 import {
   BANK_RESPONSE_SOURCE,
+  BUYER,
   GEL,
   POLICY,
   POLICY_VERSION,
   STATEMENT_SOURCE,
+  partyRef,
 } from './support/fixtures';
 import { toCollected } from './support/paths';
 
@@ -108,7 +110,7 @@ async function standingWithdrawal(suffix: string): Promise<WithdrawalWorld> {
   const scene = withWithdrawals(world, clockFromSettings(world.now));
   return requestWithdrawal(scene, {
     withdrawalId: suffix,
-    owner: collected.buyerKey,
+    party: partyRef(BUYER),
     amount: PART,
   });
 }

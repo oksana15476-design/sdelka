@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type TrancheEvent, RejectionCode } from '../src/index';
-import { context } from './support/facts';
+import { beneficiary, context } from './support/facts';
 import { accept, reject, stateAt } from './support/drive';
 
 const conditionEstablished: TrancheEvent = {
@@ -97,7 +97,9 @@ describe('блокировка реквизитов держится на пер
     // единственным, что стоит между разбором и банком. Реквизиты, оказавшиеся
     // незапертыми (внешняя правка, смена реквизитов в разборе), выплату не
     // проходят — ни прямой дверью, ни через разбор.
-    const ctx = context({ beneficiary: { status: 'verified', locked: false, lastChangedAt: null } });
+    const ctx = context({
+      beneficiary: beneficiary({ status: 'verified', locked: false, lastChangedAt: null }),
+    });
     const direct = reject(stateAt('reserved'), conditionEstablished, ctx);
     expect(direct.code).toBe(RejectionCode.guardFailed);
     expect([...direct.failedGuards]).toEqual(['g_beneficiary_locked']);

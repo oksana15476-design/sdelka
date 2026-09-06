@@ -130,8 +130,17 @@ export function quoteTrancheTariff<C extends CurrencyCode>(
  * транша. Формат `<домен>/<ГГГГ-ММ-ДД>.<n>` проходит `assertAccountIdentifier`
  * учёта без преобразования: `/` и `.` там законны, `:` и `|` в идентификаторе
  * версии невыразимы.
+ *
+ * ⚠ **Возвращается `SettingsVersionId`, а не `string`, и принимающая сторона
+ * шире.** `accrueFee` (`@sdelka/ledger`) объявляет параметр строкой, потому что
+ * учёту нечем узнать брендированный тип настроек: ребро `ledger → settings`
+ * замкнуло бы цикл `ledger → settings → domain → ledger` (домен зовёт потолок
+ * удержания у учёта значением, а не типом). Поэтому сужение стоит здесь и в
+ * `@sdelka/app`: на всём пути от журнала версий до намерения расчёта ссылка
+ * ходит брендированной, и голая строка в неё не подставляется; строкой она
+ * становится ровно на последнем шаге — в вызове конструктора записи.
  */
-export function tariffVersionRef(quotation: TariffQuotation<CurrencyCode>): string {
+export function tariffVersionRef(quotation: TariffQuotation<CurrencyCode>): SettingsVersionId {
   return quotation.versionId;
 }
 
@@ -139,7 +148,7 @@ export function tariffVersionRef(quotation: TariffQuotation<CurrencyCode>): stri
  * Та же ссылка от версии напрямую — для мест, где сумма уже посчитана и нужна
  * только запись (реверс начисления, выписка).
  */
-export function tariffVersionRefOf(versionId: SettingsVersionId): string {
+export function tariffVersionRefOf(versionId: SettingsVersionId): SettingsVersionId {
   return versionId;
 }
 

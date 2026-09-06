@@ -10,7 +10,7 @@ import {
   authorize,
   openBeneficiaryChange,
   prioritize,
-  toBeneficiaryLock,
+  toBeneficiaryConfirmation,
 } from '@sdelka/compliance';
 import { instant, payoutIdempotencyKey } from '@sdelka/domain';
 import {
@@ -79,7 +79,7 @@ describe('реквизиты выплаты: доказательство вла
     // Статус считает настоящий `verifyBeneficiaryHolder`, а не фикстура:
     // подставить `verified` руками значило бы обойти ровно тот guard, ради
     // которого он существует.
-    const beneficiary = nameConsistentBeneficiary(SELLER, 502);
+    const beneficiary = nameConsistentBeneficiary(DEAL, SELLER, 502);
     expect(beneficiary.status).toBe('name_consistent');
     expect(beneficiary.requisites.ownershipEvidence).toBeNull();
 
@@ -159,8 +159,8 @@ describe('реквизиты выплаты: доказательство вла
 
     // Отличие от предыдущего сценария ровно одно и оно названо: доказательство
     // владения счётом. Имя владельца, документ и счёт — те же.
-    const verified = beneficiaryFor(SELLER, 502);
-    const nameOnly = nameConsistentBeneficiary(SELLER, 502);
+    const verified = beneficiaryFor(DEAL, SELLER, 502);
+    const nameOnly = nameConsistentBeneficiary(DEAL, SELLER, 502);
     expect(verified.requisites.account).toEqual(nameOnly.requisites.account);
     expect(verified.requisites.holderNames).toEqual(nameOnly.requisites.holderNames);
     expect(verified.status).toBe('verified');
@@ -176,6 +176,58 @@ describe('реквизиты выплаты: доказательство вла
     expect(trancheStatusOf(world, TRANCHE)).toBe('paid_out');
     expect(accountBalance(world.journal, clientFreeAccount(path.sellerKey), GEL).minor).toBe(19_700_000n);
     expect(checkLedgerInvariants(world.journal)).toEqual([]);
+  });
+
+  /**
+   * И13.1, вторая половина: «сторона получает деньги по двум сделкам — реквизиты
+   * висят на **участии**, а не на личности».
+   *
+   * Сценарий тот самый, ради которого понятие участия заведено: продавец уже
+   * прошёл тестовый перевод по сделке А и заводит сделку Б. Если подтверждение
+   * переносится, то один пройденный тестовый перевод открывает подтверждённый
+   * канал вывода навсегда — по любой будущей сделке этого лица.
+   */
+  it('не пускает подтверждение по одной сделке в другую сделку того же получателя', async () => {
+    const DEAL_A = 'deal-participation-a';
+    const DEAL_B = 'deal-participation-b';
+    // ⚠ Имена траншей короткие не для красоты: ключ идемпотентности — UUID5 от
+    // имени транша, и примерно у 3% имён он содержит подряд девять цифр, а
+    // `assertNoRawIdentifiers` в журнале аудита считает такой прогон сырым
+    // идентификатором и отвергает запись поручения (`digit_run`,
+    // `packages/audit/src/values.ts`). `tranche-participation-b` — как раз
+    // такое имя. Дефект настоящий и заведён строкой в `ROADMAP.md`; здесь
+    // сценарий обходит его, а не прячет.
+    const TRANCHE_A = 'tranche-p-a';
+    const TRANCHE_B = 'tranche-p-b';
+
+    // Сделка А: реквизиты подтверждены по-настоящему, выплата доходит до банка.
+    const confirmedInA = beneficiaryFor(DEAL_A, SELLER, 503);
+    expect(confirmedInA.status).toBe('verified');
+    const pathA = await toPayingOut({
+      dealId: DEAL_A,
+      trancheId: TRANCHE_A,
+      beneficiary: confirmedInA,
+    });
+    expect(trancheStatusOf(pathA.world, TRANCHE_A)).toBe('paying_out');
+
+    // Сделка Б: то же лицо, тот же счёт, то же подтверждение — и оно сюда не
+    // годится. Отказ на **заведении транша**, а не отказом guard'а перед
+    // выплатой: «это подтверждение не от этой сделки» — другая беда, чем
+    // «владение не доказано», и ждать её до момента расчёта незачем.
+    await expect(
+      toConditionReady({ dealId: DEAL_B, trancheId: TRANCHE_B, beneficiary: confirmedInA }),
+    ).rejects.toThrow(/beneficiary_participation_mismatch/u);
+
+    // А со своим подтверждением сделка Б идёт обычным путём: второе участие —
+    // законный случай, ему нужна своя проверка, а не запрет.
+    const confirmedInB = beneficiaryFor(DEAL_B, SELLER, 503);
+    expect(confirmedInB.requisites.account).toEqual(confirmedInA.requisites.account);
+    const pathB = await toPayingOut({
+      dealId: DEAL_B,
+      trancheId: TRANCHE_B,
+      beneficiary: confirmedInB,
+    });
+    expect(trancheStatusOf(pathB.world, TRANCHE_B)).toBe('paying_out');
   });
 
   it('отвергает смену реквизитов в окне 72 часа перед расчётом и запирает выплату после смены вне окна', async () => {
@@ -272,7 +324,7 @@ describe('реквизиты выплаты: доказательство вла
     expect(applied.value.status).toBe('name_consistent');
     expect(applied.value.lastChangedAt).toBe(world.now);
 
-    world = patchFacts(world, TRANCHE, { beneficiary: toBeneficiaryLock(applied.value) });
+    world = patchFacts(world, TRANCHE, { beneficiary: toBeneficiaryConfirmation(applied.value) });
     const refused = rejectTrancheEvent(world, TRANCHE, { type: 'release_authorized' });
     // Третий отказ — про **свежесть выписки**, и он появился здесь сам, без
     // единой правки сценария: часы этого теста ушли на 25 часов вперёд, а

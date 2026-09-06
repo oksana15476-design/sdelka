@@ -78,9 +78,12 @@ export async function assertNoForeignWorld(
  *
  * Стороны (`sdelka.party`) не снимаются: строка справочная, ключ у неё
  * естественный, и повторная запись той же стороны — повтор, а не конфликт.
- * Выводы (`sdelka.withdrawal`) не снимаются потому, что сделки не знают:
- * у вывода нет ни транша, ни сделки — и порт в него не пишет вовсе
- * (`app/src/store.ts`, оговорка про `WithdrawalWorld`).
+ *
+ * Выводы (`sdelka.withdrawal`) здесь тоже не снимаются, но по другой причине,
+ * чем прежде: раньше порт в них не писал вовсе, а теперь пишет — заявка стала
+ * полем мира (`app/src/world.ts`), и шаг кладёт её той же дельтой, что и транш.
+ * Сделки у заявки нет, поэтому снять её по `deal_id` нельзя; снимает её
+ * `resetWithdrawals` по номерам, и зовёт его тот набор, который заявки заводит.
  */
 export async function resetDealState(pool: Pool, dealIds: readonly string[]): Promise<void> {
   if (dealIds.length === 0) return;
@@ -102,3 +105,53 @@ export async function resetDealState(pool: Pool, dealIds: readonly string[]): Pr
     client.release();
   }
 }
+
+/**
+ * Снятие заявок на вывод перед прогоном — по номерам, а не по сделке.
+ *
+ * Сделки у заявки нет вовсе (`sdelka.withdrawal` ссылается только на сторону),
+ * поэтому список приходит номерами. Причина снятия та же, что у состояния
+ * сделок: набор ведёт свой мир от первого шага и первым же шагом объявляет
+ * «завожу заявку в `requested`», а в базе после прошлого прогона лежит она же в
+ * `paid_out`. Это не повтор шага, а заявка на состояние, из которого уже ушли, —
+ * и хранилище верно отвечает `db.step.state_conflict`.
+ *
+ * ⚠ **Роль — владелец схемы, и по-другому нельзя.** У `sdelka_app` прав
+ * `DELETE` нет (`0005`: `GRANT SELECT, INSERT, UPDATE`), и это часть продукта:
+ * приложение заявок не удаляет. Снятие идёт мимо `pgWorldStore` — иначе у
+ * хранилища появилась бы дверь, которой у него нет.
+ */
+export async function resetWithdrawals(
+  pool: Pool,
+  withdrawalIds: readonly string[],
+): Promise<void> {
+  if (withdrawalIds.length === 0) return;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL ROLE ${OWNER_ROLE}`);
+    await client.query('DELETE FROM sdelka.withdrawal WHERE withdrawal_id = ANY($1)', [
+      withdrawalIds,
+    ]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Цепочки аудита, которые ведёт **весь** интеграционный набор сквозного контура.
+ *
+ * Перечень один на все файлы намеренно: предусловие `assertNoForeignWorld`
+ * объявляет чужой всякую цепочку, которой здесь нет, и файл, заведший свою
+ * цепочку молча, ронял бы соседа на втором прогоне — причём отказом «чужой мир»,
+ * который читался бы как грязная база, а не как забытая строка.
+ */
+export const INT_CHAINS: readonly string[] = Object.freeze([
+  'chain-int-e2e',
+  'chain-int-other',
+  'chain-int-withdrawal',
+]);

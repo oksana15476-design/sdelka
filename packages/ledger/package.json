@@ -13,7 +13,8 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "mutation": "node scripts/ledger-mutation.mjs"
   },
   "dependencies": {
     "@sdelka/money": "workspace:*"

@@ -25,6 +25,7 @@ import {
   type TrancheEventOptions,
   type TrancheSpec,
   type TrancheStepResult,
+  type HaltLiftRequest,
   type UnwindRequest,
   type WithdrawalSpec,
   type WithdrawalStepOptions,
@@ -61,6 +62,10 @@ import {
   registerFiling as appRegisterFiling,
   requestUnwind as appRequestUnwind,
   requestWithdrawal as appRequestWithdrawal,
+  haltIntake as appHaltIntake,
+  liftIntakeHalt as appLiftIntakeHalt,
+  requestHaltLift as appRequestHaltLift,
+  authorizeIntake,
   returnHeldPayment as appReturnHeldPayment,
   authorizeWithdrawal,
   PLATFORM_SUBJECT,
@@ -515,8 +520,8 @@ export function requestWithdrawal(
 
 /**
  * Разрешение по заявке на вывод: факты берёт `authorizeWithdrawal`, потому что
- * выводы живут не в `World`, а рядом с ним. Для сценария разница одна — Н1 и Н5
- * здесь считаются по самой заявке, а не по сделке.
+ * предмет здесь — сама заявка, а не сделка с траншем. Для сценария разница одна
+ * — Н1 и Н5 считаются по заявке.
  */
 function actingOnWithdrawal<C extends Capability>(
   scene: WithdrawalWorld,
@@ -559,4 +564,55 @@ export function applyWithdrawalEvent<E extends WithdrawalEvent>(
     step.authority as Parameters<typeof appApplyWithdrawalEvent<E>>[3],
     options,
   );
+}
+
+/* ------------------------------------------------------------------------- */
+/* Остановка приёма новых сделок                                             */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Разрешение на шаг по остановке приёма.
+ *
+ * Своя функция, а не `acting`, по той же причине, что у заявки на вывод: у
+ * остановки нет ни сделки, ни транша, и факты для Н5 («снять не может тот, кто
+ * остановил») собирает сам продукт — `authorizeIntake`. Подставить их отсюда
+ * нечем.
+ */
+function actingOnIntake<C extends Capability>(
+  world: World,
+  capability: C,
+  actor: Actor,
+): { readonly world: World; readonly authority: Authority<C> } {
+  const session = login(world, actor);
+  const decided = authorizeIntake<C>(session.world, session.sessionId, capability);
+  if (!decided.ok) {
+    throw new Error(`e2e.intake.denied:${actor.key}:${capability}:${decided.error.reason}`);
+  }
+  return { world: session.world, authority: decided.value };
+}
+
+/** Стоп-кран человека. Умолчание — дежурный аналитик: полномочие есть у всех. */
+export function haltIntake(
+  world: World,
+  reasonKey: string,
+  as: Actor = STAFF.analyst,
+): World {
+  const step = actingOnIntake(world, 'halt_intake', as);
+  return appHaltIntake(step.world, reasonKey, step.authority);
+}
+
+/** Первая подпись под снятием. Умолчание — ФК: уровень 1. */
+export function requestHaltLift(
+  world: World,
+  request: HaltLiftRequest,
+  as: Actor = STAFF.controller,
+): World {
+  const step = actingOnIntake(world, 'lift_halt', as);
+  return appRequestHaltLift(step.world, request, step.authority);
+}
+
+/** Вторая подпись — она же снятие. Умолчание — РО: уровень 2. */
+export function liftIntakeHalt(world: World, as: Actor = STAFF.head): World {
+  const step = actingOnIntake(world, 'lift_halt', as);
+  return appLiftIntakeHalt(step.world, step.authority);
 }

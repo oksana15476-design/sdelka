@@ -23,6 +23,7 @@ import {
   NOW,
   POLICY_VERSION,
   SELLER,
+  TARIFF_SERIES,
   THIRD_PARTY,
   conditionAct,
   partyRef,
@@ -118,6 +119,8 @@ describe('хранилище: расчёт получателю проходит
     const restored = await restoreWorld(store, {
       chainId: SETTLE_SCOPE.chainId,
       deals: [{ dealId: SETTLE_SCOPE.dealId, trancheIds: [tranche] }],
+      // Заявок на вывод в этом сценарии нет — «ничьих» сказано словом.
+      parties: [],
     });
     expect(restoredViolations(restored)).toEqual([]);
     expect(restored.journal.entries).toEqual(world.journal.entries);
@@ -170,6 +173,8 @@ describe('хранилище: возврат покупателю проходи
     const restored = await restoreWorld(store, {
       chainId: CHAIN,
       deals: [{ dealId: DEAL, trancheIds: [TRANCHE] }],
+      // Заявок на вывод в этом сценарии нет — «ничьих» сказано словом.
+      parties: [],
     });
 
     // Инварианты на поднятом — **та же функция**, что и на мире в памяти
@@ -224,6 +229,8 @@ describe('хранилище: возврат покупателю проходи
     const restored = await restoreWorld(store2, {
       chainId: CHAIN,
       deals: [{ dealId: DEAL, trancheIds: [TRANCHE] }],
+      // Заявок на вывод в этом сценарии нет — «ничьих» сказано словом.
+      parties: [],
     });
     // Поручение есть в мире и отсутствует в базе. Отсутствие названо.
     expect(payoutKeysOf(world, TRANCHE)).toEqual([refundIdempotencyKey(TRANCHE)]);
@@ -313,6 +320,8 @@ describe('хранилище: два мира в одной базе', () => {
     const restored = await restoreWorld(store, {
       chainId: OTHER_SCOPE.chainId,
       deals: [{ dealId: OTHER_SCOPE.dealId, trancheIds: [OTHER_SCOPE.trancheId] }],
+      // Заявок на вывод в этом сценарии нет — «ничьих» сказано словом.
+      parties: [],
     });
     expect(restoredViolations(restored)).toEqual([]);
     // Журнал одного мира не видит проводок другого — ни одной, а не «в
@@ -328,6 +337,8 @@ describe('хранилище: два мира в одной базе', () => {
     const restoredFirst = await restoreWorld(store, {
       chainId: SCOPE.chainId,
       deals: [{ dealId: SCOPE.dealId, trancheIds: [SCOPE.trancheId] }],
+      // Заявок на вывод в этом сценарии нет — «ничьих» сказано словом.
+      parties: [],
     });
     expect(restoredFirst.journal.entries).toEqual(first.world.journal.entries);
     expect(restoredViolations(restoredFirst)).toEqual([]);
@@ -347,7 +358,7 @@ describe('хранилище: два мира в одной базе', () => {
 describe('хранилище: отказ базы и повтор шага', () => {
   it('повтор шага не задваивает: те же строки опознаются повтором', async () => {
     const store = memoryWorldStore();
-    let world = (await openWorld(store, emptyWorld({ now: NOW, chainId: CHAIN }))).world;
+    let world = (await openWorld(store, emptyWorld({ now: NOW, chainId: CHAIN, tariffs: TARIFF_SERIES }))).world;
     world = (
       await stepWorld(store, world, newDeal(SCOPE))
     ).world;
@@ -367,7 +378,7 @@ describe('хранилище: отказ базы и повтор шага', () 
 
   it('отказ базы — остановка шага: в базе не остаётся ни половины', async () => {
     const store = memoryWorldStore();
-    let world = (await openWorld(store, emptyWorld({ now: NOW, chainId: CHAIN }))).world;
+    let world = (await openWorld(store, emptyWorld({ now: NOW, chainId: CHAIN, tariffs: TARIFF_SERIES }))).world;
     world = (
       await stepWorld(store, world, newDeal(SCOPE))
     ).world;
@@ -385,6 +396,8 @@ describe('хранилище: отказ базы и повтор шага', () 
     const empty = await restoreWorld(store, {
       chainId: CHAIN,
       deals: [{ dealId: DEAL, trancheIds: [TRANCHE] }],
+      // Заявок на вывод в этом сценарии нет — «ничьих» сказано словом.
+      parties: [],
     });
     // Сделки в базе нет вовсе: до транша её стороны неизвестны, и первым
     // шагом, который её кладёт, был бы как раз этот — тот, что отказал.
@@ -398,6 +411,8 @@ describe('хранилище: отказ базы и повтор шага', () 
     const restored = await restoreWorld(store, {
       chainId: CHAIN,
       deals: [{ dealId: DEAL, trancheIds: [TRANCHE] }],
+      // Заявок на вывод в этом сценарии нет — «ничьих» сказано словом.
+      parties: [],
     });
     expect(restored.deals[0]?.tranches[0]?.snapshot.trancheId).toBe(TRANCHE);
     expect(restoredViolations(restored)).toEqual([]);
@@ -434,6 +449,8 @@ describe('хранилище: отказ базы и повтор шага', () 
     const restored = await restoreWorld(store, {
       chainId: CHAIN,
       deals: [{ dealId: DEAL, trancheIds: [TRANCHE] }],
+      // Заявок на вывод в этом сценарии нет — «ничьих» сказано словом.
+      parties: [],
     });
     expect(restored.deals[0]?.tranches[0]?.snapshot.state.status).toBe('reserved');
     expect(restoredViolations(restored)).toEqual([]);
@@ -441,7 +458,7 @@ describe('хранилище: отказ базы и повтор шага', () 
 
   it('нарушение инварианта останавливает шаг **до** базы', async () => {
     const store = memoryWorldStore();
-    const world = (await openWorld(store, emptyWorld({ now: NOW, chainId: CHAIN }))).world;
+    const world = (await openWorld(store, emptyWorld({ now: NOW, chainId: CHAIN, tariffs: TARIFF_SERIES }))).world;
     const committed = store.committed;
     // Шаг, который не запечатывается: сделка без объекта. База при этом не
     // открывает транзакции вовсе — писать нечего, пока шаг не прошёл `sealed`.

@@ -1,5 +1,7 @@
 import { type CurrencyCode, type IsoDate, type Money, isoDate, money } from '@sdelka/money';
 import {
+  type BeneficiaryConfirmation,
+  type BeneficiaryConfirmationSource,
   type ConditionAct,
   type DeadlinePolicy,
   type DealFacts,
@@ -14,7 +16,9 @@ import {
   DEFAULT_DEADLINE_POLICY,
   DEFAULT_OBSERVATION_POLICY,
   RELEASE_CONDITIONS,
+  beneficiaryConfirmation,
   instant,
+  participationKey,
   releaseObservation,
 } from '../../src/index';
 
@@ -58,6 +62,31 @@ export const CONDITION_ACT: ConditionAct = Object.freeze({
   conditionTextVersion: 'condition.registration_transfer.v1',
   conditionType: 'registration_transfer',
 });
+
+/**
+ * Участие получателя в этой сделке — то самое, на котором висят реквизиты
+ * выплаты (`participation.ts`, ROADMAP.md И13.1). Не лицо: у того же получателя
+ * в другой сделке участие другое, и подтверждение оттуда сюда не переносится.
+ */
+export const RECIPIENT_PARTICIPATION = participationKey(DEAL_ID, RECIPIENT, 'recipient');
+
+/**
+ * Подтверждение реквизитов счастливого пути: владение доказано, реквизиты
+ * заперты, участие — получатель этой сделки. Собрать его литералом нельзя
+ * (номинальный тип), и это защита, а не неудобство: тест, которому нужно
+ * подтверждение другого участия, обязан назвать это участие вслух.
+ */
+export function beneficiary(
+  overrides: Partial<BeneficiaryConfirmationSource> = {},
+): BeneficiaryConfirmation {
+  return beneficiaryConfirmation({
+    participation: RECIPIENT_PARTICIPATION,
+    status: 'verified',
+    locked: true,
+    lastChangedAt: null,
+    ...overrides,
+  });
+}
 
 /** Дата создания транша: к ней привязан курс пересчёта порогов (§4.3.1). */
 export const CREATED_ON: IsoDate = isoDate('2026-09-03');
@@ -123,7 +152,7 @@ export function facts(overrides: Partial<TrancheFacts> = {}): TrancheFacts {
     // `name_consistent` здесь поставить нельзя — это увело бы каждый тест в
     // отказ по `g_beneficiary_verified`; отдельные проверки статуса живут в
     // `beneficiary-status.test.ts`.
-    beneficiary: { status: 'verified', locked: true, lastChangedAt: null },
+    beneficiary: beneficiary(),
     preparedBy: 'operator-1',
     // Нулевой ступени в лестнице нет: любая выплата требует человека, поэтому
     // базовая фикстура несёт одно утверждение. Утверждающий отличается от

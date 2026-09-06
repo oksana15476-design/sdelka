@@ -1,9 +1,11 @@
 import {
-  type BeneficiaryLock,
+  type BeneficiaryConfirmation,
   type BeneficiaryStatus,
   type Instant,
+  type ParticipationKey,
   type Result,
   BENEFICIARY_STATUSES,
+  beneficiaryConfirmation,
   failure,
   ok,
 } from '@sdelka/domain';
@@ -61,8 +63,22 @@ export interface BeneficiaryRequisites {
 export { BENEFICIARY_STATUSES };
 export type { BeneficiaryStatus };
 
+/**
+ * Реквизиты **одного участия**, а не лица (`@sdelka/domain`,
+ * `participation.ts`; `ROADMAP.md` И13.1: «реквизиты висят на участии, а не на
+ * личности: подтверждение по одной сделке не переносится на другую»).
+ *
+ * Участие приходит сюда не отдельным полем рядом со статусом, а **из решения о
+ * проверке**: `beneficiaryStateOf` берёт его у `BeneficiaryVerification`, а тот
+ * получает участие первым аргументом. Порядок именно такой, потому что иначе
+ * участие оставалось бы свободным параметром: состояние, проверенное по сделке
+ * А, помечалось бы сделкой Б одним присваиванием, и вся конструкция описывала
+ * бы перенос, а не запрет переноса.
+ */
 export interface BeneficiaryState {
   readonly requisites: BeneficiaryRequisites;
+  /** Участие, для которого эти реквизиты заявлены и проверены. */
+  readonly participation: ParticipationKey;
   readonly status: BeneficiaryStatus;
   /** Блокировка наступает при финансировании сделки, а не по решению оператора. */
   readonly locked: boolean;
@@ -71,6 +87,12 @@ export interface BeneficiaryState {
 
 export interface BeneficiaryVerification extends Decision<BeneficiaryStatus> {
   readonly nameMatch: NameMatch;
+  /**
+   * Участие, по которому принято решение. Часть решения, а не контекст вызова:
+   * `CORE.md` Ф11 требует, чтобы решение хранило всё, что понадобится для его
+   * восстановления, а «чьё это подтверждение» — первое, что понадобится.
+   */
+  readonly participation: ParticipationKey;
 }
 
 /**
@@ -83,6 +105,7 @@ export interface BeneficiaryVerification extends Decision<BeneficiaryStatus> {
  * (`BACKLOG.md` E4-10, E4-13).
  */
 export function verifyBeneficiaryHolder(
+  participation: ParticipationKey,
   requisites: BeneficiaryRequisites,
   profile: PartyProfile,
   policy: CompliancePolicy,
@@ -106,6 +129,7 @@ export function verifyBeneficiaryHolder(
         evidence,
       ),
       nameMatch,
+      participation,
     });
   }
 
@@ -124,6 +148,7 @@ export function verifyBeneficiaryHolder(
         evidence,
       ),
       nameMatch,
+      participation,
     });
   }
 
@@ -137,6 +162,7 @@ export function verifyBeneficiaryHolder(
         evidence,
       ),
       nameMatch,
+      participation,
     });
   }
 
@@ -149,6 +175,37 @@ export function verifyBeneficiaryHolder(
       [...evidence, requisites.ownershipEvidence],
     ),
     nameMatch,
+    participation,
+  });
+}
+
+/**
+ * Состояние реквизитов из **решения о проверке**.
+ *
+ * Единственный конструктор состояния, и участие он берёт у решения, а не у
+ * вызывающего. Отсюда следует правило И13.1 целиком: чтобы получить
+ * подтверждённые реквизиты по участию Б, надо провести проверку **по участию
+ * Б** — то есть предъявить доказательство владения счётом ещё раз. Скопировать
+ * решение по участию А сюда нечем: участие в нём уже записано, а второго места,
+ * где его можно назвать, нет.
+ *
+ * Реквизиты передаются отдельным аргументом, потому что решение о них —
+ * решение, а не хранилище: `Decision` несёт исход, версию политики, причины и
+ * доказательства, но не сам счёт (`decision.ts`, `log-safe.ts` — реквизиты в
+ * логи и решения не попадают).
+ */
+export function beneficiaryStateOf(
+  verification: BeneficiaryVerification,
+  requisites: BeneficiaryRequisites,
+): BeneficiaryState {
+  return Object.freeze({
+    requisites,
+    participation: verification.participation,
+    status: verification.outcome,
+    // Блокировка — следствие финансирования сделки, а не проверки владельца:
+    // свежее состояние не заперто, запирает его `lockOnFunding` по событию.
+    locked: false,
+    lastChangedAt: null,
   });
 }
 
@@ -158,17 +215,27 @@ export function lockOnFunding(state: BeneficiaryState): BeneficiaryState {
 }
 
 /**
- * Факт для guard'а `g_beneficiary_locked` в `@sdelka/domain`.
+ * Факт для guard'ов `g_beneficiary_locked` и `g_beneficiary_verified` в
+ * `@sdelka/domain`.
  *
- * Тип возвращаемого значения импортирован из домена намеренно: если форма факта
- * там изменится, здесь перестанет собираться, а не разойдётся молча.
+ * Значение изготавливает **домен** (`beneficiaryConfirmation`), а не этот
+ * пакет: тип номинальный, его конструктор наружу не выпущен, и собрать
+ * подтверждение литералом нельзя нигде. Здесь только передача состояния — и
+ * участие едет вместе с ним.
+ *
+ * Что это закрывает. Раньше функция называлась `toBeneficiaryLock` и отдавала
+ * домену `{ status, locked, lastChangedAt }` — три поля без ключа. Подтверждение,
+ * полученное по сделке А, ложилось фактом транша сделки Б одним присваиванием, и
+ * ни один guard этого не видел: злоумышленник, один раз прошедший проверку,
+ * получал подтверждённый канал вывода по любой будущей сделке (И13.1).
  */
-export function toBeneficiaryLock(state: BeneficiaryState): BeneficiaryLock {
+export function toBeneficiaryConfirmation(state: BeneficiaryState): BeneficiaryConfirmation {
   // Статус доезжает до домена целиком. Раньше он здесь **выбрасывался**, и
   // различение `name_consistent` / `verified`, ради которого написан
   // `verifyBeneficiaryHolder`, до автомата не доходило: выплата на реквизиты,
   // прошедшие только сверку имени, проходила (ROADMAP.md И13.1, E13-2).
-  return Object.freeze({
+  return beneficiaryConfirmation({
+    participation: state.participation,
     status: state.status,
     locked: state.locked,
     lastChangedAt: state.lastChangedAt,
@@ -400,6 +467,16 @@ export function applyBeneficiaryChange(
   return ok(
     Object.freeze({
       requisites: request.proposed,
+      /**
+       * Участие — прежнее, из состояния, а не из заявки. Изменение реквизитов
+       * это изменение **внутри участия**: сторона меняет счёт, на который
+       * получает деньги по этой сделке (И13.2: «процедура применяется к
+       * участию, где он получает; на вторую сделку изменение не
+       * распространяется»). Заявка, которая могла бы принести другое участие,
+       * означала бы переезд подтверждения между сделками через смену
+       * реквизитов — обход того же запрета с другой стороны.
+       */
+      participation: state.participation,
       // Новые реквизиты не наследуют статус старых: доказательство владения
       // относилось к другому счёту.
       status: 'name_consistent' as const,

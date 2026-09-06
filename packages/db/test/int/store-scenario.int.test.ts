@@ -20,9 +20,11 @@ import {
   DEFAULT_DEADLINE_POLICY,
   DEFAULT_OBSERVATION_POLICY,
   RELEASE_CONDITIONS,
+  beneficiaryConfirmation,
   dealState,
   initialTrancheState,
   instant,
+  participationKey,
   payoutIdempotencyKey,
   reduceTranche,
   refundIdempotencyKey,
@@ -130,6 +132,12 @@ const ACT: ConditionAct = Object.freeze({
 
 const SELLER_ACCOUNT = clientKey(SELLER.accountKey);
 
+/**
+ * Участие получателя в этой сделке. Реквизиты выплаты подтверждаются для него,
+ * а не для лица (`@sdelka/domain`, `participation.ts`; ROADMAP.md И13.1).
+ */
+const SELLER_PARTICIPATION = participationKey(DEAL, SELLER, 'recipient');
+
 /** Комиссия платформы: полтора процента, как у потока P2 (FUNCTIONAL.md §3.4). */
 const FEE = money(GEL, 300_000n);
 const NET = money(GEL, AMOUNT.minor - FEE.minor);
@@ -175,7 +183,12 @@ const RELEASE_FACTS: Partial<TrancheFacts> = {
   collectedAmount: AMOUNT,
   lockedAmount: AMOUNT,
   observation: OBSERVATION,
-  beneficiary: { status: 'verified', locked: true, lastChangedAt: null },
+  beneficiary: beneficiaryConfirmation({
+    participation: SELLER_PARTICIPATION,
+    status: 'verified',
+    locked: true,
+    lastChangedAt: null,
+  }),
   approvals: [{ userId: 'approver-a-scenario' }, { userId: 'approver-b-scenario' }],
 };
 
@@ -208,7 +221,12 @@ function facts(overrides: Partial<TrancheFacts> = {}): TrancheFacts {
     observation: null,
     expectedCadastralCode: 'cadastral-scenario',
     observationPolicy: DEFAULT_OBSERVATION_POLICY,
-    beneficiary: { status: 'verified', locked: false, lastChangedAt: null },
+    beneficiary: beneficiaryConfirmation({
+      participation: SELLER_PARTICIPATION,
+      status: 'verified',
+      locked: false,
+      lastChangedAt: null,
+    }),
     preparedBy: 'operator-scenario',
     approvals: [],
     approvalPolicy: DEFAULT_APPROVAL_POLICY,

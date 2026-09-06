@@ -47,7 +47,7 @@ import {
   reconcileOwner,
   runDetectors,
   supportPartyView,
-  toBeneficiaryLock,
+  toBeneficiaryConfirmation,
   verifyBeneficiaryHolder,
 } from '../src/index';
 import {
@@ -63,6 +63,7 @@ import {
   NOW,
   OTHER_DOCUMENT,
   OTHER_NAMES,
+  PARTICIPATION,
   POLICY,
   POLICY_VERSION,
   RU,
@@ -122,6 +123,9 @@ const requisites = freezeDeep({
 
 const beneficiaryState = freezeDeep({
   requisites,
+  // Реквизиты принадлежат участию, а не лицу: без ключа участия состояние
+  // теперь не собрать (И13.1).
+  participation: PARTICIPATION,
   status: 'name_consistent' as const,
   locked: true,
   lastChangedAt: null,
@@ -495,7 +499,7 @@ const CASES: readonly (readonly [string, () => unknown])[] = [
   [
     'сверка владельца счёта',
     () =>
-      verifyBeneficiaryHolder(requisites, freezeDeep(profile()), POLICY, NOW),
+      verifyBeneficiaryHolder(PARTICIPATION, requisites, freezeDeep(profile()), POLICY, NOW),
   ],
   [
     'блокировка реквизитов',
@@ -505,7 +509,7 @@ const CASES: readonly (readonly [string, () => unknown])[] = [
   [
     'факт для guard-а домена',
     () =>
-      toBeneficiaryLock(beneficiaryState),
+      toBeneficiaryConfirmation(beneficiaryState),
   ],
   [
     'заявка на изменение реквизитов',
@@ -931,6 +935,7 @@ function beneficiaryBranches(): readonly (readonly [string, () => unknown])[] {
     `сверка владельца счёта: ${name}`,
     () =>
       verifyBeneficiaryHolder(
+        PARTICIPATION,
         freezeDeep({ ...requisites, ...overrides }) as typeof requisites,
         freezeDeep(profile()),
         POLICY,

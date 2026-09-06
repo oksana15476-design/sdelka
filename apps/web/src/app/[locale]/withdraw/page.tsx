@@ -18,6 +18,12 @@ import { Amount, Badge, BlockedAction, EmptyState, Eyebrow, Row, SecurityBlock }
 import { AmountField, ChoiceField, ErrorSummary, SubmitButton } from '@/ui/form';
 import type { L10n } from '@/ui/l10n';
 import { type WithdrawFieldError, buildWithdrawForm, errorOf, readWithdrawInput } from '@/view/withdraw-form';
+import {
+  withdrawArrivalOf,
+  withdrawRepeatBlockedKey,
+  withdrawStateKey,
+  withdrawStateTone,
+} from '@/view/withdraw-state';
 
 /**
  * Экран вывода средств. Машина — `packages/domain/src/client-account.ts`:
@@ -44,6 +50,19 @@ import { type WithdrawFieldError, buildWithdrawForm, errorOf, readWithdrawInput 
  * запрета повторной заявки (`g_no_active_withdrawal`) названа словами заранее,
  * а не отказом в момент нажатия.
  *
+ * ## Статуса мало: исход поручения показывается отдельно
+ *
+ * Плашка собиралась шаблоном `withdraw.state.${status}.*` по шести состояниям
+ * машины, и четыре разных положения читались одинаково: «поручение ушло, ответа
+ * ждём», «ответа банка нет — исход неизвестен», «остановила наша проверка»,
+ * «банк не исполнил». Клиенту в «неизвестно» показывалось «Перевод отправлен» —
+ * расхождение с красной линией №8, а не недостача микрокопи.
+ *
+ * Теперь экран показывает **пару**: статус и исход, с которым заявка в него
+ * пришла (`WithdrawView.arrival`, разбор и выбор ключей —
+ * `view/withdraw-state.ts`). Исход берётся у машины: `outcome` стоит у ребра
+ * перехода, перечень возможных исходов считает `withdrawalArrivals`.
+ *
  * ## Форма без скрипта
  *
  * `method="get"`: шаг и введённые значения живут в адресе, проверка идёт на
@@ -52,20 +71,12 @@ import { type WithdrawFieldError, buildWithdrawForm, errorOf, readWithdrawInput 
  *
  * ## Приёмочные ключи адреса
  *
- * `?state=` — статус существующей заявки, `?source=unknown|otherHolder` —
- * положение счёта-источника, `?free=none` — свободного остатка нет вовсе,
+ * `?state=` — статус существующей заявки, `?outcome=none|unknown|rejected|settled`
+ * — исход поручения, с которым в этот статус пришли, `?source=unknown|otherHolder`
+ * — положение счёта-источника, `?free=none` — свободного остатка нет вовсе,
  * `?approvals=` — сколько подписей набрано. Это инструмент обхода, а не продукт:
  * в бою всё это приходит из данных.
  */
-const TONE = {
-  requested: 'wait',
-  approved: 'info',
-  paying_out: 'info',
-  paid_out: 'ok',
-  blocked: 'warn',
-  cancelled: 'wait',
-} as const;
-
 function one(value: string | string[] | undefined): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
@@ -144,7 +155,15 @@ export default async function WithdrawPage({
       : await getWithdraw(shownStatus, submitted && form.amount !== null ? form.amount : account.free, {
           source: sourceCase,
           approvals: approvals === undefined ? undefined : Number(approvals),
+          // Исход поручения: пара к статусу, а не украшение. Разбирается
+          // машиной — невозможная пара отбрасывается и не показывается вовсе.
+          arrival: withdrawArrivalOf(shownStatus, one(query.outcome)),
         });
+  // Приставка ключей плашки и её тон считаются один раз: заголовок, подпись и
+  // тело обязаны говорить об одном положении, а не собираться каждый по своему
+  // шаблону.
+  const stateKey = view === null ? null : withdrawStateKey(view.status, view.arrival);
+  const tone = view === null ? null : withdrawStateTone(view.status, view.arrival);
 
   // Счёт-источник неизвестен или не на имя плательщика: заявку заводить не из
   // чего. Форма на этом месте была бы тупиком с кнопкой — вместо неё названная
@@ -187,18 +206,20 @@ export default async function WithdrawPage({
         <p className="pagehead__note">{t(l.dict, 'withdraw.subtitle')}</p>
       </div>
 
-      {view === null ? null : (
-        <section className={`state-card state-card--${TONE[view.status]}`} aria-labelledby="withdraw-state">
+      {view === null || stateKey === null || tone === null ? null : (
+        <section className={`state-card state-card--${tone}`} aria-labelledby="withdraw-state">
           <div className="state-card__head">
             <div className="state-card__top">
               {/* Имени состояния машины (`paying_out`) на экране нет: клиент
-                  читает плашку и заголовок, а не наш автомат (§1.7 разбора). */}
-              <Badge tone={TONE[view.status]} label={t(l.dict, `withdraw.state.${view.status}.badge`)} />
+                  читает плашку и заголовок, а не наш автомат (§1.7 разбора).
+                  Приставка ключа при этом уже несёт исход поручения: «ответа
+                  банка нет» и «банк не исполнил» — это не оттенки отправки. */}
+              <Badge tone={tone} label={t(l.dict, `${stateKey}.badge`)} />
             </div>
             <h2 className="state-card__title" id="withdraw-state">
-              {t(l.dict, `withdraw.state.${view.status}.title`)}
+              {t(l.dict, `${stateKey}.title`)}
             </h2>
-            <p className="state-card__body">{t(l.dict, `withdraw.state.${view.status}.body`)}</p>
+            <p className="state-card__body">{t(l.dict, `${stateKey}.body`)}</p>
           </div>
           <div className="state-card__inner">
             <div className="rows">
@@ -232,8 +253,18 @@ export default async function WithdrawPage({
                 reasonKey={withdrawCancelBlockedKey(view.status)}
               />
             )}
+            {/* Красная линия №8, вторая половина: повтор из «неизвестно»
+                запрещён без прохождения через сверку. Кнопки нет — и запрет
+                назван словами, причём **своими** для «неизвестно»: общая
+                строка «пока идёт этот вывод» описывает очередь, и человек
+                прочитал бы её как «подождите», а ждать здесь нечего — открыть
+                повтор может только сверка с выпиской. */}
             {view.repeatBlocked ? (
-              <BlockedAction l={l} labelKey="withdraw.repeat" reasonKey="withdraw.repeat.blocked" />
+              <BlockedAction
+                l={l}
+                labelKey="withdraw.repeat"
+                reasonKey={withdrawRepeatBlockedKey(view.status, view.arrival)}
+              />
             ) : null}
           </div>
         </section>

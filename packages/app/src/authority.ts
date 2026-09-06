@@ -411,8 +411,9 @@ export function authorize<C extends Capability>(
  * `ActionContext` аргументом, — это ровно та дверь, через которую разделение
  * обязанностей отключается: подставил четыре пустых перечня, и Н1, Н2, Н4, Н5
  * прошли. Снаружи пакета её нет; внутри её зовут два места, и оба собирают
- * факты сами — `authorize` из мира и `authorizeWithdrawal` из заявки на вывод,
- * которая живёт не в `World`, а рядом с ним (`withdrawal.ts`).
+ * факты сами — `authorize` из мира по сделке и траншу, `authorizeWithdrawal`
+ * (`withdrawal.ts`) из самой заявки на вывод, у которой ни сделки, ни транша
+ * нет.
  */
 export function authorizeWithContext<C extends Capability>(
   world: World,

@@ -4,26 +4,31 @@ import {
   type BeneficiaryState,
   type ReviewTask,
   accountFingerprint,
-  toBeneficiaryLock,
+  toBeneficiaryConfirmation,
 } from '@sdelka/compliance';
 import {
   type Instant,
+  type ParticipationKey,
+  type PartyRef,
   type PayoutState,
   type TrancheFacts,
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_OBSERVATION_POLICY,
   boundConditionAct,
   isTerminalTrancheStatus,
+  participationKey,
 } from '@sdelka/domain';
-import { type ClientKey, clientKey } from '@sdelka/ledger';
+import { type ClientKey, clientKey, coverage } from '@sdelka/ledger';
 import { type CurrencyCode, type Money, isoDate } from '@sdelka/money';
 import { initialObservationState } from '@sdelka/oracle';
+import { tariffSeries } from '@sdelka/pricing';
 import { seqOfEternalId } from './ids';
 import {
   type RestoredDeal,
   type RestoredTranche,
   type RestoredWorld,
   type UnmappedPart,
+  type WithdrawalSnapshot,
   surfaceOfRestored,
 } from './store';
 import {
@@ -35,6 +40,7 @@ import {
   type ObservationTask,
   type SuppressedEntry,
   type TrancheRuntime,
+  type WithdrawalRuntime,
   type World,
   collectedClaimViolations,
   coverageOk,
@@ -87,6 +93,14 @@ import {
  * запись `payout_ordered` требует непустого пакета доказательств. Ни одно из
  * этих «не умеет» здесь не написано условием — все они следуют из закрытых
  * умолчаний.
+ *
+ * **То же и с заявкой на вывод.** Автомат и часы поднимаются полностью (`0022`:
+ * срок операции и момент входа в состояние), всё остальное — закрытыми
+ * умолчаниями: готовившего нет, подписей нет, совпадение владельца счёта с
+ * плательщиком не подтверждено, лицо, вызвавшее удержание, неизвестно.
+ * Поднятая заявка поэтому умеет принять ответ банка и дойти до отмены — и не
+ * умеет быть утверждённой заново. Разобрано у `withdrawalRuntimeOf` и в
+ * `DECISIONS-REVIEW.md` §L3.
  */
 
 /* ------------------------------------------------------------------------- */
@@ -108,20 +122,46 @@ import {
  */
 const NO_ACCOUNT = accountFingerprint('0'.repeat(64));
 
-const UNKNOWN_BENEFICIARY: BeneficiaryState = Object.freeze({
-  requisites: Object.freeze({
-    account: NO_ACCOUNT,
-    holderNames: Object.freeze([]),
-    holderDocument: null,
-    ownershipEvidence: null,
-  }),
-  // Начальный статус, а не `blocked`: блокировка — это **решение** комплаенса о
-  // конкретных реквизитах, а решения здесь никто не принимал. `draft` не
-  // проходит `g_beneficiary_verified` ровно так же.
-  status: 'draft',
-  locked: false,
-  lastChangedAt: null,
-});
+/**
+ * Сторона, которой нет. Тот же приём, что у `NO_ACCOUNT`: пустые половины
+ * ссылки означают «сверять не с чем», и построенный на них ключ участия
+ * `isParticipationKeyValid` не проходит — подтверждение по нему не разрешается
+ * никогда (`@sdelka/domain`, `participation.ts`).
+ */
+const NO_PARTY: PartyRef = Object.freeze({ partyId: '', accountKey: '' });
+
+/**
+ * Участие получателя поднятого транша.
+ *
+ * Реквизиты висят на участии (И13.1), а участие — это сделка плюс сторона.
+ * Сделка у поднятого транша есть, сторона берётся из акта об условии, который
+ * лежит **внутри состояния** и потому хранится. Акта нет (транш в `pending`) —
+ * участия нет, и подтверждение не разрешится ни при каком статусе.
+ */
+function recipientParticipationOf(
+  dealId: string,
+  recipient: PartyRef | null,
+): ParticipationKey {
+  return participationKey(dealId, recipient ?? NO_PARTY, 'recipient');
+}
+
+function unknownBeneficiary(participation: ParticipationKey): BeneficiaryState {
+  return Object.freeze({
+    requisites: Object.freeze({
+      account: NO_ACCOUNT,
+      holderNames: Object.freeze([]),
+      holderDocument: null,
+      ownershipEvidence: null,
+    }),
+    participation,
+    // Начальный статус, а не `blocked`: блокировка — это **решение** комплаенса о
+    // конкретных реквизитах, а решения здесь никто не принимал. `draft` не
+    // проходит `g_beneficiary_verified` ровно так же.
+    status: 'draft',
+    locked: false,
+    lastChangedAt: null,
+  });
+}
 
 /* ------------------------------------------------------------------------- */
 /* Объявление собранного                                                     */
@@ -189,18 +229,74 @@ function part(subject: string, reasonKey: string): UnmappedPart {
  * содержимом базы: перечислено то, чего у хранилища нет вовсе.
  */
 const GAPS: readonly UnmappedPart[] = Object.freeze([
+  /*
+   * Заявка на вывод поднимается **автоматом и часами**, а всем остальным — нет.
+   * Пять строк ниже — не оговорки, а закрытые отказы: каждая из них означает,
+   * что поднятая заявка умеет строго меньше живой.
+   */
+  /** Готовивший заявку. Лица в схеме нет: Н1 не набирается, кворум отказывает. */
+  part('withdrawal.preparer', 'preparer.not_storable'),
+  /** Подписи под заявкой. Колонок нет: `g_approvals_sufficient` не проходит. */
+  part('withdrawal.approvals', 'approvals.not_storable'),
+  /**
+   * Половина счёта-источника `holderIsPayer` (красная линия №9). В схеме лежит
+   * отпечаток, а совпадение владельца с плательщиком — факт момента утверждения
+   * (`db/src/store/port.ts`). Поднятая заявка получает `false` — отказ, а не
+   * разрешение: `g_source_account_known` не проходит, и утверждение уводит
+   * заявку в `blocked`, к человеку.
+   */
+  part('withdrawal.holder_is_payer', 'holder_is_payer.not_storable'),
+  /**
+   * Кто увёл заявку в удержание. Пусто при статусе `blocked` читается как
+   * **неизвестно** (`withdrawalActionContext`), и снятие удержания отказывает
+   * по Н5 — снять его не может тот, кто его вызвал, а «кто» неизвестен.
+   */
+  part('withdrawal.blocked_by', 'blocked_by.not_storable'),
+  /**
+   * След уже поднятой дежурному задачи о простое. Второй задачи о том же
+   * простое он не заводит: идентификатор задачи детерминирован парой «номер
+   * заявки, момент входа в состояние» (`scheduler.ts`), а момент входа
+   * восстановлен из базы. То есть после перезапуска задача будет поднята
+   * заново, но с **тем же** номером, а не второй строкой.
+   */
+  part('withdrawal.stall_mark', 'stall_mark.not_storable'),
   part('tranche.beneficiary', 'beneficiary.not_storable'),
   part('tranche.approvals', 'approvals.not_storable'),
   part('tranche.evidence', 'evidence.not_storable'),
   part('tranche.observation', 'observation.not_storable'),
   part('tranche.buyer_payer_key', 'payer_key.not_storable'),
   part('tranche.buyer_names', 'names.not_storable'),
-  part('tranche.deductions', 'tariff.not_storable'),
+  /**
+   * Тариф транша: версия плана, ставка, плательщик и потолок. В схеме их нет
+   * вовсе, и восстановить их неоткуда — журнал версий настройки живёт не в
+   * порте хранилища мира. Поднятый транш получает `tariff: null`: расчёт по
+   * нему отказывает `app.tranche.tariff_unknown`, а не считает комиссию нулём.
+   */
+  part('tranche.tariff', 'tariff.not_storable'),
   part('tranche.created_on', 'created_on.not_storable'),
   part('deal.object_cadastral_code', 'deal.object_not_storable'),
   part('sessions', 'port.no_method'),
   part('facts', 'port.no_method'),
+  /**
+   * Остановка приёма новых сделок (красная линия №3). Колонки под неё в схеме
+   * нет вовсе, и «стояла ли остановка до перезапуска» спросить не у кого.
+   *
+   * Поднятый мир получает её **поставленной**, а не снятой, и это тот же
+   * закрытый отказ, что у готовившего заявку и у реквизитов: перезапуск
+   * процесса не должен быть способом открыть приём без двоих людей. Цена
+   * названа: после подъёма приём открывается только через `requestHaltLift` и
+   * `liftIntakeHalt`. Цена мала ровно потому, что поднятый мир и без того не
+   * заводит траншей — журнала версий тарифа у него нет (`tariff.not_storable`).
+   */
+  part('intake_halt', 'intake_halt.not_storable'),
 ]);
+
+/**
+ * Причина остановки приёма у поднятого мира — ключ локализации, а не текст.
+ * Значение живёт здесь, а не в `intake-halt.ts`: остановка ставится **подъёмом**
+ * и говорит именно о нём.
+ */
+export const RESUMED_HALT_KEY = 'intake.halt.state_not_restored';
 
 /* ------------------------------------------------------------------------- */
 /* Подъём                                                                    */
@@ -301,7 +397,17 @@ function factsOf(
     // как «сверяться не с чем» — отказ закрытый (`flow.ts`, `DealSpec`).
     expectedCadastralCode: '',
     observationPolicy: DEFAULT_OBSERVATION_POLICY,
-    beneficiary: toBeneficiaryLock(UNKNOWN_BENEFICIARY),
+    // Реквизитов у поднятого мира нет, и участие названо честно: сделка своя,
+    // получатель — из акта, если акт есть. Статус `draft` не проходит
+    // `g_beneficiary_verified`, чужое участие не разрешилось бы и с `verified`.
+    beneficiary: toBeneficiaryConfirmation(
+      unknownBeneficiary(
+        recipientParticipationOf(
+          item.tranche.snapshot.dealId,
+          boundConditionAct(item.tranche.snapshot.state)?.recipient ?? null,
+        ),
+      ),
+    ),
     preparedBy: null,
     approvals: Object.freeze([]),
     approvalPolicy: DEFAULT_APPROVAL_POLICY,
@@ -337,18 +443,70 @@ function runtimeOf(
     trancheId: item.tranche.snapshot.trancheId,
     state: item.tranche.snapshot.state,
     facts: factsOf(item, required, collected, seed, restored),
-    deductions: Object.freeze([]),
-    tariffVersionId: '',
+    /*
+     * Тарифа нет, и это **не нулевая комиссия**. Прежде здесь стояли пустой
+     * список удержаний и пустая строка версии, и вместе они читались как
+     * законный тариф, который ничего не берёт: расчёт по поднятому траншу
+     * собирался, сходился повалютно и молча дарил клиенту нашу выручку. `null`
+     * такого прочтения не допускает — расчёт по нему отказывает.
+     */
+    tariff: null,
     // Поручения — из снимков: `PayoutSnapshot.state` и есть состояние домена.
     // Без них инвариант «не более одной активной выплаты на транш» проверял бы
     // пустой список, то есть не проверял бы ничего.
     payouts: Object.freeze(item.tranche.payouts.map((payout): PayoutState => payout.state)),
     approvalRecords: Object.freeze([]),
-    beneficiary: UNKNOWN_BENEFICIARY,
+    beneficiary: unknownBeneficiary(
+      recipientParticipationOf(
+        item.tranche.snapshot.dealId,
+        boundConditionAct(item.tranche.snapshot.state)?.recipient ?? null,
+      ),
+    ),
     buyerNames: Object.freeze([]),
     evidence: Object.freeze([]),
     suspendedRemaining: null,
     observation: initialObservationState,
+  };
+}
+
+/**
+ * Заявка на вывод из снимка: автомат и часы — записанные, всё остальное —
+ * закрытое умолчание.
+ *
+ * **Чем поднятая заявка отличается от свежей.** Свежая знает, кто её готовил,
+ * кто под ней подписался, чьё действие увело её в удержание и была ли она уже
+ * показана дежурному; поднятая не знает ничего из этого — колонок под них в
+ * схеме нет. Каждое «не знает» здесь превращается в **отказ**, а не в
+ * разрешение, и названо в `GAPS`:
+ *
+ * - `preparerRef: null` — готовивший неизвестен, кворум не набирается вовсе
+ *   (`requireWithdrawalQuorum` читает `UNKNOWN_FACT`);
+ * - подписей нет — `g_approvals_sufficient` не проходит;
+ * - `holderIsPayer: false` — совпадение владельца счёта с плательщиком не
+ *   подтверждено, значит `g_source_account_known` не проходит, и утверждение
+ *   уводит заявку в `blocked`, к человеку (красная линия №9);
+ * - `blockedBy: null` при `blocked` читается как «неизвестно», и снятие
+ *   удержания отказывает по Н5.
+ *
+ * Отпечаток счёта-источника при этом **сохраняется**, хотя guard по нему и не
+ * проходит: он часть тождества заявки в базе, и потерять его значило бы, что
+ * следующий шаг поднятой заявки не сможет записаться вовсе.
+ */
+function withdrawalRuntimeOf(snapshot: WithdrawalSnapshot): WithdrawalRuntime {
+  return {
+    state: snapshot.state,
+    party: snapshot.party,
+    amount: snapshot.amount,
+    sourceAccount: {
+      accountRef: snapshot.sourceAccountFingerprint,
+      holderIsPayer: false,
+    },
+    preparedBy: null,
+    preparerRef: null,
+    approvals: Object.freeze([]),
+    approvalRecords: Object.freeze([]),
+    blockedBy: null,
+    stall: null,
   };
 }
 
@@ -448,6 +606,11 @@ export function resumeWorld(restored: RestoredWorld, seed: ResumeSeed): Resumpti
   const tranches = new Map<string, TrancheRuntime>();
   for (const runtime of runtimes) tranches.set(runtime.trancheId, runtime);
 
+  const withdrawals = new Map<string, WithdrawalRuntime>();
+  for (const snapshot of restored.withdrawals) {
+    withdrawals.set(snapshot.state.withdrawalId, withdrawalRuntimeOf(snapshot));
+  }
+
   /*
    * `sealed` здесь не может отказать: только что проведена та же проверка, и
    * оба её слагаемых собраны из тех же значений. Он стоит **всё равно** — вход
@@ -464,6 +627,35 @@ export function resumeWorld(restored: RestoredWorld, seed: ResumeSeed): Resumpti
       anchors: Object.freeze<Anchor[]>([]),
       deals,
       tranches,
+      /*
+       * Журнал версий тарифа в схеме не лежит: он **настройка владельца**, а
+       * порт хранилища поднимает деньги и состояния. Пустой журнал здесь — не
+       * умолчание, а честное «тарифа не поднято»: заведение нового транша в
+       * поднятом мире отказывает `noVersionInEffect`, а расчёт по уже
+       * поднятому — `app.tranche.tariff_unknown`. Названо в `gaps` и в
+       * `DECISIONS-REVIEW.md` §J6 **[открыто]**.
+       */
+      tariffs: tariffSeries(),
+      withdrawals,
+      /*
+       * Приём **остановлен**, а не открыт. Остановка в схеме не лежит, значит
+       * ответа на вопрос «стояла ли она» у подъёма нет, а «неизвестно» у
+       * красной линии №3 читается закрыто. Остановившим записана машина: это
+       * подъём, а не чьё-то решение, и Н5 при снятии никого не исключает.
+       * Названо в `GAPS` (`intake_halt.not_storable`).
+       */
+      halt: Object.freeze({
+        by: { kind: 'machine' as const, origin: 'clock' as const },
+        at: seed.now,
+        reasonKey: RESUMED_HALT_KEY,
+        violations: Object.freeze([]),
+        coverage: coverage(restored.journal),
+        // Записи об этой остановке в вечном журнале нет: она не событие мира, а
+        // следствие того, что состояние не хранится. Ссылаться на чужую запись
+        // значило бы соврать журналу.
+        recordId: '',
+        lift: null,
+      }),
       tasks: Object.freeze<ReviewTask[]>([]),
       observationTasks: Object.freeze<ObservationTask[]>([]),
       notifications: Object.freeze<Notification[]>([]),

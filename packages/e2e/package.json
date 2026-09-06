@@ -20,6 +20,7 @@
     "@sdelka/ledger": "workspace:*",
     "@sdelka/money": "workspace:*",
     "@sdelka/oracle": "workspace:*",
+    "@sdelka/pricing": "workspace:*",
     "@sdelka/settings": "workspace:*"
   }
 }

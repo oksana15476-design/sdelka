@@ -6,7 +6,7 @@ import { formatRemaining } from '@/i18n/format';
 import { getOpsQueue, now, viewerTimeZone } from '@/fixtures/store';
 import { OPERATIONS_TIME_ZONE } from '@/fixtures/engine';
 import { getDecision, getReconciliation, getUnfreeze, unfreezeTargetOf } from '@/fixtures/screens';
-import { Amount, Badge, BlockedAction, DeadlineTimer, Eyebrow, Row } from '@/ui/primitives';
+import { BlockedAction, DeadlineTimer, Eyebrow, Row } from '@/ui/primitives';
 import {
   BasisCard,
   BreaksList,
@@ -20,10 +20,10 @@ import {
   NextCard,
   OutcomesCard,
   PostingsCard,
+  SubjectCard,
   WhyCard,
 } from '@/ui/ops';
-import { closingRuleOf, detailKindOf, externalFactOf } from '@/ui/ops-work';
-import { MONEY_STATE_TONE } from '@/view/money-state';
+import { closingRuleOf, detailKindOf, evidenceOf, externalFactOf } from '@/ui/ops-work';
 
 /**
  * Карточка задачи — то, ради чего очередь вообще существует.
@@ -49,6 +49,21 @@ import { MONEY_STATE_TONE } from '@/view/money-state';
  * же порядок блоков, а «разбор» наполнен фактами, которые детектор уже посчитал
  * (`CaseFacts`). Вторая рамка под них не заводилась — она и была бы тем самым
  * «ещё одним экраном», из-за которого оператор ищет работу глазами.
+ *
+ * ## Задача, на которой ничего не решают
+ *
+ * Восемнадцатый вид — простой заявки на вывод — рамку не расширяет тоже, но
+ * **сокращает**: блоков 4, 6 и 7 у него нет ни одного. Это не экономия места, а
+ * то же правило, что и везде здесь: рёбер, которые человек мог бы выбрать на
+ * этом экране, у машины вывода не существует (`WITHDRAWAL_CLOCK_EVENTS` —
+ * `Record<…, null>`), значит, нет ни исходов, ни доказательства исхода, ни
+ * правила закрытия. Показать все три «на всякий случай» — обещать переход,
+ * которого нет; отдельно про один из них: повтор поручения из «исход
+ * неизвестен» запрещён без сверки (красная линия №8), и кнопки, дающей его,
+ * здесь быть не может ни под каким названием.
+ *
+ * На месте блока «что вы решаете» стоит ответ, а не пустая рамка: решения нет,
+ * и сказано почему (`OutcomesCard`).
  */
 export default async function OpsTaskPage({
   params,
@@ -68,6 +83,11 @@ export default async function OpsTaskPage({
   const currentTime = now();
   const fact = externalFactOf(task.type);
   const detail = detailKindOf(task.type);
+  /* `null` у обоих означает одно: решения на этой карточке не принимают, и
+     карточки основания и правила закрытия не рендерятся вовсе. */
+  const evidence = evidenceOf(task.type);
+  const closing = closingRuleOf(task.type);
+  const subject = task.subject;
   const chosenTarget = unfreezeTargetOf(typeof query.target === 'string' ? query.target : undefined);
 
   const decision = detail === 'decision' ? await getDecision() : null;
@@ -98,38 +118,21 @@ export default async function OpsTaskPage({
         <Eyebrow l={l} labelKey="ops.screen.task" />
         <div className="pagehead__row">
           <h1>{t(l.dict, `ops.task.type.${task.type}`)}</h1>
-          <span className="mono faint">{task.dealRef}</span>
+          <span className="mono faint">
+            {subject.kind === 'deal' ? subject.dealRef : subject.withdrawalId}
+          </span>
         </div>
-        <p className="pagehead__note">{t(l.dict, `ops.money.${task.moneyState}.note`)}</p>
+        <p className="pagehead__note">
+          {t(
+            l.dict,
+            subject.kind === 'deal'
+              ? `ops.money.${subject.moneyState}.note`
+              : 'ops.task.subject.withdrawal.note',
+          )}
+        </p>
       </div>
 
-      <section className="card" aria-labelledby="subject">
-        <h2 className="card__title" id="subject">
-          {t(l.dict, 'ops.task.subject.title')}
-        </h2>
-        <div className="rows">
-          <Row l={l} labelKey="ops.task.subject.deal">
-            <a className="mono" href={`/${locale}/deals/${task.dealId}`}>
-              {task.dealRef}
-            </a>
-          </Row>
-          <Row l={l} labelKey="ops.task.subject.property">
-            <span>{task.address}</span>
-          </Row>
-          <Row l={l} labelKey="ops.task.subject.money">
-            <Badge
-              tone={MONEY_STATE_TONE[task.moneyState]}
-              label={t(l.dict, `ops.money.${task.moneyState}.label`)}
-            />
-          </Row>
-          <Row l={l} labelKey="ops.task.amountLabel">
-            <Amount l={l} value={task.amount} />
-          </Row>
-          <Row l={l} labelKey="ops.task.subject.age">
-            <span className="mono">{formatRemaining(locale, task.ageMs)}</span>
-          </Row>
-        </div>
-      </section>
+      <SubjectCard l={l} task={task} />
 
       <WhyCard l={l} type={task.type} />
 
@@ -159,18 +162,20 @@ export default async function OpsTaskPage({
         hrefOf={targetHref}
       />
 
-      {detail === 'decision' && decision !== null && decision.deal.id === task.dealId ? (
+      {detail === 'decision' && decision !== null && subject.kind === 'deal' && decision.deal.id === subject.dealId ? (
         <>
           <FieldsCompare l={l} fields={decision.fields} />
           <div className="split">
             <EvidencePackage l={l} items={decision.evidence} />
-            <ClosingCard
-              l={l}
-              rule={closingRuleOf(task.type)}
-              approvalsCollected={decision.approvalsCollected}
-              approvalsRequired={decision.approvalsRequired}
-              preparedBySelf={decision.preparedBySelf}
-            />
+            {closing === null ? null : (
+              <ClosingCard
+                l={l}
+                rule={closing}
+                approvalsCollected={decision.approvalsCollected}
+                approvalsRequired={decision.approvalsRequired}
+                preparedBySelf={decision.preparedBySelf}
+              />
+            )}
           </div>
           <section className="card" aria-labelledby="missing">
             <h2 className="card__title" id="missing">
@@ -227,16 +232,22 @@ export default async function OpsTaskPage({
       ) : null}
 
       {detail === 'facts' && task.facts.length > 0 ? (
-        <CaseFacts l={l} facts={task.facts} operationsZone={OPERATIONS_TIME_ZONE} />
+        <CaseFacts
+          l={l}
+          facts={task.facts}
+          operationsZone={OPERATIONS_TIME_ZONE}
+          /* Величины простоя считает не детектор, а часы заявки. */
+          noteKey={subject.kind === 'deal' ? 'ops.facts.note' : 'ops.facts.note.stall'}
+        />
       ) : null}
 
       {detail === 'none' || (detail === 'facts' && task.facts.length === 0) ? (
         <DetailMissing l={l} />
       ) : null}
 
-      <BasisCard l={l} type={task.type} />
+      {evidence === null ? null : <BasisCard l={l} kinds={evidence} />}
 
-      {detail === 'decision' ? null : <ClosingCard l={l} rule={closingRuleOf(task.type)} />}
+      {detail === 'decision' || closing === null ? null : <ClosingCard l={l} rule={closing} />}
 
       <NextCard l={l} type={task.type} />
 

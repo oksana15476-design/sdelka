@@ -85,7 +85,7 @@ describe('один клиент в двух ролях', () => {
       buyer: TWO_ROLE,
       seller: SELLER,
       amount: SMALL_AMOUNT,
-      beneficiary: beneficiaryFor(SELLER, 501),
+      beneficiary: beneficiaryFor(DEAL_B, SELLER, 501),
       world,
     });
     world = opened.world;

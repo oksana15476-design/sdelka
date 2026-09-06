@@ -58,6 +58,16 @@ export {
   trancheSubject,
 } from './authority';
 export * from './origins';
+/**
+ * ⚠ **`intake-halt.ts` вывозится целиком, и это безопасно.**
+ *
+ * Ни одна его функция не даёт собрать мир: остановку ставит либо автомат
+ * закрытия банковского дня (разрешение часов, наружу не выходит), либо человек
+ * с полномочием `halt_intake`; снимают её двое с `lift_halt`. Отказ на входе
+ * (`assertIntakeOpen`) зовут `createDeal` и `createTranche` — снаружи его можно
+ * только позвать ещё раз, но не обойти.
+ */
+export * from './intake-halt';
 export * from './correction';
 export * from './disclosure';
 export * from './flow';
@@ -99,6 +109,15 @@ export * from './withdrawal';
  */
 export * from './withdrawal-clock';
 /**
+ * Дорога от журнала версий тарифа до транша (`tariff.ts`, `@sdelka/pricing`).
+ *
+ * Наружу выходят тип тарифа транша, его разрешение на момент создания и ссылка
+ * на версию. Ни одной величины: числа тарифа принадлежат владельцу
+ * (`DECISIONS-REVIEW.md` §J **[открыто]**), а журнал версий заводится
+ * средствами `@sdelka/pricing` и кладётся в мир при его создании.
+ */
+export * from './tariff';
+/**
  * ⚠ **`world.ts` тоже вывозится поимённо.**
  *
  * Наружу не выходят `sealed`, `recorded`, `withTranche`, `withDeal` и
@@ -122,6 +141,8 @@ export {
   type InvariantViolation,
   type MachineOrigin,
   type Notification,
+  type IntakeHalt,
+  type IntakeHaltLift,
   type ObservationTask,
   type SuppressedEntry,
   type SurfaceTranche,

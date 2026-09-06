@@ -1202,7 +1202,8 @@ A3]**, и брать половину правила из одного моме�
 | Лестница утверждений из хранилища | `packages/domain/src/guards.ts` | `DEFAULT_APPROVAL_POLICY` перестаёт быть единственным источником |
 | Перечни валют | `packages/domain` + справочник базы | включение/выключение поверх существующего `CurrencyCode` |
 | Окна инвариантов | `packages/ledger/src/invariants.ts` | `staleAfterMs` и `feeStaleAfterMs` приходят из настройки |
-| Политика приёма | `packages/intake/src/policy.ts` | `PROPOSED_INTAKE_POLICY` заменяется принятой версией |
+| Политика приёма | `packages/intake/src/policy.ts` | **допуск — сделано.** Величина приходит версией из журнала на момент раскрытия (`packages/limits/src/applied.ts`, `intakePolicyAtDisclosure`); `PROPOSED_INTAKE_POLICY.tolerance` остался значением для первой версии. Веса сопоставления, срок котировки и порог дрейфа настройкой пока не стали (`DECISIONS-REVIEW.md` §K6) |
+| Границы очереди разбора | `packages/compliance/src/policy.ts` | **сделано.** `POLICY_2026_09_03.queue` подставляется версией на момент наблюдения (`compliancePolicyAt`); величина не прилипает — ужесточение действует на уже стоящие задачи |
 | Экраны настроек | `apps/web` | только через `design-agent`; тексты — через копирайтинг → главред |
 
 ---

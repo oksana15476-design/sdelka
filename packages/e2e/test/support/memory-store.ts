@@ -9,7 +9,7 @@ import type {
   WorldTransaction,
   WriteOutcome,
 } from '@sdelka/app';
-import { isTerminalWithdrawalStatus } from '@sdelka/domain';
+import { DomainError, RejectionCode, isTerminalWithdrawalStatus } from '@sdelka/domain';
 import { type Journal, type JournalEntry, appendEntry, emptyJournal } from '@sdelka/ledger';
 
 /**
@@ -329,11 +329,20 @@ class MemoryTransaction implements WorldTransaction {
             other.party.partyId === snapshot.party.partyId &&
             !isTerminalWithdrawalStatus(other.state.status)
           ) {
-            throw new MemoryStoreError(STORE_ERROR.conflict, {
-              relation: 'withdrawal',
-              id,
-              constraint: 'withdrawal_one_active_per_party',
-            });
+            /*
+             * Отказ приезжает **правилом**, а не именем индекса: живая база
+             * переводит `withdrawal_one_active_per_party` в ошибку домена с
+             * именем guard'а (`db/src/store/errors.ts`, `CONSTRAINT_RULES`), и
+             * реализация в памяти обязана отказывать тем же ключом — иначе один
+             * текст сценария на два хранилища сравнивал бы не хранилища, а два
+             * разных сообщения об одном нарушении.
+             *
+             * Восьмой проверки в коде у этого правила нет: `g_no_active_withdrawal`
+             * домена считает активными только заявки в `paying_out`, а индекс —
+             * все нетерминальные, и расхождение двух прочтений названо
+             * (`DECISIONS-REVIEW.md` §L), а не сглажено третьей проверкой.
+             */
+            throw new DomainError(RejectionCode.guardFailed, 'g_no_active_withdrawal');
           }
         }
       }

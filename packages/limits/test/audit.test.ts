@@ -1,5 +1,12 @@
-import { assertNoRawIdentifiers } from '@sdelka/audit';
-import { rolesWithoutAuditRole } from '@sdelka/auth';
+import {
+  assertNoRawIdentifiers,
+  appendRecord,
+  auditActor,
+  auditInstant,
+  genesisChain,
+  verifyChain,
+} from '@sdelka/audit';
+import { type RoleId, rolesWithoutAuditRole } from '@sdelka/auth';
 import { HOUR } from '@sdelka/domain';
 import { money } from '@sdelka/money';
 import { describe, expect, it } from 'vitest';
@@ -16,7 +23,7 @@ import {
   settingChangedBody,
   settingSubject,
 } from '../src/index';
-import { at, version } from './support/fixtures';
+import { T0, at, version } from './support/fixtures';
 
 const DOC = 'docs/product/SETTINGS.md';
 
@@ -82,32 +89,91 @@ describe('запись собирается из версии, а не рядо�
   });
 });
 
-describe('⚠ изменение настройки владельцем сегодня записать нечем', () => {
-  it('роли `principal` нет соответствия в перечне ролей журнала', () => {
-    // Не крайний случай, а обычный путь: `manage_settings` есть ровно у
-    // `principal`, значит **любая** сегодняшняя версия настройки упирается сюда.
-    // Пробел назван в `packages/auth/src/journal.ts` и в `ACTORS.md` §13;
-    // закрывается он миграцией `sdelka.audit_role` вместе с `packages/audit`,
-    // `packages/compliance` и `packages/db` — то есть не из этого пакета.
-    expect(rolesWithoutAuditRole()).toContain('principal');
+describe('изменение настройки владельцем записывается — блокер E16-12 снят', () => {
+  it('успешная ветвь достижима: владелец записан собой, а не похожей ролью', () => {
+    // До миграции `0023` этот путь был отказом, и не крайним случаем, а
+    // единственным: `manage_settings` есть ровно у `principal`, а `principal` в
+    // `AUDIT_ROLES` не переезжал никуда. Ни один тест эту ветвь не проходил,
+    // потому что пройти её было нельзя.
+    expect([...rolesWithoutAuditRole()]).toEqual([]);
 
     const result = settingChangedBody({
       version: FIRST,
       previous: null,
       render: renderDealCurrencies,
     });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toBe(LIMITS_REFUSAL_KEYS.auditRoleUnrepresentable);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.change).toBe('introduced');
+    expect(result.value.orderedBy).toEqual({
+      actorId: 'acc-principal',
+      roleId: 'principal',
+      capability: 'manage_settings',
+    });
+    expect(result.value.setting).toBe('deal_currencies');
+    expect(result.value.next).toEqual(['GEL']);
+    expect(result.value.reasonKey).toBe('settings.reason.owner_decision');
   });
 
-  it('похожая роль не подставляется: отказ вместо лжи в вечном журнале', () => {
+  it('смена версии несёт оба значения и прежнее, и новое', () => {
     const result = settingChangedBody({
       version: SECOND,
       previous: FIRST,
       render: renderDealCurrencies,
     });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.change).toBe('updated');
+    expect(result.value.previous).toEqual(['GEL']);
+    expect(result.value.next).toEqual(['GEL', 'USD']);
+    expect(result.value.policy).toBe('deal_currencies/2026-09-04.2');
+  });
+
+  it('запись доходит до цепочки: субъект, момент действия и актор сходятся', () => {
+    // Проверка по существу, а не по форме тела: цепочка отвергает запись,
+    // поданную под чужим субъектом, и настройку, введённую задним числом.
+    const built = settingChangedBody({
+      version: FIRST,
+      previous: null,
+      render: renderDealCurrencies,
+    });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const chain = genesisChain(
+      'chain:settings',
+      auditInstant(T0 - 60_000),
+      auditActor('system', 'system', null),
+    );
+    const appended = appendRecord(chain, {
+      recordId: 'chain:settings:1',
+      recordedAt: auditInstant(T0),
+      actor: built.value.orderedBy,
+      subject: settingSubject(FIRST),
+      body: built.value,
+    });
+    expect(appended.records[1]?.actor.roleId).toBe('principal');
+    expect(verifyChain(appended).intact).toBe(true);
+  });
+
+  it('роль без метки журнала — по-прежнему отказ, а не похожая роль', () => {
+    // Ролей без метки сегодня нет, поэтому проверяется значением, которого в
+    // перечне нет вовсе: так роль приходит из хранилища, где типов нет. Отказ
+    // обязан остаться отказом — подстановка «ближайшей по смыслу» роли
+    // осталась бы в вечном журнале ложью о том, кто двигал деньги.
+    // Собрано в обход `settingsVersion`: он бы такую версию не выпустил —
+    // роли без `manage_settings` там отказ. Именно так версия и приезжает из
+    // хранилища: значением, а не конструктором.
+    const fromStorage = Object.freeze({
+      ...FIRST,
+      introducedByRole: 'notary' as RoleId,
+    });
+    const result = settingChangedBody({
+      version: fromStorage,
+      previous: null,
+      render: renderDealCurrencies,
+    });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).not.toBe(LIMITS_REFUSAL_KEYS.auditPreviousVersionMismatch);
+    if (!result.ok) expect(result.error).toBe(LIMITS_REFUSAL_KEYS.auditRoleUnrepresentable);
   });
 });
 

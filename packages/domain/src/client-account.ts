@@ -297,6 +297,70 @@ export const WITHDRAWAL_TRANSITIONS: readonly WithdrawalTransition[] = Object.fr
   transition('blocked', 'withdrawal_cancelled', 'cancelled'),
 ]);
 
+/* ------------------------------------------------------------------------- */
+/* Чем заявка пришла в состояние                                             */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Исход поручения, с которым заявка **пришла** в состояние.
+ *
+ * `null` — пришла не с ответом банка: заявку создали, утвердили, отправили,
+ * остановила наша проверка, отменили. Остальные три — ответ по поручению, и
+ * `unknown` среди них **законный** (красная линия №8): банк не ответил, и это не
+ * ошибка, а положение, о котором обязаны сказать вслух.
+ *
+ * Почему величина отдельная, а не оттенок статуса: один статус достигается
+ * разными рёбрами, и для клиента они означают разное.
+ *
+ * - `paying_out` ← `withdrawal_dispatched` (`null`) — поручение ушло, ответа
+ *   ждём; ← `payout_result('unknown')` — ответа банка нет, исход неизвестен;
+ * - `blocked` ← `withdrawal_blocked` и ← `withdrawal_approved` при неизвестном
+ *   счёте-источнике (оба `null`) — остановила **наша** проверка;
+ *   ← `payout_result('rejected')` — банк не исполнил поручение.
+ *
+ * Перечень **выведен из таблицы переходов**, а не набран вторым списком:
+ * `outcome` уже стоит у ребра, и второй список разошёлся бы с ним на первом же
+ * новом ребре — ровно так разъезжались таблица часов и таблица переходов у
+ * транша.
+ *
+ * ⚠ В `WithdrawalState` исхода **нет**: состояние помнит статус, срок и момент
+ * входа, но не помнит, чем в него вошли. Кто ведёт заявку — знает событие,
+ * которое подал; кто прочитал её из хранилища — не знает ничего, и «чем пришли»
+ * для него законно неизвестно. Поэтому исход передаётся **рядом** с состоянием,
+ * а не достаётся из него, и «неизвестно, чем пришли» остаётся выразимым.
+ */
+export type WithdrawalArrival = PayoutOutcome | null;
+
+/**
+ * Состояние созданной заявки. Входящих рёбер у него нет вовсе: в него попадают
+ * `createWithdrawal`, а не переходом, — поэтому в перечне «чем пришли» оно
+ * названо здесь, а не найдено в таблице.
+ */
+export const WITHDRAWAL_INITIAL_STATUS = 'requested' as const satisfies NonTerminalWithdrawalStatus;
+
+/**
+ * Чем можно прийти в состояние — спрашивается у таблицы переходов.
+ *
+ * Порядок значений — порядок рёбер: `null` (если такое ребро есть) стоит первым,
+ * потому что первым описан обычный ход заявки, а ответы банка идут за ним.
+ */
+export function withdrawalArrivals(status: WithdrawalStatus): readonly WithdrawalArrival[] {
+  const found: WithdrawalArrival[] = status === WITHDRAWAL_INITIAL_STATUS ? [null] : [];
+  for (const item of WITHDRAWAL_TRANSITIONS) {
+    if (item.to !== status || found.includes(item.outcome)) continue;
+    found.push(item.outcome);
+  }
+  return Object.freeze(found);
+}
+
+/** Мог ли вывод прийти в это состояние с таким исходом. */
+export function isWithdrawalArrival(
+  status: WithdrawalStatus,
+  arrival: WithdrawalArrival,
+): boolean {
+  return withdrawalArrivals(status).includes(arrival);
+}
+
 /**
  * Состояние заявки на вывод.
  *
@@ -490,9 +554,9 @@ export function createWithdrawal(
   policy: WithdrawalDeadlinePolicy,
 ): WithdrawalState {
   return nonTerminalWithdrawalState(
-    'requested',
+    WITHDRAWAL_INITIAL_STATUS,
     withdrawalId,
-    deadline(plus(now, policy.requested)),
+    deadline(plus(now, policy[WITHDRAWAL_INITIAL_STATUS])),
     now,
   );
 }

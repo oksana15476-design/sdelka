@@ -98,6 +98,12 @@ export const STAFF = Object.freeze({
   analyst3: staff('analyst3', 'compliance_analyst', 'analyst-3'),
   /** ФК — уровень 1. */
   controller: staff('controller', 'financial_controller', 'approver-1'),
+  /**
+   * Второй ФК — тоже уровень 1. Заведён ради одного вопроса: «двое разных» и
+   * «оба уровня» — разные правила, и без второго носителя уровня 1 второе из них
+   * нечем проверить (снятие остановки приёма требует ФК **и** РО).
+   */
+  controller2: staff('controller2', 'financial_controller', 'approver-3'),
   /** РО — уровень 2. */
   head: staff('head', 'head_of_operations', 'approver-2'),
   support: staff('support', 'support', 'support-1'),

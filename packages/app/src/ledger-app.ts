@@ -7,6 +7,7 @@ import {
   split,
   subtract,
 } from '@sdelka/money';
+import { type TrancheTariff, tariffVersionOf } from './tariff';
 import {
   type ClientKey,
   type EntryMeta,
@@ -274,23 +275,28 @@ export function projectLedgerIntent(
  * Контекст проекции расчёта: всё то же плюс две величины, которых у намерения
  * нет и быть не может.
  */
-export interface SettlementProjectionContext extends ProjectionContext {
+export interface SettlementProjectionContext extends Omit<ProjectionContext, 'deductions'> {
   /**
    * Отметка второй записи — начисления комиссии. Записей теперь две, значит и
    * идентификаторов два: один на две записи журнал не примет.
    */
   readonly accrualMeta: EntryMeta;
   /**
-   * Версия тарифного плана, по которой посчитана комиссия (`CORE.md` Ф16,
-   * И14.3). Уходит фактом в журнал вместе с начислением, чтобы пересчёт задним
-   * числом был невозможен.
+   * Тариф транша: удержание **и** версия, по которой оно посчитано, — одним
+   * значением (`@sdelka/pricing`, `TariffQuotation`).
    *
-   * ⚠ Её место — на сделке, в `packages/domain`: И14.3 требует, чтобы
+   * ⚠ **Здесь было два поля, и в этом состоял дефект.** Контекст принимал
+   * `deductions` и `tariffVersionId` по отдельности: первое считало комиссию,
+   * второе уходило в запись начисления, и связи между ними не было никакой —
+   * посчитать по одной версии, а записать другую было обычным вызовом. Теперь
+   * поле одно, оба ответа читаются из него, и подставить чужую версию нечем.
+   *
+   * ⚠ Место этой величины — на сделке, в `packages/domain`: И14.3 требует, чтобы
    * идентификатор версии плана хранился на сделке. Пока его там нет, приложение
-   * держит его при транше (`TrancheRuntime.tariffVersionId`) и приносит сюда.
-   * Названо в отчёте, не спрятано.
+   * держит его при транше (`TrancheRuntime.tariff`) и приносит сюда. Названо в
+   * отчёте, не спрятано.
    */
-  readonly tariffVersionId: string;
+  readonly tariff: TrancheTariff;
 }
 
 /**
@@ -334,10 +340,20 @@ export function projectSettlementIntent(
   context: SettlementProjectionContext,
 ): ProjectedSettlement {
   const amount = intent.amount;
-  const fee = feeOf(amount, context.deductions);
+  const fee = feeOf(amount, context.tariff.deductions);
   const deal: TrancheRef = { dealId: intent.dealId, trancheId: intent.trancheId };
+  /*
+   * Сумма и версия уходят в запись **из одного значения**. `tariffVersionOf`
+   * принимает котировку целиком, а не строку: другой версии в этой точке взять
+   * негде, потому что второго поля с версией не существует.
+   *
+   * Ссылка при этом брендирована (`SettingsVersionId`), а `accrueFee` объявляет
+   * параметр строкой: учёт не может зависеть от `@sdelka/settings` — ребро
+   * замкнуло бы цикл `ledger → settings → domain → ledger`. Сужение стоит на
+   * этой стороне границы, и голая строка сюда не подставляется.
+   */
   const accrual = isPositive(fee)
-    ? accrueFee(context.accrualMeta, deal, fee, context.tariffVersionId)
+    ? accrueFee(context.accrualMeta, deal, fee, tariffVersionOf(context.tariff))
     : null;
   // Расчёт — одна запись, включающая **вывод комиссии с номинального счёта**:
   // отдельного шага вывода больше нет, и «забыть» его невозможно

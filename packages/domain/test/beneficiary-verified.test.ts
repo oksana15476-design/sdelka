@@ -6,7 +6,7 @@ import {
   RejectionCode,
   TRANCHE_TRANSITIONS,
 } from '../src/index';
-import { context } from './support/facts';
+import { beneficiary, context } from './support/facts';
 import { accept, reject, stateAt } from './support/drive';
 
 const conditionEstablished: TrancheEvent = {
@@ -29,7 +29,9 @@ describe('«имя сошлось» и «проверено» — разные �
     const error = reject(
       stateAt('reserved'),
       conditionEstablished,
-      context({ beneficiary: { status: 'name_consistent', locked: true, lastChangedAt: null } }),
+      context({
+        beneficiary: beneficiary({ status: 'name_consistent', locked: true, lastChangedAt: null }),
+      }),
     );
     expect(error.code).toBe(RejectionCode.guardFailed);
     expect(error.failedGuards).toContain('g_beneficiary_verified');
@@ -40,7 +42,7 @@ describe('«имя сошлось» и «проверено» — разные �
     // стоящие только на одном входе. Поэтому проверка владения стоит на обоих
     // рёбрах, как и остальные guard'ы доказательств (§1.4, §4).
     const ctx = context({
-      beneficiary: { status: 'name_consistent', locked: true, lastChangedAt: null },
+      beneficiary: beneficiary({ status: 'name_consistent', locked: true, lastChangedAt: null }),
       mismatchResolved: true,
     });
     const blocked = accept(
@@ -60,7 +62,9 @@ describe('«имя сошлось» и «проверено» — разные �
 
   it('lets only the verified status through', () => {
     for (const status of BENEFICIARY_STATUSES) {
-      const ctx = context({ beneficiary: { status, locked: true, lastChangedAt: null } });
+      const ctx = context({
+        beneficiary: beneficiary({ status, locked: true, lastChangedAt: null }),
+      });
       if (status === 'verified') {
         expect(accept(stateAt('reserved'), conditionEstablished, ctx).state.status).toBe(
           'release_pending',
@@ -81,7 +85,7 @@ describe('«имя сошлось» и «проверено» — разные �
     const error = reject(
       stateAt('reserved'),
       conditionEstablished,
-      context({ beneficiary: { status: nameOnly, locked: true, lastChangedAt: null } }),
+      context({ beneficiary: beneficiary({ status: nameOnly, locked: true, lastChangedAt: null }) }),
     );
     expect(error.failedGuards).toEqual(['g_beneficiary_verified']);
 
@@ -89,7 +93,9 @@ describe('«имя сошлось» и «проверено» — разные �
     const notLocked = reject(
       stateAt('reserved'),
       conditionEstablished,
-      context({ beneficiary: { status: 'verified', locked: false, lastChangedAt: null } }),
+      context({
+        beneficiary: beneficiary({ status: 'verified', locked: false, lastChangedAt: null }),
+      }),
     );
     expect(notLocked.failedGuards).toEqual(['g_beneficiary_locked']);
   });

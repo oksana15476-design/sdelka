@@ -40,7 +40,7 @@ describe('досье по выплате', () => {
     expect(first?.actor.roleId).toBe('compliance_analyst');
     expect(first?.recordedAt).toBe(chain.records[2]?.recordedAt);
     // И кто распорядился выплатой — отдельно от того, кто её разрешил.
-    expect(dossier.ordered?.actor.roleId).toBe('approver');
+    expect(dossier.ordered?.actor.roleId).toBe('financial_controller');
   });
 
   it('дано: решение принято — тогда оно хранит версию применённой политики', () => {

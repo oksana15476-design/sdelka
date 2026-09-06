@@ -11,10 +11,11 @@ import {
   advanceBeneficiaryChange,
   applyBeneficiaryChange,
   authorize,
+  beneficiaryStateOf,
   lockOnFunding,
   openBeneficiaryChange,
   readBeneficiary,
-  toBeneficiaryLock,
+  toBeneficiaryConfirmation,
   verifyBeneficiaryHolder,
 } from '../src/index';
 import {
@@ -26,7 +27,9 @@ import {
   latinName,
   NOW,
   OTHER_NAMES,
+  PARTICIPATION,
   POLICY,
+  participationFor,
   profile,
 } from './support/fixtures';
 
@@ -56,6 +59,9 @@ function requisites(overrides: Partial<BeneficiaryRequisites> = {}): Beneficiary
 function state(overrides: Partial<BeneficiaryState> = {}): BeneficiaryState {
   return {
     requisites: requisites(),
+    // Реквизиты одного участия: сделка названа так же обязательно, как лицо
+    // (`@sdelka/domain`, `participation.ts`; И13.1).
+    participation: PARTICIPATION,
     status: 'name_consistent',
     locked: false,
     lastChangedAt: null,
@@ -66,6 +72,7 @@ function state(overrides: Partial<BeneficiaryState> = {}): BeneficiaryState {
 describe('сверка владельца счёта', () => {
   it('расхождение имени — блокировка, а не предупреждение', () => {
     const result = verifyBeneficiaryHolder(
+      PARTICIPATION,
       requisites({ holderNames: OTHER_NAMES }),
       profile(),
       POLICY,
@@ -76,13 +83,14 @@ describe('сверка владельца счёта', () => {
   });
 
   it('совпадение имени даёт «согласовано», но не «проверено»', () => {
-    const result = verifyBeneficiaryHolder(requisites(), profile(), POLICY, NOW);
+    const result = verifyBeneficiaryHolder(PARTICIPATION, requisites(), profile(), POLICY, NOW);
     expect(result.outcome).toBe('name_consistent');
     expect(result.reasons).toContain('compliance.beneficiary.ownership_evidence_missing');
   });
 
   it('доказательство владения счётом даёт «проверено»', () => {
     const result = verifyBeneficiaryHolder(
+      PARTICIPATION,
       requisites({ ownershipEvidence: evidence(5, 'test_transfer') }),
       profile(),
       POLICY,
@@ -100,6 +108,7 @@ describe('сверка владельца счёта', () => {
    */
   it('имя, совпавшее только после латинизации, реквизиты не блокирует', () => {
     const result = verifyBeneficiaryHolder(
+      PARTICIPATION,
       requisites({ ownershipEvidence: evidence(6, 'test_transfer') }),
       profile({ names: BUYER_NAMES_GEORGIAN }),
       POLICY,
@@ -125,6 +134,7 @@ describe('сверка владельца счёта', () => {
       },
     };
     const result = verifyBeneficiaryHolder(
+      PARTICIPATION,
       requisites({ holderNames: [latinName('Sabo', 'Tikaton')] }),
       profile(),
       lenient,
@@ -145,6 +155,7 @@ describe('сверка владельца счёта', () => {
       },
     ];
     const result = verifyBeneficiaryHolder(
+      PARTICIPATION,
       requisites({ holderNames: georgianOnly }),
       profile(),
       POLICY,
@@ -160,24 +171,29 @@ describe('форма факта согласована с guard-ом домен�
     const locked = lockOnFunding(state());
     // Статус в факте обязателен и не теряется по дороге: домен стоит на нём
     // guard'ом `g_beneficiary_verified`, и `name_consistent` выплату не
-    // открывает (E13-2, ROADMAP.md И13.1). Точное сравнение здесь и держит
-    // форму факта: появление поля обязано ломать этот тест.
-    expect(toBeneficiaryLock(locked)).toEqual({
-      status: 'name_consistent',
-      locked: true,
-      lastChangedAt: null,
-    });
+    // открывает (E13-2, ROADMAP.md И13.1).
+    //
+    // Сравнение по полям, а не с литералом целиком: подтверждение теперь
+    // номинальный тип домена, и литерала такого типа не существует — именно
+    // это и запрещает надеть подтверждение одного участия на другое.
+    const confirmation = toBeneficiaryConfirmation(locked);
+    expect(confirmation.status).toBe('name_consistent');
+    expect(confirmation.locked).toBe(true);
+    expect(confirmation.lastChangedAt).toBeNull();
+    // Участие едет в домен вместе со статусом: без него guard не отличил бы
+    // подтверждение по этой сделке от подтверждения по любой другой.
+    expect(confirmation.participation).toBe(PARTICIPATION);
   });
 
   it('статус реквизитов переносится в факт без потери', () => {
     for (const status of ['draft', 'name_consistent', 'verified', 'blocked'] as const) {
-      expect(toBeneficiaryLock(state({ status })).status).toBe(status);
+      expect(toBeneficiaryConfirmation(state({ status })).status).toBe(status);
     }
   });
 
   it('момент последнего изменения переносится в факт', () => {
     const changed = state({ locked: true, lastChangedAt: instant(NOW - HOUR_MS) as Instant });
-    expect(toBeneficiaryLock(changed).lastChangedAt).toBe(NOW - HOUR_MS);
+    expect(toBeneficiaryConfirmation(changed).lastChangedAt).toBe(NOW - HOUR_MS);
   });
 });
 
@@ -481,5 +497,118 @@ describe('применение изменения', () => {
 describe('чтение реквизитов требует полномочия', () => {
   it('оператор с полномочием читает', () => {
     expect(readBeneficiary(state(), reader).account).toBe(ACCOUNT_SOURCE);
+  });
+});
+
+/**
+ * E13-2, вторая половина — `ROADMAP.md` И13.1: «реквизиты висят на **участии**,
+ * а не на личности: подтверждение по одной сделке не переносится на другую».
+ *
+ * Здесь проверяется сторона комплаенса: решение о проверке принадлежит участию,
+ * состояние реквизитов собирается **из решения**, а изменение реквизитов
+ * участия не меняет. Сторона домена — `packages/domain/test/participation.test.ts`.
+ */
+describe('решение о реквизитах принадлежит участию', () => {
+  const OTHER_DEAL = participationFor('deal-2');
+
+  it('называет участие, по которому принято, и не годится для другого', () => {
+    const verification = verifyBeneficiaryHolder(
+      PARTICIPATION,
+      requisites({ ownershipEvidence: evidence(5, 'test_transfer') }),
+      profile(),
+      POLICY,
+      NOW,
+    );
+    expect(verification.outcome).toBe('verified');
+    expect(verification.participation).toBe(PARTICIPATION);
+    // Состояние собирается из решения, а не из параметра: подставить сюда
+    // другое участие нечем — второго места, где оно называется, нет.
+    const built = beneficiaryStateOf(
+      verification,
+      requisites({ ownershipEvidence: evidence(5, 'test_transfer') }),
+    );
+    expect(built.participation).toBe(PARTICIPATION);
+    expect(toBeneficiaryConfirmation(built).participation).toBe(PARTICIPATION);
+  });
+
+  it('второе участие того же лица требует своей проверки', () => {
+    // Те же реквизиты, то же лицо, другая сделка — и это **другое** решение с
+    // другим ключом. Переносить нечего: подтверждения по второй сделке до этой
+    // проверки не существовало.
+    const proof = requisites({ ownershipEvidence: evidence(5, 'test_transfer') });
+    const first = verifyBeneficiaryHolder(PARTICIPATION, proof, profile(), POLICY, NOW);
+    const second = verifyBeneficiaryHolder(OTHER_DEAL, proof, profile(), POLICY, NOW);
+    expect(second.participation).not.toBe(first.participation);
+    expect(second.participation.dealId).toBe('deal-2');
+    expect(beneficiaryStateOf(second, proof).participation.dealId).toBe('deal-2');
+  });
+
+  /**
+   * Асимметрия, ради которой всё это и разведено, — и её обоснование.
+   *
+   * `verified` **не** переносится: доказательство владения приложено к участию,
+   * и без нового решения по новому участию его нет. `blocked` переносить не
+   * нужно — он **воспроизводится сам**: расхождение имени владельца счёта с
+   * профилем стороны это факт о личности и счёте, а не о сделке, и проверка по
+   * любому участию вернёт тот же отказ. Положительный вывод не переносится,
+   * отрицательный воспроизводится — безопасная сторона у обеих ошибок.
+   */
+  it('отказ по имени воспроизводится на каждом участии, а «проверено» — нет', () => {
+    const mismatched = requisites({
+      holderNames: OTHER_NAMES,
+      ownershipEvidence: evidence(6, 'test_transfer'),
+    });
+    for (const participation of [PARTICIPATION, OTHER_DEAL]) {
+      const result = verifyBeneficiaryHolder(participation, mismatched, profile(), POLICY, NOW);
+      expect(result.outcome).toBe('blocked');
+      expect(result.participation).toBe(participation);
+    }
+  });
+
+  it('изменение реквизитов остаётся внутри участия', () => {
+    // И13.2: «процедура применяется к участию, где он получает; на вторую
+    // сделку изменение не распространяется». Участие берётся из состояния, а не
+    // из заявки: иначе смена реквизитов стала бы способом переехать в другую
+    // сделку с готовым подтверждением.
+    const current = state({ locked: true });
+    const opened = openBeneficiaryChange(
+      current,
+      {
+        requestId: 'change-participation',
+        proposed: requisites({ account: ACCOUNT_OTHER }),
+        releaseAt: null,
+        dealFunded: false,
+      },
+      writer,
+      POLICY,
+      NOW,
+    );
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    let request = opened.value.request;
+    for (const event of [
+      { type: 'reverification_passed' as const },
+      { type: 'parties_notified' as const },
+      { type: 'approval_added' as const, userId: 'approver-1' },
+    ]) {
+      const moved = advanceBeneficiaryChange(request, event, (NOW + 25 * HOUR_MS) as Instant);
+      expect(moved.ok).toBe(true);
+      if (!moved.ok) return;
+      request = moved.value;
+    }
+    const applied = applyBeneficiaryChange(
+      current,
+      request,
+      { releaseAt: null, dealFunded: false, locked: true },
+      approver,
+      POLICY,
+      (NOW + 49 * HOUR_MS) as Instant,
+    );
+    expect(applied.ok).toBe(true);
+    if (!applied.ok) return;
+    expect(applied.value.participation).toBe(current.participation);
+    // И статус новых реквизитов не наследуется: доказательство владения
+    // относилось к другому счёту (И13.2).
+    expect(applied.value.status).toBe('name_consistent');
   });
 });

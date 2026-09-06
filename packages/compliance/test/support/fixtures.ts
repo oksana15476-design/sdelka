@@ -1,4 +1,10 @@
-import { type Instant, instant } from '@sdelka/domain';
+import {
+  type Instant,
+  type ParticipationKey,
+  type PartyRef,
+  instant,
+  participationKey,
+} from '@sdelka/domain';
 import {
   type CountryCode,
   type EvidenceRef,
@@ -105,6 +111,22 @@ export const GEORGIAN_HARD = 'ტიტი';
 
 export const BUYER_NAMES = Object.freeze([latinName('Sabo', 'Tikato')]);
 export const OTHER_NAMES = Object.freeze([latinName('Nuvo', 'Zerlan')]);
+
+/**
+ * Ссылка на сторону и её участие в сделке. Реквизиты выплаты висят на участии, а
+ * не на лице (`@sdelka/domain`, `participation.ts`; `ROADMAP.md` И13.1), поэтому
+ * фикстуре недостаточно назвать человека — она обязана назвать сделку.
+ */
+export function partyRef(partyId = 'party-1'): PartyRef {
+  return Object.freeze({ partyId, accountKey: `ge.passport.${partyId}` });
+}
+
+export function participationFor(dealId: string, partyId = 'party-1'): ParticipationKey {
+  return participationKey(dealId, partyRef(partyId), 'recipient');
+}
+
+/** Участие получателя в сделке по умолчанию — на нём стоят тесты реквизитов. */
+export const PARTICIPATION = participationFor('deal-1');
 
 export function profile(overrides: Partial<PartyProfile> = {}): PartyProfile {
   return {

@@ -610,6 +610,12 @@ export async function getRequisites(state: PerimeterState): Promise<RequisitesVi
  * физически не мог их увидеть. У недоплаты это прямое расхождение с
  * требованием — `INTAKE.md` И2.1, критерий 3: «оператор видит задачу».
  *
+ * Восемнадцатый — `withdrawalStalled` — пришёл последним и не из комплаенса:
+ * заявка на вывод, простоявшая дольше норматива (`REVIEW_TASK_KINDS`, тот же
+ * перечень). Он же был последним видом разбора, у которого места в консоли не
+ * было вовсе, и стоял в коде поимённо, чтобы утверждение «каждому виду разбора
+ * есть место» не стало зелёным молча.
+ *
  * Порядок перечисления — порядок появления, а не важности: важность считает
  * очередь по сроку и сумме, а не человек глазами.
  */
@@ -631,6 +637,7 @@ export const TASK_TYPES = [
   'relatedParties',
   'beneficiaryChange',
   'intakeUnderpayment',
+  'withdrawalStalled',
 ] as const;
 
 export type TaskType = (typeof TASK_TYPES)[number];
@@ -670,6 +677,7 @@ const REVIEW_KIND_OF = Object.freeze({
   relatedParties: 'related_parties',
   beneficiaryChange: 'beneficiary_change',
   intakeUnderpayment: 'intake_underpayment',
+  withdrawalStalled: 'withdrawal_stalled',
 } as const) satisfies Readonly<Record<TaskType, ReviewTaskKind | null>>;
 
 export function reviewKindOf(type: TaskType): ReviewTaskKind | null {
@@ -679,32 +687,20 @@ export function reviewKindOf(type: TaskType): ReviewTaskKind | null {
 type PlacedReviewKind = NonNullable<(typeof REVIEW_KIND_OF)[TaskType]>;
 
 /**
- * Виды разбора, которым места в интерфейсе ещё нет, — **названы поимённо**.
- *
- * ⚠ Это не поблажка утверждению ниже, а его же способ работы: пока вид стоит в
- * этом списке, он виден на ревью строкой, а не отсутствием строки. Пустой
- * список — норма; непустой — незакрытая работа с адресом.
- *
- * `withdrawal_stalled` (заявка на вывод простояла дольше норматива,
- * `DECISIONS-REVIEW.md` §H4) заведён в очереди разбора и приходит в неё из часов
- * заявок (`tickWithdrawals`, `@sdelka/app`). Места на экране у него нет:
- * карточка задачи требует своего вида в `ops-work.ts` (перечень доказательств,
- * раскладка, «почему» и «что дальше») и микрокопи на трёх языках — то есть
- * работы дизайна и редактуры, а не типа. Пока их нет, вид разбора существует в
- * продукте и **отсутствует в консоли**, и эта строка — единственное место, где
- * об этом сказано вслух.
- */
-type UnplacedReviewKind = 'withdrawal_stalled';
-
-/**
  * Не значение, а утверждение компилятору: **каждый** вид разбора из кода имеет
  * место в очереди. Приём тот же, что у `EXCEPTIONS_ARE_EXACTLY_AS_DOCUMENTED`
  * в `packages/compliance/src/detectors/payer.ts`: перечень закрыт не обещанием,
  * а сборкой.
+ *
+ * ⚠ Исключений у утверждения больше нет ни одного. Рядом стоял тип
+ * `UnplacedReviewKind` с единственным именем `withdrawal_stalled`: вид разбора
+ * существовал в продукте и отсутствовал в консоли, и строка была единственным
+ * местом, где об этом было сказано вслух. Место у вида появилось (`TASK_TYPES`,
+ * `ops-work.ts`, карточка задачи), поэтому снята и строка: изъятие — часть
+ * работы, а не отдельная уборка. Понадобится следующее исключение — оно
+ * заводится так же, поимённо и с адресом, а не молчаливым `Partial`.
  */
-export const EVERY_REVIEW_KIND_HAS_A_PLACE: [
-  Exclude<ReviewTaskKind, UnplacedReviewKind>,
-] extends [PlacedReviewKind]
+export const EVERY_REVIEW_KIND_HAS_A_PLACE: [ReviewTaskKind] extends [PlacedReviewKind]
   ? true
   : never = true;
 
@@ -732,24 +728,73 @@ export type CaseFact =
   /** Условие проверки: пройдено или нет, цветом и словом сразу. */
   | { readonly kind: 'signal'; readonly labelKey: string; readonly tone: StateTone; readonly textKey: string };
 
+/**
+ * О чём задача. Размеченное объединение, а не пять полей, каждое со своим
+ * `null`, — по той же причине, по какой им стал `CaseFact`.
+ *
+ * Пять величин — сделка, её номер, объект, положение денег и сумма
+ * ранжирования — существуют **вместе или не существуют вовсе**. Пять
+ * независимых `null` описывают и то, чего не бывает: номер без сделки, адрес
+ * без номера. Объединение описывает ровно два предмета, которые в очереди
+ * встречаются, и заставляет экран разобрать оба, а не подставить прочерк.
+ *
+ * Это не наше изобретение и не смягчение: обнуляемым `dealId` стал в самой
+ * очереди разбора (`ReviewTask`, `packages/compliance/src/queue.ts`) — «вывод со
+ * счёта клиента сделки не имеет вовсе». Здесь то же самое сказано типом.
+ */
+export type TaskSubject =
+  | {
+      readonly kind: 'deal';
+      readonly dealId: string;
+      readonly dealRef: string;
+      readonly address: string;
+      /** Положение денег по сделке: третий текст состояния — операторский. */
+      readonly moneyState: MoneyState;
+      /**
+       * Сумма ранжирования — **в валюте сделки**, и только в ней.
+       *
+       * Тот же смысл, что у `rankAmount` в `packages/compliance/src/queue.ts`:
+       * очередь сортирует по одной шкале, а пересчёт по официальному курсу
+       * делает вызывающий. Величины в других валютах (перевод, цена договора,
+       * недостача) живут в `facts` со своей валютой и не складываются ни с чем.
+       */
+      readonly amount: Money<CurrencyCode>;
+    }
+  | {
+      /**
+       * Заявка на вывод. Сделки, лица и суммы ранжирования у неё нет — и это
+       * три разных отсутствия, а не одно:
+       *
+       * · **сделки нет вовсе** — вывод идёт со счёта клиента (`dealId: null`,
+       *   `ReviewTask`);
+       * · **лица нет** — у заявки известен ключ счёта владельца остатка, а не
+       *   идентификатор лица, и класть ключ счёта в поле `partyId` значило бы
+       *   соврать типом (`partyId: null`, там же);
+       * · **суммы ранжирования нет** — пересчёт в валюту очереди требует
+       *   официального курса на дату, то есть внешнего факта, которого у часов
+       *   заявок нет (`rankAmount: null`, `FUNCTIONAL.md` §4.3.1).
+       *
+       * Ни одно из трёх не заменяется нулём и прочерком: экран называет каждое
+       * словами и причиной (`ops.task.subject.*.none`).
+       */
+      readonly kind: 'withdrawal';
+      /** Предмет задачи — непрозрачный ключ заявки (`withdrawalId`). */
+      readonly withdrawalId: string;
+    };
+
 export interface OpsTask {
   readonly id: string;
   readonly type: TaskType;
-  /** Положение денег по сделке: третий текст состояния — операторский. */
-  readonly moneyState: MoneyState;
-  readonly dealId: string;
-  readonly dealRef: string;
-  readonly address: string;
-  /**
-   * Сумма ранжирования — **в валюте сделки**, и только в ней.
-   *
-   * Тот же смысл, что у `rankAmount` в `packages/compliance/src/queue.ts`:
-   * очередь сортирует по одной шкале, а пересчёт по официальному курсу делает
-   * вызывающий. Величины в других валютах (перевод, цена договора, недостача)
-   * живут в `facts` со своей валютой и не складываются ни с чем.
-   */
-  readonly amount: Money<CurrencyCode>;
+  readonly subject: TaskSubject;
   readonly deadline: DeadlineView | null;
+  /**
+   * Возраст задачи — **от момента входа в состояние**, а не от срока операции.
+   *
+   * Правило домена, а не оформление: срок двигается ответом банка
+   * (`deadlineAt`), момент входа не двигается (`enteredAt`,
+   * `packages/compliance/src/queue.ts`). Считай возраст по сроку — застрявшая
+   * заявка выглядела бы вечно свежей и не попадала бы в эскалацию никогда.
+   */
   readonly ageMs: number;
   readonly claimedBy: string | null;
   readonly blockedReasonKey: string | null;
@@ -894,6 +939,66 @@ const SEEDED_TASKS: readonly { readonly dealId: string; readonly type: TaskType;
 ];
 
 /**
+ * Момент, с которого заявка стоит в одном состоянии. Возраст задачи считается от
+ * него — и только от него.
+ */
+const STALL_ENTERED_AT = FIXTURE_NOW - 61 * HOUR;
+
+/**
+ * Задачи, у которых сделки нет вовсе.
+ *
+ * Остальные семнадцать видов приходят от сделки: либо выводятся из положения
+ * денег (`taskTypeOf`), либо стоят в `SEEDED_TASKS` рядом с её номером. Простой
+ * заявки на вывод так прийти не может — вывод идёт со счёта клиента, и сделки у
+ * него не бывает. Прицепить задачу к любой сделке ради того, чтобы сборка
+ * сошлась, значило бы показать оператору чужую сделку и назвать это предметом.
+ *
+ * Пример собран по тому положению, ради которого норматив и заведён: поручение
+ * ушло, ответа банка нет, заявка стоит в `paying_out` шестьдесят один час при
+ * нормативе в двое суток (`DECISIONS-REVIEW.md` §H4 — само число **[открыто]**,
+ * здесь стоит временная величина, перенесённая по аналогии с таблицами транша).
+ *
+ * ⚠ **Срок при этом не просрочен.** Повторный ответ «неизвестно» пересчитывает
+ * `deadline`, и по сроку заявка выглядит свежей — до срока одиннадцать часов.
+ * Возраст же идёт от `enteredAt` и не двигается ничем. Именно это расхождение
+ * задача и обязана показывать: два разных значения рядом, а не одно вместо
+ * другого.
+ */
+const STANDALONE_TASKS: readonly OpsTask[] = Object.freeze([
+  {
+    id: 'wd3f18-withdrawalStalled',
+    type: 'withdrawalStalled',
+    subject: { kind: 'withdrawal', withdrawalId: 'wd3f18' },
+    deadline: {
+      at: FIXTURE_NOW + 11 * HOUR,
+      remainingMs: 11 * HOUR,
+      // Последствие срока названо тем же ключом, что у расчёта: банк обязан
+      // подтвердить исполнение, а не подтвердив — дело закрывает сверка выписки
+      // следующего банковского дня. Другого последствия у этого срока нет.
+      kind: 'settlement',
+      paused: false,
+      pauseReasonKey: null,
+    },
+    ageMs: FIXTURE_NOW - STALL_ENTERED_AT,
+    // Никем не взята: брать её незачем — решения здесь нет (`ops-work.ts`).
+    claimedBy: null,
+    blockedReasonKey: null,
+    facts: Object.freeze([
+      { kind: 'phrase', labelKey: 'ops.fact.withdrawalStatus', valueKey: 'withdraw.state.paying_out.badge' },
+      /* Исход поручения — вторая половина состояния: `paying_out` — это и
+         «ушло, ждём», и «ответа нет». Красная линия №8 живёт во второй. */
+      { kind: 'signal', labelKey: 'ops.fact.arrival', tone: 'danger', textKey: 'withdraw.state.paying_out.unknown.badge' },
+      { kind: 'moment', labelKey: 'ops.fact.enteredAt', at: STALL_ENTERED_AT },
+      { kind: 'span', labelKey: 'ops.fact.stallAge', ms: FIXTURE_NOW - STALL_ENTERED_AT },
+      { kind: 'phrase', labelKey: 'ops.fact.deadlineRule', valueKey: 'ops.fact.value.deadlineMoves' },
+      /* Не тревога, а правило: запрет повтора — норма этого состояния, и
+         красным он читался бы как сбой, которого нет. */
+      { kind: 'signal', labelKey: 'ops.fact.repeat', tone: 'info', textKey: 'ops.fact.value.repeat.blocked' },
+    ] as const),
+  },
+]);
+
+/**
  * Вид задачи по положению денег.
  *
  * `partiallyFunded` попал сюда не как новая проекция, а как исправление: транш
@@ -968,11 +1073,14 @@ export async function getOpsQueue(): Promise<OpsView> {
       tasks.push({
         id: `${snapshot.id}-${entry.type}`,
         type: entry.type,
-        moneyState: snapshot.moneyState,
-        dealId: snapshot.id,
-        dealRef: snapshot.ref,
-        address: snapshot.property.addressLatin,
-        amount: snapshot.required,
+        subject: {
+          kind: 'deal',
+          dealId: snapshot.id,
+          dealRef: snapshot.ref,
+          address: snapshot.property.addressLatin,
+          moneyState: snapshot.moneyState,
+          amount: snapshot.required,
+        },
         deadline: snapshot.deadline,
         ageMs: FIXTURE_NOW - (snapshot.marks.at(-1)?.at ?? FIXTURE_NOW),
         claimedBy: entry.type === 'confirmRegistration' ? 'operator-2' : null,
@@ -981,11 +1089,29 @@ export async function getOpsQueue(): Promise<OpsView> {
       });
     }
   }
+  for (const task of STANDALONE_TASKS) tasks.push(task);
+  /*
+   * Порядок: сначала срок, потом сумма — как было. Изменились два места, и оба
+   * из-за задачи без сделки.
+   *
+   * Суммы ранжирования у неё нет, и её место в очереди считается так же, как в
+   * `prioritize` (`packages/compliance/src/queue.ts`): непересчитанная сумма
+   * читается нулём **для сравнения** и только для него — на экране она остаётся
+   * отсутствием с причиной, а не нулём. Дальше добавлена пара «возраст, затем
+   * идентификатор»: без неё две задачи с одинаковым сроком и одинаковой суммой
+   * встают в порядке, зависящем от реализации сортировки, а очередь дежурного
+   * обязана быть одинаковой от прогона к прогону.
+   */
+  const rank = (task: OpsTask): bigint => (task.subject.kind === 'deal' ? task.subject.amount.minor : 0n);
   tasks.sort((left, right) => {
     const leftAt = left.deadline?.at ?? Number.MAX_SAFE_INTEGER;
     const rightAt = right.deadline?.at ?? Number.MAX_SAFE_INTEGER;
     if (leftAt !== rightAt) return leftAt - rightAt;
-    return Number(right.amount.minor - left.amount.minor);
+    const leftRank = rank(left);
+    const rightRank = rank(right);
+    if (leftRank !== rightRank) return rightRank > leftRank ? 1 : -1;
+    if (left.ageMs !== right.ageMs) return right.ageMs - left.ageMs;
+    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
   });
 
   const live = BUILT.filter((item) => !isTerminalTrancheStatus(item.snapshot.trancheStatus));

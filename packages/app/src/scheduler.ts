@@ -282,10 +282,10 @@ export function tickWithdrawals(
 ): WithdrawalTickResult {
   const now = scene.world.now;
   const stalled: StalledWithdrawal[] = [];
-  const withdrawals = new Map(scene.withdrawals);
+  const withdrawals = new Map(scene.world.withdrawals);
   const tasks: ReviewTask[] = [];
 
-  for (const [withdrawalId, runtime] of scene.withdrawals) {
+  for (const [withdrawalId, runtime] of scene.world.withdrawals) {
     const state = runtime.state;
     if (isTerminalWithdrawalStatus(state.status)) continue;
     if (!('enteredAt' in state)) continue;
@@ -314,10 +314,14 @@ export function tickWithdrawals(
   const world = sealed({
     ...scene.world,
     tasks: [...scene.world.tasks, ...tasks],
+    // След о поднятой задаче — часть заявки, а значит часть мира: он меняется
+    // вместе с задачами и тем же `sealed`. В базу он не ложится (колонки нет), и
+    // дельта шага называет это вслух, а не молчит.
+    withdrawals,
     checks: scene.world.checks,
   });
   return {
-    scene: { world, withdrawals, clock: scene.clock },
+    scene: { world, clock: scene.clock },
     stalled: Object.freeze(stalled),
   };
 }

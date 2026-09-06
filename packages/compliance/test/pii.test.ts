@@ -24,6 +24,7 @@ import {
   NOW,
   OTHER_DOCUMENT,
   OTHER_NAMES,
+  PARTICIPATION,
   POLICY,
   POLICY_VERSION,
   profile,
@@ -142,6 +143,7 @@ describe('персональные данные не попадают в реш�
  */
 describe('журнальная проекция несёт ровно объявленные поля', () => {
   const verification = verifyBeneficiaryHolder(
+    PARTICIPATION,
     {
       account: ACCOUNT_SOURCE,
       holderNames: BUYER_NAMES,

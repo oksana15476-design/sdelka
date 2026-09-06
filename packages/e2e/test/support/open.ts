@@ -14,7 +14,8 @@ import {
 } from '@sdelka/compliance';
 import type { FeeCeilingPolicy } from '@sdelka/domain';
 import type { ClientKey } from '@sdelka/ledger';
-import type { CurrencyCode, Deduction, Money } from '@sdelka/money';
+import type { CurrencyCode, Money } from '@sdelka/money';
+import type { TariffSeries } from '@sdelka/pricing';
 import {
   type World,
   emptyWorld,
@@ -34,11 +35,10 @@ import {
   CREATED_ON,
   DEAL_AMOUNT,
   NOW,
-  PLATFORM_FEE,
   POLICY,
   POLICY_VERSION,
   SCREENING_SOURCE,
-  TARIFF_VERSION,
+  TARIFF_SERIES,
   beneficiaryFor,
   cleanScreening,
   conditionAct,
@@ -62,12 +62,23 @@ export interface OpenOptions {
   readonly amount?: Money<CurrencyCode>;
   readonly screening?: SanctionsScreeningPort;
   readonly beneficiary?: BeneficiaryState;
-  readonly deductions?: readonly Deduction[];
+  /**
+   * Журнал версий тарифа, которым засеивается мир сценария. По умолчанию —
+   * `TARIFF_SERIES`: одна версия, 1,5 %, действующая с 1 сентября.
+   *
+   * Прежде здесь стояли `deductions` (ставка удержания) и `tariffVersionId`
+   * (строка рядом с ней) по отдельности. Теперь и то и другое приходит из
+   * журнала версий: сценарий называет **что владелец объявил**, а не то, что
+   * приложение потом запишет.
+   */
+  readonly tariffs?: TariffSeries;
   /**
    * Потолок удержания этого транша. По умолчанию поле не ставится вовсе —
-   * действует умолчание домена (два процента). Сценарий, которому нужен более
-   * тесный предел, называет его здесь: политика едет фактом транша до записи
-   * расчёта, и проверить это можно только настоящим прогоном.
+   * действует потолок версии плана (не шире жёстких двух процентов учёта).
+   * Сценарий, которому нужен более тесный предел, называет его здесь: политика
+   * едет фактом транша до записи расчёта, и проверить это можно только
+   * настоящим прогоном. Расширить предел объявление не может — потолки
+   * складываются по строжайшему.
    */
   readonly feeCeilingPolicy?: FeeCeilingPolicy;
   readonly sourceAccountKnown?: boolean;
@@ -140,11 +151,20 @@ export async function openDeal(options: OpenOptions): Promise<OpenedDeal> {
   // полномочием заведена сделка. `STAFF.operator` — учётная запись `operator-1`,
   // то есть в фактах домена стоит та же строка, что и прежде, но теперь она
   // выведена из сессии, а не написана здесь.
-  let world = createDeal(options.world ?? emptyWorld({ now: NOW, chainId: 'sdelka-audit' }), {
-    dealId: options.dealId,
-    conditionAct: conditionAct(partyRef(options.seller)),
-    objectCadastralCode: options.objectCadastralCode ?? CADASTRAL_CODE,
-  });
+  let world = createDeal(
+    options.world ??
+      emptyWorld({
+        now: NOW,
+        chainId: 'sdelka-audit',
+        // Тариф — настройка владельца, и мир без него транша не заводит вовсе.
+        tariffs: options.tariffs ?? TARIFF_SERIES,
+      }),
+    {
+      dealId: options.dealId,
+      conditionAct: conditionAct(partyRef(options.seller)),
+      objectCadastralCode: options.objectCadastralCode ?? CADASTRAL_CODE,
+    },
+  );
 
   world = recordDecision(world, options.dealId, {
     subject: auditRef('deal', options.dealId),
@@ -178,12 +198,11 @@ export async function openDeal(options: OpenOptions): Promise<OpenedDeal> {
     buyer: partyRef(options.buyer),
     buyerPayerKey: payerKeyForDomain(options.buyer.document),
     buyerNames: options.buyer.names,
-    requiredAmount: amount,
+    // Сумма сделки, а не «сколько перевести»: брутто выводит тариф.
+    principal: amount,
     conditionAct: conditionAct(partyRef(options.seller)),
     createdOn: CREATED_ON,
-    deductions: options.deductions ?? PLATFORM_FEE,
-    tariffVersionId: TARIFF_VERSION,
-    beneficiary: options.beneficiary ?? beneficiaryFor(options.seller, 500),
+    beneficiary: options.beneficiary ?? beneficiaryFor(options.dealId, options.seller, 500),
     sourceAccountKnown: options.sourceAccountKnown ?? true,
     ...(options.feeCeilingPolicy === undefined
       ? {}

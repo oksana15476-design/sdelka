@@ -205,9 +205,17 @@ describe('красная линия №7: от бездействия до во�
         record.body.kind === 'decision_made' && record.body.outcomeKey === 'deal.unwind_approved',
     );
     expect(decisions.map((record) => record.actor.actorId)).toEqual(['approver-1', 'approver-2']);
-    // Актор записи выведен из сессии, а не назван вызывающим: роль журнала —
-    // `approver`, полномочие — то самое, под которым шаг и прошёл.
-    expect(decisions.map((record) => record.actor.roleId)).toEqual(['approver', 'approver']);
+    // Актор записи выведен из сессии, а не назван вызывающим: роль журнала и
+    // полномочие — те самые, под которыми шаг и прошёл.
+    //
+    // До миграции `0023` обе строки были `approver`: одна метка на оба уровня
+    // утверждения, и «две подписи разными людьми» держались только на различии
+    // `actorId`. Теперь в журнале видно **уровень**: финконтролёр даёт первый,
+    // руководитель операций — второй (`ACTORS.md` §5.2).
+    expect(decisions.map((record) => record.actor.roleId)).toEqual([
+      'financial_controller',
+      'head_of_operations',
+    ]);
     expect(decisions.map((record) => record.actor.capability)).toEqual([
       'approve_lift_block',
       'approve_lift_block',

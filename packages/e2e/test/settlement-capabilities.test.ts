@@ -25,11 +25,13 @@ import {
   requestWithdrawal,
 } from './support/acting';
 import {
+  BUYER,
   DEAL_AMOUNT,
   GEL,
   POLICY_VERSION,
   STATEMENT_SOURCE,
   WITHDRAWAL_CLOCK,
+  partyRef,
 } from './support/fixtures';
 import { toCollected, toReserved } from './support/paths';
 
@@ -163,7 +165,11 @@ describe('заявка на вывод — conduct_withdrawal', () => {
   it('заводит оператор; ФК, который её подписывает, завести её не может', async () => {
     const collected = await toCollected({ dealId: 'deal-cap-9', trancheId: 'tranche-cap-9' });
     const scene = withWithdrawals(receiveExternalPayment(collected.world, collected.buyerKey, SPARE), WITHDRAWAL_CLOCK);
-    const spec = { withdrawalId: 'wd-cap-9', owner: collected.buyerKey, amount: money(GEL, 1_000_000n) };
+    const spec = {
+      withdrawalId: 'wd-cap-9',
+      party: partyRef(BUYER),
+      amount: money(GEL, 1_000_000n),
+    };
 
     expect(() => requestWithdrawal(scene, spec, STAFF.controller)).toThrow('app.authority.denied');
 

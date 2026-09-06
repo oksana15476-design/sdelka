@@ -16,6 +16,7 @@ import {
   type InvariantSurface,
   type InvariantViolation,
   type TrancheRuntime,
+  type WithdrawalRuntime,
   type World,
   surfaceViolations,
 } from './world';
@@ -260,6 +261,24 @@ export const UNMAPPED_REASONS = [
   /** Изменились факты приложения, а не состояние автомата: колонок под них нет. */
   'tranche.facts_not_storable',
   /**
+   * Изменились факты заявки, а не её состояние: подписи, готовивший, лицо,
+   * вызвавшее удержание, след поднятой дежурному задачи. Колонок под них нет —
+   * `sdelka.withdrawal` держит состояние, сторону, сумму, отпечаток и часы.
+   */
+  'withdrawal.facts_not_storable',
+  /**
+   * Счёт-источник заявки неизвестен, а `source_account_fingerprint NOT NULL` —
+   * красная линия №9 в схеме. Заявка с неизвестным источником в базу не ложится
+   * вовсе: подставить сюда отпечаток означало бы назвать счёт, которого никто
+   * не называл. Машина в этом случае уводит заявку в `blocked`
+   * (`g_source_account_known`), и дальше её ведёт человек.
+   *
+   * ⚠ Следствие того же порядка, что у возвратного поручения: пока строки нет,
+   * частичный уникальный индекс `withdrawal_one_active_per_party` эту заявку не
+   * сторожит — сторожить нечего.
+   */
+  'withdrawal.source_account_unknown',
+  /**
    * Красная линия №5 в схеме: `payout.evidence_bundle_id NOT NULL`. У возврата
    * покупателю пакета доказательств нет и быть не обязано — возвращаются
    * собственные деньги плательщика (`flow.ts`, `enqueue_outbound_refund`).
@@ -268,6 +287,12 @@ export const UNMAPPED_REASONS = [
   'payout.evidence_bundle_missing',
   /** Получателя расчёта называет акт об условии; без акта поручение не описать. */
   'payout.beneficiary_unknown',
+  /**
+   * Тарифа у транша нет (поднятый мир, `resume.ts`), а расчётное поручение
+   * несёт **нетто** — сумму за вычетом комиссии. Без тарифа она не «равна
+   * собранной», она неизвестна, и снимок не собирается вовсе.
+   */
+  'payout.tariff_unknown',
   /** У порта нет метода: очередь разбора, уведомления, сессии, следы действий. */
   'port.no_method',
   /** У порта нет перечисления: поднять можно только то, чей идентификатор известен. */
@@ -403,9 +428,19 @@ function providerReferenceOf(chain: AuditChain, state: PayoutState, ordinal: num
  * комиссия уходит платформе той же записью, и поручение в банк несёт то, что
  * действительно уйдёт продавцу.
  */
-function payoutAmountOf(runtime: TrancheRuntime, leg: PayoutLeg): Money<CurrencyCode> {
+function payoutAmountOf(runtime: TrancheRuntime, leg: PayoutLeg): Money<CurrencyCode> | null {
   const gross = runtime.facts.collectedAmount ?? runtime.facts.requiredAmount;
-  return leg === 'refund' ? gross : split(gross, runtime.deductions).recipient;
+  if (leg === 'refund') return gross;
+  /*
+   * Удержание — из тарифа транша, и другого его источника нет. У транша,
+   * поднятого из хранилища, тарифа нет вовсе (`resume.ts`), и прежде это
+   * читалось как пустой список удержаний, то есть **как нулевая комиссия**:
+   * поручение уходило на всю собранную сумму. Теперь это `null` — снимка не
+   * будет, причина названа, и молча переплатить получателю нечем.
+   */
+  const tariff = runtime.tariff;
+  if (tariff === null) return null;
+  return split(gross, tariff.deductions).recipient;
 }
 
 export function payoutSnapshotsOf(
@@ -429,15 +464,51 @@ export function payoutSnapshotsOf(
     if (evidenceBundleId === null) {
       return missing<PayoutSnapshot>(`payout:${payoutId}`, 'payout.evidence_bundle_missing');
     }
+    const amount = payoutAmountOf(runtime, state.leg);
+    if (amount === null) {
+      // Расчётное поручение без тарифа: сумма к выплате неизвестна, а не «вся
+      // собранная». Красная линия №2 держится и здесь — комиссия не может
+      // потеряться по дороге в снимок.
+      return missing<PayoutSnapshot>(`payout:${payoutId}`, 'payout.tariff_unknown');
+    }
     return mapped({
       payoutId,
       dealId: runtime.dealId,
       state,
-      amount: payoutAmountOf(runtime, state.leg),
+      amount,
       beneficiary,
       evidenceBundleId,
       providerReference: providerReferenceOf(chain, state, ordinal),
     });
+  });
+}
+
+/**
+ * Снимок заявки на вывод.
+ *
+ * Номер, сторона, сумма, отпечаток счёта-источника и часы — всё, что держит
+ * `sdelka.withdrawal`. Ничего сверх этого сюда не попадает и попасть не может:
+ * `holderIsPayer` — факт момента утверждения, а не свойство строки (см.
+ * `WithdrawalSnapshot` в `packages/db/src/store/port.ts`), подписи и готовивший
+ * колонок не имеют.
+ *
+ * Единственный случай, когда снимка нет: счёт-источник неизвестен. Он назван
+ * причиной, а не обойдён подстановкой, — отпечаток из нулей был бы синтаксически
+ * годной строкой и ложью по существу.
+ */
+export function withdrawalSnapshotOf(runtime: WithdrawalRuntime): Mapping<WithdrawalSnapshot> {
+  const source = runtime.sourceAccount;
+  if (source === null) {
+    return missing<WithdrawalSnapshot>(
+      `withdrawal:${runtime.state.withdrawalId}`,
+      'withdrawal.source_account_unknown',
+    );
+  }
+  return mapped({
+    state: runtime.state,
+    party: runtime.party,
+    amount: runtime.amount,
+    sourceAccountFingerprint: source.accountRef,
   });
 }
 
@@ -456,12 +527,19 @@ export interface PayoutWrite {
   readonly previous: PayoutSnapshot | null;
 }
 
+export interface WithdrawalWrite {
+  readonly snapshot: WithdrawalSnapshot;
+  /** Состояние, из которого шаг делается. `null` — заявки в базе ещё нет. */
+  readonly previous: WithdrawalSnapshot | null;
+}
+
 export interface WorldDelta {
   readonly entries: readonly JournalEntry[];
   readonly records: readonly AuditRecord[];
   readonly deals: readonly DealSnapshot[];
   readonly tranches: readonly TrancheWrite[];
   readonly payouts: readonly PayoutWrite[];
+  readonly withdrawals: readonly WithdrawalWrite[];
   readonly unmapped: readonly UnmappedPart[];
 }
 
@@ -601,6 +679,42 @@ export function stepDelta(before: World | null, after: World): WorldDelta {
     });
   }
 
+  /*
+   * Заявки на вывод — тем же сравнением двух миров, что и транши.
+   *
+   * Отдельного «сохранить заявку» мимо шага здесь нет и быть не должно: заявка
+   * меняется только внутри `sealed`, а сюда приезжает уже разницей двух
+   * проверенных миров. Прежде она не приезжала вовсе — карта выводов лежала
+   * сбоку от `World`, и записать её было **нечем**, а назвать потерянной —
+   * некому.
+   */
+  const withdrawals: WithdrawalWrite[] = [];
+  for (const [withdrawalId, runtime] of after.withdrawals) {
+    const previousRuntime = before === null ? null : (before.withdrawals.get(withdrawalId) ?? null);
+    if (previousRuntime === runtime) continue;
+    const snapshot = withdrawalSnapshotOf(runtime);
+    if (snapshot.kind === 'unmapped') {
+      parts.push(snapshot.part);
+      continue;
+    }
+    /*
+     * «Из чего уходим» — по **предыдущему** миру, как у сделки и транша. Если
+     * прежнее состояние в базу не легло (счёт-источник был неизвестен), то
+     * уходить не из чего: в базе строки нет, и шаг обязан заявить вставку, а не
+     * обновление. Ошибиться здесь безопасно ровно в одну сторону — хранилище
+     * ответит конфликтом с именем, а не перезапишет чужое.
+     */
+    const earlier = previousRuntime === null ? null : withdrawalSnapshotOf(previousRuntime);
+    const previous = earlier !== null && earlier.kind === 'mapped' ? earlier.value : null;
+    if (previous !== null && sameSnapshot(previous, snapshot.value)) {
+      // Автомат стоит на месте, а заявка изменилась: изменились факты
+      // приложения — подписи, лицо, вызвавшее удержание, след поднятой задачи.
+      parts.push(unmapped(`withdrawal:${withdrawalId}`, 'withdrawal.facts_not_storable'));
+      continue;
+    }
+    withdrawals.push({ snapshot: snapshot.value, previous });
+  }
+
   for (const part of worldOnlyParts(before, after)) parts.push(part);
 
   return Object.freeze({
@@ -609,6 +723,7 @@ export function stepDelta(before: World | null, after: World): WorldDelta {
     deals: Object.freeze(deals),
     tranches: Object.freeze(tranches),
     payouts: Object.freeze(payouts),
+    withdrawals: Object.freeze(withdrawals),
     unmapped: Object.freeze(parts),
   });
 }
@@ -649,6 +764,17 @@ function worldOnlyParts(before: World | null, after: World): readonly UnmappedPa
   changed('sessions', before?.sessions, after.sessions);
   changed('facts', before?.facts, after.facts);
   changed('anchors', before?.anchors, after.anchors);
+  /*
+   * Остановка приёма новых сделок (красная линия №3). Не перечень и не карта —
+   * одно значение, поэтому сравнивается тождеством, а не размером: остановка
+   * поставлена, снята или сменила заявку на снятие — в базу не легло ничего.
+   * Колонки под неё в схеме нет, и подъём это знает (`resume.ts`, `GAPS`):
+   * поднятый мир начинается с остановленным приёмом.
+   */
+  const haltBefore = before === null ? null : before.halt;
+  if ((before === null ? after.halt !== null : haltBefore !== after.halt)) {
+    out.push(unmapped('intake_halt', 'port.no_method'));
+  }
   return out;
 }
 
@@ -687,6 +813,20 @@ async function writeDelta(tx: WorldTransaction, delta: WorldDelta): Promise<Writ
   outcome = addWrites(outcome, await tx.appendJournal(delta.entries));
   for (const item of delta.payouts) {
     outcome = addWrites(outcome, await tx.savePayout(item.snapshot, item.previous));
+  }
+  /*
+   * Заявка на вывод — после проводок, вместе с поручениями и по той же причине:
+   * сначала деньги, потом распоряжение о них. Сделки у неё нет вовсе, ссылается
+   * она только на сторону, и сторону кладёт сама (`saveWithdrawal`).
+   *
+   * Здесь же в шаг приезжает правило «одна незавершённая заявка на сторону»:
+   * его держит частичный уникальный индекс базы, и восьмой проверки в коде у
+   * него нет намеренно. Отказ индекса переводится в ошибку домена с именем
+   * guard'а (`db/src/store/errors.ts`), то есть шаг останавливается так же, как
+   * останавливает его сам автомат, — и нового мира у вызывающего не остаётся.
+   */
+  for (const item of delta.withdrawals) {
+    outcome = addWrites(outcome, await tx.saveWithdrawal(item.snapshot, item.previous));
   }
   return addWrites(outcome, await tx.appendAudit(delta.records));
 }
@@ -744,14 +884,14 @@ export async function stepWorld(
  *
  * ⚠ **Записывается только `World`.** Состояние, которое шаг держит рядом с
  * миром, а не в нём, дельта увидеть не может — и назвать потерянным тоже не
- * может, потому что не знает о его существовании. Сегодня такое состояние ровно
- * одно: `WithdrawalWorld` (`withdrawal.ts`) носит карту выводов сбоку от мира, и
- * у порта методов под них нет вовсе, хотя таблица `sdelka.withdrawal` в схеме
- * есть (`0005_payout.sql`). Значит вывод со счёта клиента через это подключение
- * в базу **не попадает и в списке непопавшего не появляется** — единственное
- * место, где здесь возможно молчание. Названо в отчёте; чинится либо методами
- * порта, либо переездом выводов в сам мир, и то и другое — за пределами этого
- * батча.
+ * может, потому что не знает о его существовании.
+ *
+ * Такое состояние было ровно одно — карта выводов в `WithdrawalWorld`, — и
+ * именно поэтому заявка на вывод в базу не попадала и в списке непопавшего не
+ * появлялась. Оно переехало **в мир** (`world.ts`, `World.withdrawals`), и
+ * молчания больше нет: заявка приезжает в дельту разницей двух миров, как
+ * транш. Сбоку осталось то, что состоянием не является, — часы заявки
+ * (`WithdrawalWorld.clock`, версия настройки владельца).
  */
 export async function stepResult<T extends { readonly world: World }>(
   store: StoreOption,
@@ -803,6 +943,16 @@ export interface RestoredWorld {
   readonly journal: Journal;
   readonly chain: AuditChain;
   readonly deals: readonly RestoredDeal[];
+  /**
+   * Заявки на вывод названных сторон — снимками, а не заявками.
+   *
+   * Часы у них подняты (`0022`: `deadline_at`, `entered_at`), а всё остальное,
+   * чем заявка живёт в мире, — нет: ни готовившего, ни подписей, ни того, кто
+   * увёл её в удержание, ни следа поднятой дежурному задачи, ни половины
+   * счёта-источника `holderIsPayer`. Что именно недостаёт и чем это отзывается,
+   * названо в `resume.ts` (`GAPS`) — там, где из снимка собирается заявка.
+   */
+  readonly withdrawals: readonly WithdrawalSnapshot[];
   readonly missing: readonly UnmappedPart[];
 }
 
@@ -815,6 +965,20 @@ export interface RestoreRequest {
    * пробел назван в `missing` каждого подъёма, а не только здесь.
    */
   readonly deals: readonly { readonly dealId: string; readonly trancheIds: readonly string[] }[];
+  /**
+   * Чьи заявки на вывод поднимать — идентификаторы сторон.
+   *
+   * Поле **обязательное**, и пустой список — это написанное «ничьих», а не
+   * забытый аргумент. Тот же приём, что у охвата чтения журнала, и по той же
+   * причине: заявка, не поднятая молча, — это заявка, о существовании которой
+   * поднятый мир не знает, притом что деньги по ней уже могут быть в полёте.
+   *
+   * Из сделок стороны **не выводятся**: клиент, у которого на счету остаток от
+   * прошлой сделки, к поднимаемым сделкам может не иметь отношения вовсе, а
+   * заявка у него быть может. Догадка здесь молча теряла бы ровно те заявки,
+   * ради которых поле заведено.
+   */
+  readonly parties: readonly string[];
 }
 
 /**
@@ -862,10 +1026,21 @@ export async function restoreWorld(
       }
       deals.push({ deal, tranches });
     }
+    /*
+     * Заявки — по стороне, а не по номеру: `g_no_active_withdrawal` считает
+     * незавершённые выводы по счёту клиента, а номера после перезапуска взять
+     * неоткуда. Порядок между сторонами сохраняется как назван: он и есть весь
+     * охват, другого у порта нет.
+     */
+    const withdrawals: WithdrawalSnapshot[] = [];
+    for (const partyId of request.parties) {
+      for (const snapshot of await tx.loadWithdrawals(partyId)) withdrawals.push(snapshot);
+    }
     return Object.freeze({
       journal,
       chain,
       deals: Object.freeze(deals),
+      withdrawals: Object.freeze(withdrawals),
       /*
        * Список **структурный**, а не посчитанный по этому подъёму: перечислено
        * то, чего у хранилища нет вовсе, и оно одинаково при любом содержимом
@@ -874,6 +1049,13 @@ export async function restoreWorld(
        */
       missing: Object.freeze([
         unmapped('deals', 'port.no_listing'),
+        /*
+         * Перечисления заявок у порта нет тоже: поднимаются выводы **названных**
+         * сторон, и «все выводы базы» неспрашиваемы. Строка стоит здесь всегда,
+         * а не только когда список сторон пуст: перечня нет по построению, и
+         * отчитываться «в этот раз ничего не потерялось» было бы неправдой.
+         */
+        unmapped('withdrawals', 'port.no_listing'),
         unmapped('tranche.facts', 'tranche.facts_not_storable'),
         unmapped('collected_not_backed', 'invariant.not_checkable'),
         unmapped('sessions', 'port.no_method'),

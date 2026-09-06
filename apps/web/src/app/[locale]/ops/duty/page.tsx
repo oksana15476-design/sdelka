@@ -38,7 +38,14 @@ export default async function DutyPage({
   const covered = view.obligations.minor === view.heldOnAccounts.minor;
   const breachedCurrencies = ops.coverage.filter((item) => !item.covered);
   const overdue = ops.tasks.filter((task) => urgencyOf(task.deadline, currentTime) === 'overdue');
-  const unknownPayouts = ops.tasks.filter((task) => task.moneyState === 'payoutUnknown');
+  /* Метрика §5.4 — о выплатах по траншам, и потому спрашивает положение денег
+     **по сделке**. У задачи без сделки его нет вовсе: заявка клиента на вывод,
+     стоящая в «исход неизвестен», сюда не попадает и не должна — это другой
+     объект и другая дорога денег. Что дежурному нужна вторая метрика о таких
+     заявках, названо в отчёте, а не решено здесь. */
+  const unknownPayouts = ops.tasks.filter(
+    (task) => task.subject.kind === 'deal' && task.subject.moneyState === 'payoutUnknown',
+  );
 
   return (
     <>

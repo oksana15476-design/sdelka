@@ -54,6 +54,10 @@ const CHAIN = SCOPE.chainId;
 const REQUEST = {
   chainId: CHAIN,
   deals: [{ dealId: DEAL, trancheIds: [TRANCHE] }],
+  // Заявок на вывод в этом сценарии нет: «ничьих» написано словом, а не
+  // получается пропуском аргумента. Круг «шаг → база → подъём» по заявке идёт
+  // отдельным набором (`withdrawal-store.test.ts`).
+  parties: [],
 };
 
 /** Мир, доведённый до резерва и целиком лежащий в хранилище. */

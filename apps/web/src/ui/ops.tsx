@@ -16,9 +16,9 @@ import type { L10n } from './l10n';
 import { Amount, Badge, BlockedAction, Eyebrow, ListRow, Row, StatusDot } from './primitives';
 import {
   type ClosingRule,
+  type EvidenceKind,
   type ExternalFact,
   type Urgency,
-  evidenceOf,
   externalFactOf,
   outcomesOf,
   taskHref,
@@ -101,6 +101,7 @@ export function TaskRow({
 }): ReactNode {
   const urgency = urgencyOf(task.deadline, now);
   const claimed = task.claimedBy !== null;
+  const subject = task.subject;
   /*
    * Консоль на телефоне показывает только то, ради чего дежурного будят ночью,
    * — утверждение выплаты. Остальное требует документов и второй проверки; на
@@ -114,11 +115,21 @@ export function TaskRow({
       {/* Верхняя строка — два разных вопроса: где деньги и сколько времени.
           Вид задачи здесь не повторяется: он стоит заголовком строкой ниже, и
           повтор одного слова дважды подряд читается как сбой вёрстки. */}
+      {/* Слева — где деньги, справа — сколько времени. У задачи без сделки
+          положения денег нет, и на его месте стоит не пустота и не прочерк, а
+          то, чем эта задача вообще заведена: заявка стоит дольше норматива.
+          Второй значок рядом при этом говорит про **срок операции**, и он
+          может быть не просрочен — расхождение намеренное, оно и есть предмет
+          задачи (`ops.task.subject.age.note`). */}
       <div className="task__top">
-        <Badge
-          tone={MONEY_STATE_TONE[task.moneyState]}
-          label={t(l.dict, `ops.money.${task.moneyState}.label`)}
-        />
+        {subject.kind === 'deal' ? (
+          <Badge
+            tone={MONEY_STATE_TONE[subject.moneyState]}
+            label={t(l.dict, `ops.money.${subject.moneyState}.label`)}
+          />
+        ) : (
+          <Badge tone="warn" label={t(l.dict, 'ops.task.stalled')} />
+        )}
         <DeadlineChip l={l} deadline={task.deadline} now={now} />
       </div>
 
@@ -126,11 +137,23 @@ export function TaskRow({
         <a href={taskHref(l.locale, task.id)}>{t(l.dict, `ops.task.type.${task.type}`)}</a>
       </h3>
 
-      <p className="deal-card__meta">
-        <span className="mono">{task.dealRef}</span> · {task.address}
-      </p>
-
-      <Amount l={l} value={task.amount} size="lead" labelKey="ops.task.amountLabel" />
+      {subject.kind === 'deal' ? (
+        <>
+          <p className="deal-card__meta">
+            <span className="mono">{subject.dealRef}</span> · {subject.address}
+          </p>
+          <Amount l={l} value={subject.amount} size="lead" labelKey="ops.task.amountLabel" />
+        </>
+      ) : (
+        <>
+          <p className="deal-card__meta">
+            <span className="mono">{subject.withdrawalId}</span>
+          </p>
+          {/* На месте суммы — причина её отсутствия, а не ноль и не прочерк:
+              пересчёт в валюту очереди требует официального курса на дату. */}
+          <p className="muted">{t(l.dict, 'ops.task.rank.none')}</p>
+        </>
+      )}
 
       <p className="faint">{t(l.dict, 'ops.task.age', { value: formatRemaining(l.locale, task.ageMs) })}</p>
 
@@ -152,6 +175,77 @@ export function TaskRow({
         </p>
       )}
     </li>
+  );
+}
+
+/**
+ * Предмет задачи: о чём она и сколько стоит в очереди.
+ *
+ * Две раскладки, а не одна с прочерками. У задачи о сделке названы сделка,
+ * объект, положение денег и сумма; у задачи о заявке на вывод трёх из них нет
+ * вовсе — и каждое отсутствие названо **словами и причиной**, а не чертой.
+ * Черта отвечает «здесь ничего», а оператору нужен ответ «этого не бывает, и
+ * вот почему»: сделки у вывода не существует, лицо у заявки не хранится, сумма
+ * не пересчитана, потому что курс — внешний факт.
+ *
+ * Возраст стоит в обеих раскладках на одном месте, а у заявки к нему добавлена
+ * подпись: он считается от входа в состояние и не двигается ответом банка — в
+ * отличие от срока операции, который стоит выше.
+ */
+export function SubjectCard({ l, task }: { readonly l: L10n; readonly task: OpsTask }): ReactNode {
+  const subject = task.subject;
+  return (
+    <section className="card" aria-labelledby="subject">
+      <h2 className="card__title" id="subject">
+        {t(l.dict, 'ops.task.subject.title')}
+      </h2>
+      <div className="rows">
+        {subject.kind === 'deal' ? (
+          <>
+            <Row l={l} labelKey="ops.task.subject.deal">
+              <a className="mono" href={`/${l.locale}/deals/${subject.dealId}`}>
+                {subject.dealRef}
+              </a>
+            </Row>
+            <Row l={l} labelKey="ops.task.subject.property">
+              <span>{subject.address}</span>
+            </Row>
+            <Row l={l} labelKey="ops.task.subject.money">
+              <Badge
+                tone={MONEY_STATE_TONE[subject.moneyState]}
+                label={t(l.dict, `ops.money.${subject.moneyState}.label`)}
+              />
+            </Row>
+            <Row l={l} labelKey="ops.task.amountLabel">
+              <Amount l={l} value={subject.amount} />
+            </Row>
+          </>
+        ) : (
+          <>
+            <Row l={l} labelKey="ops.task.subject.withdrawal">
+              <span className="mono">{subject.withdrawalId}</span>
+            </Row>
+            <Row l={l} labelKey="ops.task.subject.deal">
+              <span className="muted">{t(l.dict, 'ops.task.subject.deal.none')}</span>
+            </Row>
+            <Row l={l} labelKey="ops.task.subject.party">
+              <span className="muted">{t(l.dict, 'ops.task.subject.party.none')}</span>
+            </Row>
+            <Row l={l} labelKey="ops.task.rank.label">
+              <span className="muted">{t(l.dict, 'ops.task.rank.none')}</span>
+            </Row>
+          </>
+        )}
+        <Row l={l} labelKey="ops.task.subject.age">
+          <span className="mono">{formatRemaining(l.locale, task.ageMs)}</span>
+        </Row>
+      </div>
+      {subject.kind === 'deal' ? null : (
+        <p className="faint" style={{ marginBlockStart: 'var(--s-3)' }}>
+          {t(l.dict, 'ops.task.subject.age.note')}
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -253,7 +347,20 @@ export function OutcomeList({
  * прямо: без версии политики решение нельзя воспроизвести через два года, без
  * причин — объяснить, без доказательства — обосновать.
  */
-export function BasisCard({ l, type }: { readonly l: L10n; readonly type: OpsTask['type'] }): ReactNode {
+export function BasisCard({
+  l,
+  kinds,
+}: {
+  readonly l: L10n;
+  /**
+   * Виды доказательств — **приходят снаружи**, а не спрашиваются здесь по виду
+   * задачи. Причина одна: у вида задачи, на котором решения не принимают,
+   * доказательства нет вовсе (`evidenceOf` отвечает `null`), и карточка тогда
+   * не рендерится целиком. Спроси она сама — пришлось бы подставить пустой
+   * список, то есть нарисовать пустую строку вместо ответа.
+   */
+  readonly kinds: readonly EvidenceKind[];
+}): ReactNode {
   return (
     <section className="card" aria-labelledby="basis">
       <h2 className="card__title" id="basis">
@@ -261,9 +368,7 @@ export function BasisCard({ l, type }: { readonly l: L10n; readonly type: OpsTas
       </h2>
       <div className="rows">
         <Row l={l} labelKey="ops.basis.evidence">
-          {evidenceOf(type)
-            .map((kind) => t(l.dict, `ops.evidence.${kind}`))
-            .join(' · ')}
+          {kinds.map((kind) => t(l.dict, `ops.evidence.${kind}`)).join(' · ')}
         </Row>
         <Row l={l} labelKey="ops.basis.policyVersion">
           <Badge tone="info" label={t(l.dict, 'ops.basis.required')} />
@@ -379,10 +484,18 @@ export function CaseFacts({
   l,
   facts,
   operationsZone,
+  noteKey = 'ops.facts.note',
 }: {
   readonly l: L10n;
   readonly facts: readonly CaseFact[];
   readonly operationsZone: string;
+  /**
+   * Подпись под фактами. По умолчанию — «посчитаны детектором»: так и есть у
+   * девяти видов разбора комплаенса. У простоя заявки на вывод детектора нет
+   * вовсе — величины считают часы заявки, — и подпись по умолчанию была бы
+   * мелкой неправдой в самом низу карточки.
+   */
+  readonly noteKey?: string;
 }): ReactNode {
   return (
     <section className="card" aria-labelledby="facts">
@@ -411,7 +524,7 @@ export function CaseFacts({
         ))}
       </div>
       <p className="faint" style={{ marginBlockStart: 'var(--s-3)' }}>
-        {t(l.dict, 'ops.facts.note')}
+        {t(l.dict, noteKey)}
       </p>
     </section>
   );
@@ -649,7 +762,20 @@ export function NextCard({ l, type }: { readonly l: L10n; readonly type: OpsTask
   );
 }
 
-/** Перечень исходов задачи одним блоком: заголовок, перечень и правило выбора. */
+/**
+ * Перечень исходов задачи одним блоком: заголовок, перечень и правило выбора.
+ *
+ * ## Когда исходов нет ни одного
+ *
+ * Такой вид задачи существует ровно один — простой заявки на вывод, — и блок у
+ * него не исчезает и не остаётся пустой рамкой. Пустая рамка на месте «что вы
+ * решаете» читается как поломка: оператор ищет кнопки, которых нет, и решает,
+ * что экран не догрузился. Поэтому здесь стоит **ответ**: решения на этой
+ * карточке нет, и вот почему.
+ *
+ * Заголовок при этом меняется вместе с содержимым. «Что вы решаете» над
+ * объяснением, что решать нечего, — вопрос без ответа, и он хуже пустоты.
+ */
 export function OutcomesCard({
   l,
   type,
@@ -661,6 +787,17 @@ export function OutcomesCard({
   readonly chosen?: string | undefined;
   readonly hrefOf?: Readonly<Record<string, string>> | undefined;
 }): ReactNode {
+  const keys = outcomesOf(type);
+  if (keys.length === 0) {
+    return (
+      <section className="card card--quiet" aria-labelledby="outcomes">
+        <h2 className="card__title" id="outcomes">
+          {t(l.dict, 'ops.outcomes.none.title')}
+        </h2>
+        <p className="muted">{t(l.dict, 'ops.outcomes.none.body')}</p>
+      </section>
+    );
+  }
   return (
     <section className="card" aria-labelledby="outcomes">
       <h2 className="card__title" id="outcomes">
@@ -670,7 +807,7 @@ export function OutcomesCard({
           ниже вместе с разбором «почему не вы один». Одна и та же строка,
           показанная дважды на одном экране, читается как сбой, а не как
           напоминание. */}
-      <OutcomeList l={l} keys={outcomesOf(type)} chosen={chosen} hrefOf={hrefOf} />
+      <OutcomeList l={l} keys={keys} chosen={chosen} hrefOf={hrefOf} />
     </section>
   );
 }

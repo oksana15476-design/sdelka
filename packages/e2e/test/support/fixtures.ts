@@ -18,6 +18,7 @@ import {
   type SanctionsScreeningRequest,
   POLICY_2026_09_03,
   accountFingerprint,
+  beneficiaryStateOf,
   countryCode,
   documentNumberFingerprint,
   nameObservation,
@@ -26,15 +27,16 @@ import {
 import {
   type ConditionAct,
   type Instant,
+  type ParticipationKey,
   type PartyRef,
   type PayoutOutcome,
   type ReconciliationOutcome,
   type StatementFields,
   instant,
+  participationKey,
 } from '@sdelka/domain';
 import {
   type CurrencyCode,
-  type Deduction,
   type IsoDate,
   type Money,
   fxRates,
@@ -42,6 +44,26 @@ import {
   money,
   rational,
 } from '@sdelka/money';
+import {
+  type ActorRef,
+  type RoleId,
+  accountId,
+  actorRef,
+  personId,
+} from '@sdelka/auth';
+import {
+  type TariffPlan,
+  type TariffSeries,
+  tariffPlan,
+  tariffSeriesFromStore,
+} from '@sdelka/pricing';
+import {
+  type SettingsVersion,
+  type SettingsVersionId,
+  settingsReasonKey,
+  settingsVersion,
+  settingsVersionId,
+} from '@sdelka/settings';
 import {
   type BankOutcome,
   type BankPort,
@@ -145,31 +167,54 @@ export function evidenceRef(seed: number, kind: EvidenceRef['kind'] = 'test_tran
 }
 
 /**
+ * Участие получателя в сделке. Реквизиты выплаты висят на нём, а не на лице
+ * (`@sdelka/domain`, `participation.ts`; ROADMAP.md И13.1).
+ */
+export function recipientParticipation(dealId: string, party: PartyProfile): ParticipationKey {
+  return participationKey(dealId, partyRef(party), 'recipient');
+}
+
+/**
  * Реквизиты выплаты со статусом, посчитанным настоящим `verifyBeneficiaryHolder`.
  * Статус не выставляется руками: `verified` открывает выплату, и подставить его
  * означало бы обойти ровно тот guard, ради которого он существует (И13.1).
+ *
+ * Сделка — первым аргументом: подтверждение принадлежит участию, и фикстуры,
+ * которая делала бы «реквизиты этого лица вообще», больше не существует.
  */
-export function beneficiaryFor(party: PartyProfile, seed: number): BeneficiaryState {
+export function beneficiaryFor(
+  dealId: string,
+  party: PartyProfile,
+  seed: number,
+): BeneficiaryState {
   const requisites: BeneficiaryRequisites = {
     account: accountFingerprint(fp(seed)),
     holderNames: party.names,
     holderDocument: party.document,
     ownershipEvidence: evidenceRef(seed, 'test_transfer'),
   };
-  const verification = verifyBeneficiaryHolder(requisites, party, POLICY, NOW);
-  return { requisites, status: verification.outcome, locked: false, lastChangedAt: null };
+  return beneficiaryStateOf(
+    verifyBeneficiaryHolder(recipientParticipation(dealId, party), requisites, party, POLICY, NOW),
+    requisites,
+  );
 }
 
 /** Реквизиты, у которых сошлось только имя: доказательства владения нет. */
-export function nameConsistentBeneficiary(party: PartyProfile, seed: number): BeneficiaryState {
+export function nameConsistentBeneficiary(
+  dealId: string,
+  party: PartyProfile,
+  seed: number,
+): BeneficiaryState {
   const requisites: BeneficiaryRequisites = {
     account: accountFingerprint(fp(seed)),
     holderNames: party.names,
     holderDocument: party.document,
     ownershipEvidence: null,
   };
-  const verification = verifyBeneficiaryHolder(requisites, party, POLICY, NOW);
-  return { requisites, status: verification.outcome, locked: false, lastChangedAt: null };
+  return beneficiaryStateOf(
+    verifyBeneficiaryHolder(recipientParticipation(dealId, party), requisites, party, POLICY, NOW),
+    requisites,
+  );
 }
 
 /* ------------------------------------------------------------------------- */
@@ -246,10 +291,70 @@ export const DEAL_AMOUNT: Money<CurrencyCode> = money(GEL, 20_000_000n);
 /** Та же сумма в долларах по клиентскому курсу 2,50. */
 export const DEAL_AMOUNT_USD: Money<CurrencyCode> = money(USD, 8_000_000n);
 
-/** Комиссия платформы 1,5%. Ставка — рациональное число, не float. */
-export const PLATFORM_FEE: readonly Deduction[] = Object.freeze([
-  Object.freeze({ key: 'platform_fee', rate: rational(150n, 10_000n) }),
-]);
+/**
+ * Тариф сквозных сценариев: 150 базисных пунктов, то есть 1,5 % — арифметика
+ * потока P2 (`FUNCTIONAL.md` §3.4), на которой стоят все ожидаемые числа
+ * ниже по тестам (300 000 из 20 000 000, нетто 19 700 000).
+ *
+ * ⚠ **Это фикстура, а не норма.** Само число — вопрос владельца
+ * (`DECISIONS-REVIEW.md` §J1 **[открыто]**); здесь оно взято затем, чтобы
+ * ожидания сквозных сценариев не поменялись при подключении журнала версий, и
+ * расхождение осталось видно ровно там, где оно и было.
+ */
+export const TARIFF_PLAN: TariffPlan = tariffPlan({ rateBp: 150, currency: GEL });
+
+/** Кто двигает настройку: полномочие `manage_settings` выдано одной роли. */
+const TARIFF_AUTHOR: ActorRef = actorRef(accountId('acc-principal'), personId('person-principal'));
+const TARIFF_AUTHOR_ROLE: RoleId = 'principal';
+
+/**
+ * Версия тарифа, действующая **до** момента сквозных сценариев.
+ *
+ * Прежде здесь лежала строка `'tariff-2026-09-01'` — метка, которую никто ни с
+ * чем не сверял. Теперь это идентификатор версии в журнале настроек
+ * (`<домен>/<ГГГГ-ММ-ДД>.<n>`), и он же уходит в запись начисления: посчитано и
+ * записано — по одной и той же версии, потому что взяты они из одного значения.
+ */
+export const TARIFF_VERSION_ID = settingsVersionId('tariff/2026-09-01.1');
+
+/** Момент вступления версии в силу: раньше `NOW`, иначе тарифа на транше нет. */
+export const TARIFF_EFFECTIVE_FROM: Instant = instant(Date.UTC(2026, 8, 1, 9, 0, 0));
+
+export function tariffVersionFor(
+  plan: TariffPlan,
+  versionId: SettingsVersionId = TARIFF_VERSION_ID,
+  effectiveFrom: Instant = TARIFF_EFFECTIVE_FROM,
+  supersedes: SettingsVersionId | null = null,
+  /**
+   * Момент записи. По умолчанию совпадает с моментом вступления в силу; у
+   * **отложенной** версии он раньше — иначе получилась бы версия, записанная в
+   * будущем, чего в журнале не бывает.
+   */
+  recordedAt: Instant = effectiveFrom,
+): SettingsVersion<TariffPlan> {
+  return settingsVersion<TariffPlan>({
+    versionId,
+    value: plan,
+    introducedBy: TARIFF_AUTHOR,
+    introducedByRole: TARIFF_AUTHOR_ROLE,
+    reasonKey: settingsReasonKey('settings.reason.owner_decision'),
+    recordedAt,
+    effectiveFrom,
+    supersedes,
+  });
+}
+
+/** Журнал версий тарифа, которым засеивается мир сквозного сценария. */
+export function tariffJournal(...versions: readonly SettingsVersion<TariffPlan>[]): TariffSeries {
+  const built = tariffSeriesFromStore(
+    versions.length === 0 ? [tariffVersionFor(TARIFF_PLAN)] : versions,
+  );
+  if (!built.ok) throw new Error(`fixtures.tariff_series:${built.error}`);
+  return built.value;
+}
+
+/** Журнал по умолчанию: одна версия, 1,5 %, действует с 1 сентября. */
+export const TARIFF_SERIES: TariffSeries = tariffJournal();
 
 /**
  * Три курса на пару USD→GEL. Пара объявлена **в самой величине**, а не в
@@ -282,9 +387,6 @@ export const ALL_FIELDS_MATCH: StatementFields = Object.freeze({
 export const CADASTRAL_CODE = '01.10.14.001.123';
 /** Объект соседней сделки: тот же реестр, другая вещь. */
 export const OTHER_CADASTRAL_CODE = '01.10.14.001.777';
-
-/** Версия тарифного плана: уходит фактом в журнал вместе с начислением (И14.3). */
-export const TARIFF_VERSION = 'tariff-2026-09-01';
 
 export const APPLICATION_ID = 'app-registration-1';
 

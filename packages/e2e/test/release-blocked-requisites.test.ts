@@ -9,7 +9,7 @@ import {
   authorize,
   openBeneficiaryChange,
   prioritize,
-  toBeneficiaryLock,
+  toBeneficiaryConfirmation,
 } from '@sdelka/compliance';
 import { instant } from '@sdelka/domain';
 import {
@@ -186,7 +186,7 @@ describe('выход из разбора: реквизиты и выплата',
     // файле транша.
     const beneficiary = trancheOf(world, TRANCHE).beneficiary;
     world = patchFacts(world, TRANCHE, {
-      beneficiary: toBeneficiaryLock({ ...beneficiary, locked: false }),
+      beneficiary: toBeneficiaryConfirmation({ ...beneficiary, locked: false }),
     });
 
     const refused = rejectTrancheEvent(world, TRANCHE, { type: 'release_authorized' });
@@ -301,7 +301,7 @@ describe('выход из разбора: реквизиты и выплата',
     // ⚠ Единственный чёрный ход в этом сценарии, и он не про блокировку:
     // продуктового шага, который доносит решение комплаенса о реквизитах до
     // фактов транша, в `packages/app` сегодня нет вовсе. Отмечено в отчёте.
-    world = patchFacts(world, TRANCHE, { beneficiary: toBeneficiaryLock(applied.value) });
+    world = patchFacts(world, TRANCHE, { beneficiary: toBeneficiaryConfirmation(applied.value) });
 
     // --- И выплата на новые реквизиты не проходит ---
     world = attachObservation(

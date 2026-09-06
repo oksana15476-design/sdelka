@@ -36,7 +36,7 @@ import {
   partyRef,
 } from '../support/fixtures';
 import { dbSuite, sqlState, withRollback } from '../../../db/test/int/support/pg';
-import { assertNoForeignWorld, resetDealState } from './support/reset';
+import { INT_CHAINS, assertNoForeignWorld, resetDealState } from './support/reset';
 
 /**
  * Шаги мира против **живого** Postgres: круг «мир → база → мир» на той самой
@@ -182,7 +182,12 @@ const ROLLBACK = trancheOptions(POLICY_VERSION, { creditRoute: 'already_on_clien
 if (pool !== null) {
   // Сначала предусловие, потом снятие состояния: снимать чужое незачем, а
   // отказ обязан назвать причину до первого шага, а не на девятом.
-  await assertNoForeignWorld(pool, [CHAIN, OTHER_WORLD.chainId]);
+  /*
+   * Перечень своих цепочек — общий на весь набор (`support/reset.ts`,
+   * `INT_CHAINS`), а не собранный здесь из локальных констант: цепочку заводит
+   * и соседний файл, и на втором прогоне она выглядела бы отсюда чужим миром.
+   */
+  await assertNoForeignWorld(pool, INT_CHAINS);
   await resetDealState(pool, ALL_DEALS);
 }
 
@@ -341,6 +346,8 @@ run(title, () => {
     const restored = await restoreWorld(store(), {
       chainId: CHAIN,
       deals: [{ dealId: CONFLICT.dealId, trancheIds: [CONFLICT.trancheId] }],
+      // Заявок на вывод в этом сценарии нет — «ничьих» сказано словом.
+      parties: [],
     });
     expect(restored.deals[0]?.tranches[0]?.snapshot.state.status).toBe('reserved');
     expect(restored.chain).toEqual(reserved.world.chain);
@@ -358,6 +365,8 @@ run(title, () => {
         { dealId: REPEAT.dealId, trancheIds: [REPEAT.trancheId] },
         { dealId: CONFLICT.dealId, trancheIds: [CONFLICT.trancheId] },
       ],
+      // Заявок на вывод в этом сценарии нет — «ничьих» сказано словом.
+      parties: [],
     });
 
     // Инварианты на поднятом — **та же функция**, что и на мире в памяти
@@ -505,6 +514,8 @@ run(title, () => {
     const restored = await restoreWorld(store(), {
       chainId: OTHER_WORLD.chainId,
       deals: [{ dealId: OTHER_WORLD.dealId, trancheIds: [OTHER_WORLD.trancheId] }],
+      // Заявок на вывод в этом сценарии нет — «ничьих» сказано словом.
+      parties: [],
     });
     expect(restoredViolations(restored)).toEqual([]);
     expect(
@@ -522,6 +533,8 @@ run(title, () => {
     const restoredFirst = await restoreWorld(store(), {
       chainId: CHAIN,
       deals: [{ dealId: SETTLE.dealId, trancheIds: [SETTLE.trancheId] }],
+      // Заявок на вывод в этом сценарии нет — «ничьих» сказано словом.
+      parties: [],
     });
     const mineFirst = new Set(restoredFirst.journal.entries.map((entry) => entry.id));
     expect([...known].every((id) => mineFirst.has(id))).toBe(true);

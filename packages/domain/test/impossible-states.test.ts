@@ -19,7 +19,7 @@ import {
   reduceDeal,
   reducePayout,
 } from '../src/index';
-import { AMOUNT, CONDITION_ACT, NOW, context, dealFacts } from './support/facts';
+import { AMOUNT, CONDITION_ACT, NOW, beneficiary, context, dealFacts } from './support/facts';
 import { accept, frozenStateAt, reject, stateAt } from './support/drive';
 
 const fundsReceived: TrancheEvent = {
@@ -106,7 +106,7 @@ describe('невозможные состояния', () => {
     const error = reject(
       stateAt('release_pending'),
       { type: 'release_authorized' },
-      context({ beneficiary: { status: 'verified', locked: true, lastChangedAt: yesterday } }),
+      context({ beneficiary: beneficiary({ status: 'verified', locked: true, lastChangedAt: yesterday }) }),
     );
     expect(error.failedGuards).toContain('g_beneficiary_locked');
   });

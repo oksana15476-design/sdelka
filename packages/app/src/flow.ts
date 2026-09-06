@@ -26,7 +26,7 @@ import {
   compareNames,
   lockOnFunding,
   reconcileOwner,
-  toBeneficiaryLock,
+  toBeneficiaryConfirmation,
 } from '@sdelka/compliance';
 import {
   type ConditionAct,
@@ -59,6 +59,8 @@ import {
   dealState,
   initialTrancheState,
   instant,
+  participationKey,
+  participationKeysEqual,
   reduceDeal,
   reducePayout,
   reduceTranche,
@@ -89,10 +91,17 @@ import {
   receiveConversion,
   receiveFee,
   sendForConversion,
+  strictestFeeCeiling,
   writeOffTransitArrived,
 } from '@sdelka/ledger';
-import type { ConvertedAmount, CurrencyCode, Deduction, FxRates, IsoDate, Money, PlatformSpread } from '@sdelka/money';
+import type { ConvertedAmount, CurrencyCode, FxRates, IsoDate, Money, PlatformSpread } from '@sdelka/money';
 import { accountingFxDifference, convert, isPositive, platformSpread } from '@sdelka/money';
+import { type TariffSeries, tariffSeries } from '@sdelka/pricing';
+import {
+  type TrancheTariff,
+  requireTrancheTariff,
+  tariffForNewTranche,
+} from './tariff';
 import {
   type CreditRoute,
   creditIncomingPayment,
@@ -130,6 +139,7 @@ import {
   trancheSubject,
 } from './authority';
 import { auditRecordId, journalEntryId } from './ids';
+import { assertIntakeOpen } from './intake-halt';
 import {
   type DealOrigin,
   type ObservationOrigin,
@@ -146,6 +156,7 @@ import {
   type ObservationTask,
   type SuppressedEntry,
   type TrancheRuntime,
+  type WithdrawalRuntime,
   type World,
   coverageOk,
   dealOf,
@@ -190,6 +201,14 @@ import {
 export interface WorldSeed {
   readonly now: Instant;
   readonly chainId: string;
+  /**
+   * Журнал версий тарифа. Не задан — журнал **пуст**, и это не умолчание, а
+   * отсутствие тарифа: первое же заведение транша отказывает
+   * (`app.tranche.tariff_unresolved`). Подставить сюда `PROVISIONAL_TARIFF_PLAN`
+   * значило бы взять в деньги число, которого никто не выбирал
+   * (`DECISIONS-REVIEW.md` §J1 **[открыто]**).
+   */
+  readonly tariffs?: TariffSeries;
 }
 
 export function emptyWorld(seed: WorldSeed): World {
@@ -202,6 +221,12 @@ export function emptyWorld(seed: WorldSeed): World {
       anchors: Object.freeze<Anchor[]>([]),
       deals: new Map<string, DealRuntime>(),
       tranches: new Map<string, TrancheRuntime>(),
+      tariffs: seed.tariffs ?? tariffSeries(),
+      withdrawals: new Map<string, WithdrawalRuntime>(),
+      // Приём открыт: остановки никто не ставил и журнал пуст. Это единственное
+      // место, где мир начинается с открытым приёмом, — поднятый из хранилища
+      // начинается с остановленным (`resume.ts`, остановки в схеме нет).
+      halt: null,
       tasks: Object.freeze<ReviewTask[]>([]),
       observationTasks: Object.freeze<ObservationTask[]>([]),
       notifications: Object.freeze<Notification[]>([]),
@@ -281,6 +306,13 @@ export function createDeal(
   authority: Authority<'create_deal'>,
 ): World {
   assertOrigin(['create_deal'], authority, 'deal.create');
+  /*
+   * Красная линия №3 — **на входе, а не предупреждением на экране**. Отказ
+   * стоит до единой строки состояния: сделка, заведённая при несошедшемся
+   * покрытии, — это новое обязательство перед клиентом поверх необеспеченных
+   * старых.
+   */
+  assertIntakeOpen(world, 'deal.create');
   if (spec.objectCadastralCode.length === 0) {
     throw new Error('app.deal.object_cadastral_code_required');
   }
@@ -329,31 +361,35 @@ export interface TrancheSpec {
    * «сошлось».
    */
   readonly buyerNames: readonly NameObservation[];
-  readonly requiredAmount: Money<CurrencyCode>;
+  /**
+   * Сумма сделки: то, о чём договорились стороны. **База ставки тарифа**
+   * (`@sdelka/pricing`, `quotation.ts`).
+   *
+   * Прежде здесь стояла `requiredAmount` — сумма, которую обязан перевести
+   * покупатель, — и она называлась вызывающим. Теперь она **выводится** из
+   * тарифа: при плательщике-получателе брутто равно сумме сделки, при
+   * плательщике-покупателе — сумме плюс комиссия, при сплите — сумме плюс доля
+   * покупателя. Назвать её отдельно значило бы дать двум величинам разойтись:
+   * платёжная инструкция говорила бы одно, а расчёт считал бы другое.
+   */
+  readonly principal: Money<CurrencyCode>;
   readonly conditionAct: ConditionAct;
   readonly createdOn: IsoDate;
-  readonly deductions: readonly Deduction[];
-  /**
-   * Версия тарифного плана, по которой считается комиссия (`CORE.md` Ф16,
-   * И14.3: «на сделке хранится идентификатор версии плана, пересчёт задним
-   * числом невозможен»). Уходит фактом в журнал вместе с начислением.
-   *
-   * ⚠ Её место — на сделке, в `packages/domain`. Пока его там нет, держит
-   * приложение; названо в отчёте, а не спрятано.
-   */
-  readonly tariffVersionId: string;
   readonly beneficiary: BeneficiaryState;
   readonly sourceAccountKnown: boolean;
   /**
    * Потолок удержания этого транша (`@sdelka/domain`, `tariff.ts`, эпик E16).
    *
-   * Лежит рядом с `tariffVersionId` и по той же причине: ставка и её предел —
-   * одно решение о деньгах клиента, и хранится оно вместе с версией политики,
-   * действовавшей в момент принятия (`CORE.md` Ф11).
+   * **Только сужает потолок версии тарифа, но не расширяет его.** Основной
+   * предел приезжает вместе с планом (`TariffPlan.ceiling`, та же версия, что
+   * дала ставку), а объявленный здесь складывается с ним по строжайшему
+   * (`strictestFeeCeiling`): ставка и её предел — одно решение о деньгах
+   * клиента, и хранится оно вместе с версией политики, действовавшей в момент
+   * принятия (`CORE.md` Ф11).
    *
-   * Поле **необязательное**, и это безопасно ровно потому, что умолчание —
-   * жёсткий предел учёта (`DEFAULT_FEE_CEILING_POLICY`, два процента): пропуск
-   * не может ослабить правило, а объявление — только ужесточить его. Отсюда
+   * Поле **необязательное**, и это безопасно ровно потому, что пропуск не может
+   * ослабить правило: без него действует потолок плана, а тот сам не шире
+   * жёсткого предела учёта (`DEFAULT_FEE_CEILING`, два процента). Отсюда
    * величина доезжает фактом транша до намерения расчёта, а из намерения — до
    * записи (`ledger-app.ts`, `projectSettlementIntent`).
    */
@@ -374,9 +410,62 @@ export function createTranche(
   authority: Authority<'create_deal'>,
 ): World {
   assertOrigin(['create_deal'], authority, 'tranche.create');
+  // Транш — это тоже приём: график платежей по сделке заводится по одному, и
+  // остановка, закрывающая сделку и открытая для её траншей, не закрывает
+  // ничего.
+  assertIntakeOpen(world, 'tranche.create');
   const deal = dealOf(world, spec.dealId);
+  /**
+   * **Тариф берётся здесь и только здесь** — из журнала версий мира, на
+   * `world.now`, то есть на момент создания транша (`@sdelka/pricing`,
+   * `TARIFF_ATTACHMENT = 'tranche_created'`).
+   *
+   * Ни ставки, ни версии в спецификации больше нет: назвать их вызывающий не
+   * может, а значит и разойтись им нечем. Отказ закрытый — версии на этот
+   * момент не было (`noVersionInEffect`), план объявлен в другой валюте
+   * (`planCurrencyNotDeclared`), комиссия не помещается в сумму
+   * (`feeExceedsPrincipal`) или выходит за потолок той же версии
+   * (`feeAboveCeiling`). Ни один из них не «берём умолчание»: тариф, которого
+   * нет, — это задача владельцу, а не молча посчитанный ноль.
+   */
+  const quoted = tariffForNewTranche(world.tariffs, world.now, spec.principal);
+  if (!quoted.ok) {
+    throw new Error(`app.tranche.tariff_unresolved:${spec.trancheId}:${quoted.error}`);
+  }
+  const tariff = quoted.value;
+  /*
+   * Потолок транша: строжайший из потолка версии плана и объявленного
+   * спецификацией. Складываются, а не выбирается один, ровно затем, чтобы
+   * объявление могло только сузить предел: `feeCeilingPolicy` учёта — законная
+   * величина вплоть до единицы, и «транш объявил, что удержать можно всё» не
+   * должно ничего разрешать.
+   */
+  const ceiling: FeeCeilingPolicy =
+    spec.feeCeilingPolicy === undefined
+      ? tariff.plan.ceiling
+      : strictestFeeCeiling(tariff.plan.ceiling, spec.feeCeilingPolicy);
+  /**
+   * Реквизиты, поданные при заведении транша, обязаны принадлежать **участию
+   * получателя этой сделки** (`@sdelka/domain`, `participation.ts`; И13.1).
+   *
+   * Отказ здесь, а не отказом guard'а позже, и в этом весь смысл: без него
+   * реквизиты, подтверждённые по другой сделке, доезжали бы до автомата и
+   * роняли выплату по `g_beneficiary_verified` — то есть «владение не
+   * доказано» вместо «это подтверждение не от этой сделки». Разница та же, что
+   * между «сегодня не сошлось» и «сойтись не может»: первое ждут, второе чинят.
+   */
+  const recipientParticipation = participationKey(
+    spec.dealId,
+    spec.conditionAct.recipient,
+    'recipient',
+  );
+  if (!participationKeysEqual(spec.beneficiary.participation, recipientParticipation)) {
+    throw new Error(`app.tranche.beneficiary_participation_mismatch:${spec.trancheId}`);
+  }
   const facts: TrancheFacts = {
-    requiredAmount: spec.requiredAmount,
+    // Брутто из тарифа, а не из спецификации: сумма, которую обязан перевести
+    // покупатель, — следствие плательщика комиссии, и второго её источника нет.
+    requiredAmount: tariff.required,
     collectedAmount: null,
     // Пересчитывается из журнала в `contextFor` на каждом вызове редьюсера;
     // здесь только начальное значение, до первого поступления.
@@ -400,16 +489,15 @@ export function createTranche(
     // объекту. Второго места, где его можно назвать иначе, не существует.
     expectedCadastralCode: deal.objectCadastralCode,
     observationPolicy: DEFAULT_OBSERVATION_POLICY,
-    beneficiary: toBeneficiaryLock(spec.beneficiary),
+    beneficiary: toBeneficiaryConfirmation(spec.beneficiary),
     preparedBy: actingAccount(authority),
     approvals: Object.freeze([]),
     approvalPolicy: DEFAULT_APPROVAL_POLICY,
     createdOn: spec.createdOn,
     officialRateAtCreation: null,
-    // Условное присваивание, а не `feeCeilingPolicy: spec.feeCeilingPolicy`:
-    // при `exactOptionalPropertyTypes` «поля нет» и «поле пусто» — разные
-    // состояния, и второе означало бы политику, которой не существует.
-    ...(spec.feeCeilingPolicy === undefined ? {} : { feeCeilingPolicy: spec.feeCeilingPolicy }),
+    // Потолок стоит всегда, а не «если объявлен»: он приезжает версией плана,
+    // и версия есть у каждого транша по построению.
+    feeCeilingPolicy: ceiling,
     activePayouts: 0,
     coverageOk: coverageOk(world.journal),
     sourceAccountKnown: spec.sourceAccountKnown,
@@ -420,8 +508,7 @@ export function createTranche(
     trancheId: spec.trancheId,
     state: initialTrancheState(world.now, DEFAULT_DEADLINE_POLICY),
     facts,
-    deductions: spec.deductions,
-    tariffVersionId: spec.tariffVersionId,
+    tariff,
     payouts: Object.freeze([]),
     approvalRecords: Object.freeze([]),
     beneficiary: spec.beneficiary,
@@ -903,7 +990,8 @@ export function convertBalance(
  * Функция ниже считает сумму комиссии для проверок, но ничего не пишет.
  */
 export function feeForTranche(world: World, trancheId: string, gross: Money<CurrencyCode>): Money<CurrencyCode> {
-  return feeOf(gross, trancheOf(world, trancheId).deductions);
+  const runtime = trancheOf(world, trancheId);
+  return feeOf(gross, requireTrancheTariff(trancheId, runtime.tariff).deductions);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1462,11 +1550,11 @@ function applyIntents(
         break;
       case 'lock_beneficiary':
         next = { ...next, beneficiary: lockOnFunding(next.beneficiary) };
-        next = { ...next, facts: { ...next.facts, beneficiary: toBeneficiaryLock(next.beneficiary) } };
+        next = { ...next, facts: { ...next.facts, beneficiary: toBeneficiaryConfirmation(next.beneficiary) } };
         break;
       case 'unlock_beneficiary':
         next = { ...next, beneficiary: { ...next.beneficiary, locked: false } };
-        next = { ...next, facts: { ...next.facts, beneficiary: toBeneficiaryLock(next.beneficiary) } };
+        next = { ...next, facts: { ...next.facts, beneficiary: toBeneficiaryConfirmation(next.beneficiary) } };
         break;
       case 'build_payout_instruction':
         // ⚠ Поручение здесь только **формируется** (`STATE-MACHINES.md` §1.5:
@@ -1600,7 +1688,7 @@ function applyIntents(
             id: journalEntryId(chain.chainId, seq, intent.template),
             occurredAt: new Date(world.now).toISOString(),
           },
-          deductions: next.deductions,
+          deductions: next.tariff === null ? [] : next.tariff.deductions,
           route: options.creditRoute,
         });
         if (projected.kind === 'entry') {
@@ -1634,8 +1722,10 @@ function applyIntents(
         const projected = projectSettlementIntent(intent, {
           meta: { id: journalEntryId(chain.chainId, seq, 'settlement'), occurredAt },
           accrualMeta,
-          deductions: next.deductions,
-          tariffVersionId: next.tariffVersionId,
+          // Одно значение вместо двух полей: удержание и версия, по которой оно
+          // посчитано, приходят из одной котировки, и подставить сюда чужую
+          // версию нечем — отдельного поля для неё больше не существует.
+          tariff: requireTrancheTariff(runtime.trancheId, next.tariff),
           route: options.creditRoute,
         });
         for (const entry of projected.entries) {

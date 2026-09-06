@@ -15,10 +15,12 @@ import {
   type TrancheStatus,
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_DEADLINE_POLICY,
+  beneficiaryConfirmation,
   createPayout,
   dealState,
   initialTrancheState,
   instant,
+  participationKey,
   reduceDeal,
   reducePayout,
   reduceTranche,
@@ -256,11 +258,17 @@ function factsOf(input: RunInput, state: Mutable, now: Instant): TrancheFacts {
       observedAt: instant(now - HOUR_MS),
       rawSourceDigest: FIXTURE_RAW_DIGEST,
     },
-    beneficiary: {
+    // Реквизиты подтверждены для **участия получателя в этой сделке**, а не для
+    // лица (`@sdelka/domain`, `participation.ts`; ROADMAP.md И13.1). Ключ
+    // строится из тех же сделки и получателя, что и весь остальной прогон:
+    // разъехавшись, он дал бы отказ «реквизиты не подтверждены» на фикстуре
+    // счастливого пути.
+    beneficiary: beneficiaryConfirmation({
+      participation: participationKey(input.dealId, input.recipient, 'recipient'),
       status: 'verified',
       locked: input.overrides.beneficiaryLocked,
       lastChangedAt: changedAt,
-    },
+    }),
     preparedBy: 'op-1',
     approvals: [{ userId: 'approver-1' }, { userId: 'approver-2' }],
     approvalPolicy: DEFAULT_APPROVAL_POLICY,

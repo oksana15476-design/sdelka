@@ -40,6 +40,13 @@ export const AuditErrorCode = {
   settingChangeIsNoop: 'audit.setting.change_is_noop',
   /** Прежняя и новая роль совпали: смены не было. */
   roleChangeIsNoop: 'audit.role_change.is_noop',
+  /**
+   * Роль выведена из употребления: под ней можно читать прежние записи, но
+   * нельзя записать новую (`RETIRED_AUDIT_ROLES`). `approver` не говорит, какой
+   * из двух уровней утверждения стоит за записью, и новая запись под ним была
+   * бы той же неполнотой, ради устранения которой перечень и расщеплён.
+   */
+  auditRoleRetired: 'audit.role.retired',
 } as const;
 
 export type AuditErrorCode = (typeof AuditErrorCode)[keyof typeof AuditErrorCode];

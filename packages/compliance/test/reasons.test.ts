@@ -37,6 +37,7 @@ import {
   latinName,
   NOW,
   OTHER_DOCUMENT,
+  PARTICIPATION,
   POLICY,
   POLICY_VERSION,
   profile,
@@ -602,7 +603,7 @@ function changeRequest(
 
 describe('реквизиты выплаты: перечень причин точен', () => {
   it('имя владельца сошлось, доказательства владения нет — названы оба факта', () => {
-    const result = verifyBeneficiaryHolder(requisites, profile(), POLICY, NOW);
+    const result = verifyBeneficiaryHolder(PARTICIPATION, requisites, profile(), POLICY, NOW);
     expect(result.outcome).toBe('name_consistent');
     expect([...result.reasons]).toEqual([
       'compliance.beneficiary.holder_name_consistent',
@@ -612,6 +613,7 @@ describe('реквизиты выплаты: перечень причин то�
 
   it('доказательство владения есть — остаётся только согласованность имени', () => {
     const result = verifyBeneficiaryHolder(
+      PARTICIPATION,
       { ...requisites, ownershipEvidence: evidence(5, 'test_transfer') },
       profile(),
       POLICY,
@@ -645,7 +647,7 @@ describe('реквизиты выплаты: перечень причин то�
 
   it('стороны не уведомлены — названо уведомление, а не второе утверждение', () => {
     const result = applyBeneficiaryChange(
-      { requisites, status: 'name_consistent', locked: true, lastChangedAt: null },
+      { requisites, participation: PARTICIPATION, status: 'name_consistent', locked: true, lastChangedAt: null },
       changeRequest({
         requestedAt: (NOW - 48 * HOUR_MS) as typeof NOW,
         notifiedAt: null,
@@ -663,7 +665,7 @@ describe('реквизиты выплаты: перечень причин то�
 
   it('охлаждение не выдержано — названо охлаждение', () => {
     const result = applyBeneficiaryChange(
-      { requisites, status: 'name_consistent', locked: true, lastChangedAt: null },
+      { requisites, participation: PARTICIPATION, status: 'name_consistent', locked: true, lastChangedAt: null },
       changeRequest({ approvals: ['approver-1'] }),
       { releaseAt: (NOW + 30 * 24 * HOUR_MS) as typeof NOW, dealFunded: true, locked: true },
       approver,
@@ -677,7 +679,7 @@ describe('реквизиты выплаты: перечень причин то�
 
   it('повторной верификации нет — названа именно она', () => {
     const result = applyBeneficiaryChange(
-      { requisites, status: 'name_consistent', locked: false, lastChangedAt: null },
+      { requisites, participation: PARTICIPATION, status: 'name_consistent', locked: false, lastChangedAt: null },
       changeRequest({ reverifiedAt: null }),
       { releaseAt: (NOW + 30 * 24 * HOUR_MS) as typeof NOW, dealFunded: true, locked: false },
       approver,
@@ -693,7 +695,7 @@ describe('реквизиты выплаты: перечень причин то�
 
   it('второго утверждающего нет — названо ожидание второго утверждения', () => {
     const result = applyBeneficiaryChange(
-      { requisites, status: 'name_consistent', locked: true, lastChangedAt: null },
+      { requisites, participation: PARTICIPATION, status: 'name_consistent', locked: true, lastChangedAt: null },
       changeRequest({
         requestedAt: (NOW - 48 * HOUR_MS) as typeof NOW,
         requestedBy: 'approver-1',

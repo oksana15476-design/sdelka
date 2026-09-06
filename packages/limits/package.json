@@ -18,7 +18,9 @@
   "dependencies": {
     "@sdelka/audit": "workspace:*",
     "@sdelka/auth": "workspace:*",
+    "@sdelka/compliance": "workspace:*",
     "@sdelka/domain": "workspace:*",
+    "@sdelka/intake": "workspace:*",
     "@sdelka/ledger": "workspace:*",
     "@sdelka/money": "workspace:*",
     "@sdelka/settings": "workspace:*"

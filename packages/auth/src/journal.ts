@@ -2,7 +2,12 @@ import type { Instant } from '@sdelka/domain';
 import { AuthError, AuthErrorCode } from './errors';
 import type { AuthEventKind, SessionDeniedEvent, SessionEstablishedEvent } from './events';
 import type { AccountId, Fingerprint, SessionId } from './ids';
-import { type LegacyRoleId, LEGACY_ROLE_MAP } from './legacy';
+import {
+  type JournalRoleId,
+  type WritableJournalRoleId,
+  JOURNAL_ROLE_MAP,
+  isRetiredJournalRole,
+} from './legacy';
 import type { NonHumanActorId, RoleId } from './roles';
 import { NON_HUMAN_ACTORS, ROLE_IDS } from './roles';
 import type { PrimaryMethod, SecondFactorKind } from './second-factor';
@@ -70,59 +75,88 @@ export function unjournaledAuthEventKinds(): readonly AuthEventKind[] {
 /* ------------------------------------------------------------------------- */
 
 /**
- * Роль этого пакета → роль журнала.
+ * Роль этого пакета → метка роли в журнале.
  *
- * Обратная сторона `LEGACY_ROLE_MAP`: там сказано, куда переезжает каждое
- * прежнее значение, здесь — каким прежним значением записывается каждое
- * нынешнее. Карта одна, вторая выводится из неё, поэтому разойтись они не могут.
+ * Обратная сторона `JOURNAL_ROLE_MAP`: там сказано, какие роли доступа стоят за
+ * каждой меткой журнала, здесь — какой меткой записывается каждая роль. Карта
+ * одна, вторая выводится из неё, поэтому разойтись они не могут.
  *
- * ⚠ Отображение **неполно, и это не дефект карты**. `AUDIT_ROLES` — восемь
- * значений; `principal`, `auditor`, `client_counsel`, `compliance_officer` и
- * `oracle_operator` в них не переезжают никуда, а `financial_controller` и
- * `head_of_operations` оба записываются как `approver`. Это расхождение
- * `ACTORS.md` §13 (миграция `sdelka.audit_role` — правка `packages/audit`,
- * `packages/compliance` и `packages/db` одним коммитом). Практическое
- * следствие: **изменение настройки владельцем сегодня записать нечем** — у
- * `principal` нет роли журнала, а актор записи обязателен. Молчания здесь нет:
- * `auditRoleFor` возвращает `null`, `requireAuditRole` бросает, а
- * `rolesWithoutAuditRole` перечисляет пробел поимённо.
+ * ## Отображение полно
+ *
+ * До миграции `0023` его не было: `AUDIT_ROLES` знал восемь меток, и пять ролей
+ * — `oracle_operator`, `compliance_officer`, `principal`, `auditor`,
+ * `client_counsel` — не переезжали никуда, а `financial_controller` и
+ * `head_of_operations` обе записывались как `approver`. Практическое следствие
+ * было не крайним случаем, а обычным путём: `manage_settings` есть ровно у
+ * `principal`, то есть **изменение настройки владельцем записать было нечем**
+ * (E16-12, `DECISIONS-REVIEW.md` §K5). Теперь метка есть у каждой роли, и
+ * `rolesWithoutAuditRole` пуст.
+ *
+ * ## Почему выбор метки — два прохода, а не «первая попавшаяся»
+ *
+ * Роль записывается **своим именем**, если журнал его знает; прежнее имя берётся
+ * только тогда, когда своего в журнале нет (`party` → `client`, `oracle_source`
+ * → `oracle`). Без этого правила `financial_controller` мог бы снова уехать в
+ * `approver` — просто потому, что та строка стоит в карте выше.
+ *
+ * Метки, выведенные из употребления, вторым проходом не выбираются никогда:
+ * запись под ними больше не делается (`RETIRED_JOURNAL_ROLES`,
+ * `RETIRED_AUDIT_ROLES` в журнале). Роль, у которой не осталось ни одной
+ * действующей метки, получает `null` — то есть отказ, а не похожую метку.
  */
-function invertLegacyMap(): Readonly<Record<RoleId | NonHumanActorId, LegacyRoleId | null>> {
-  const inverted = new Map<string, LegacyRoleId>();
-  for (const [legacy, targets] of Object.entries(LEGACY_ROLE_MAP) as [
-    LegacyRoleId,
-    readonly (RoleId | NonHumanActorId)[],
-  ][]) {
-    for (const target of targets) {
-      // Первое вхождение выигрывает; двух прежних значений на одну нынешнюю
-      // роль в карте нет, и `danglingLegacyTargets` следит, чтобы цели
-      // существовали.
-      if (!inverted.has(target)) inverted.set(target, legacy);
-    }
-  }
-  const out = {} as Record<RoleId | NonHumanActorId, LegacyRoleId | null>;
+function invertJournalMap(): Readonly<
+  Record<RoleId | NonHumanActorId, WritableJournalRoleId | null>
+> {
+  const labels = Object.keys(JOURNAL_ROLE_MAP) as JournalRoleId[];
+  const names = (label: JournalRoleId, role: string): boolean =>
+    (JOURNAL_ROLE_MAP[label] as readonly string[]).includes(role);
+  const usable = (label: JournalRoleId): label is WritableJournalRoleId =>
+    !isRetiredJournalRole(label);
+  const out = {} as Record<RoleId | NonHumanActorId, WritableJournalRoleId | null>;
   for (const role of [...ROLE_IDS, ...NON_HUMAN_ACTORS]) {
-    out[role] = inverted.get(role) ?? null;
+    // Проход 1 — собственное имя роли: оно же метка журнала.
+    const own = labels.find(
+      (label): label is WritableJournalRoleId =>
+        label === role && usable(label) && names(label, role),
+    );
+    // Проход 2 — действующая метка, называющая эту роль. Прежнее имя годится:
+    // `client` и `oracle` из употребления не выведены, речь только об имени.
+    const inherited = labels.find(
+      (label): label is WritableJournalRoleId => usable(label) && names(label, role),
+    );
+    out[role] = own ?? inherited ?? null;
   }
   return Object.freeze(out);
 }
 
-export const AUDIT_ROLE_BY_ROLE: Readonly<Record<RoleId | NonHumanActorId, LegacyRoleId | null>> =
-  invertLegacyMap();
+export const AUDIT_ROLE_BY_ROLE: Readonly<
+  Record<RoleId | NonHumanActorId, WritableJournalRoleId | null>
+> = invertJournalMap();
 
-/** Роль журнала для роли доступа. `null` — соответствия нет, см. оговорку выше. */
-export function auditRoleFor(roleId: RoleId | NonHumanActorId): LegacyRoleId | null {
-  return AUDIT_ROLE_BY_ROLE[roleId];
+/**
+ * Метка роли в журнале. `null` — соответствия нет, и это факт, а не умолчание.
+ *
+ * `?? null` не украшение: роль доезжает сюда и строкой из хранилища, где типов
+ * нет. Без него неизвестное значение возвращалось бы как `undefined`, то есть
+ * проходило бы проверку `=== null` в `requireAuditRole` мимо — и запись
+ * уходила бы в вечный журнал вовсе без роли.
+ */
+export function auditRoleFor(roleId: RoleId | NonHumanActorId): WritableJournalRoleId | null {
+  return AUDIT_ROLE_BY_ROLE[roleId] ?? null;
 }
 
 /**
  * То же, но отказом.
  *
- * Запись журнала без актора невозможна, поэтому «роли журнала нет» обязано
+ * Запись журнала без актора невозможна, поэтому «метки журнала нет» обязано
  * останавливать запись, а не превращаться в подходящую по форме чужую роль:
  * `principal`, записанный как `operator`, — это ложь в вечном журнале.
+ *
+ * Сегодня отказ недостижим с любой ролью из перечня — и это ровно та причина, по
+ * которой он остаётся: перечень ролей растёт, а роль, заведённая без метки
+ * журнала, обязана останавливаться здесь, а не подставляться похожей.
  */
-export function requireAuditRole(roleId: RoleId | NonHumanActorId): LegacyRoleId {
+export function requireAuditRole(roleId: RoleId | NonHumanActorId): WritableJournalRoleId {
   const mapped = auditRoleFor(roleId);
   if (mapped === null) {
     throw new AuthError(AuthErrorCode.auditRoleUnmapped, { roleId });
@@ -130,11 +164,33 @@ export function requireAuditRole(roleId: RoleId | NonHumanActorId): LegacyRoleId
   return mapped;
 }
 
-/** Роли, которые сегодня нечем записать в журнал. Пусто — расхождение закрыто. */
+/** Роли, которые нечем записать в журнал. Пусто — расхождение закрыто. */
 export function rolesWithoutAuditRole(): readonly (RoleId | NonHumanActorId)[] {
   return Object.freeze(
     [...ROLE_IDS, ...NON_HUMAN_ACTORS].filter((role) => AUDIT_ROLE_BY_ROLE[role] === null),
   );
+}
+
+/**
+ * Роли, делящие одну метку журнала. Пусто — иначе запись не говорит, кто её
+ * сделал.
+ *
+ * Это и был дефект `approver`: две роли с разными полномочиями и разными
+ * уровнями утверждения записывались одной меткой, и «утвердил approver» не
+ * отвечало на вопрос, кто утвердил (`ACTORS.md` §1 расхождение №5). Перечень, а
+ * не исключение: вызывающий — тест, и ему нужны все пары, а не первая.
+ */
+export function collidingAuditRoles(): readonly string[] {
+  const seen = new Map<WritableJournalRoleId, RoleId | NonHumanActorId>();
+  const collisions: string[] = [];
+  for (const role of [...ROLE_IDS, ...NON_HUMAN_ACTORS]) {
+    const label = AUDIT_ROLE_BY_ROLE[role];
+    if (label === null) continue;
+    const first = seen.get(label);
+    if (first === undefined) seen.set(label, role);
+    else collisions.push(`${label}:${first}+${role}`);
+  }
+  return Object.freeze(collisions);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -212,8 +268,8 @@ export interface RoleChangeJournalEntry {
   readonly subjectAccount: AccountId;
   readonly recordedAt: Instant;
   /** Роли журнала, а не доступа: перечни разные, см. `AUDIT_ROLE_BY_ROLE`. */
-  readonly previous: LegacyRoleId | null;
-  readonly next: LegacyRoleId | null;
+  readonly previous: WritableJournalRoleId | null;
+  readonly next: WritableJournalRoleId | null;
   readonly order: RoleChangeOrderRef;
   readonly reasonKey: RoleChangeReasonKey;
 }
@@ -270,11 +326,13 @@ export function roleChangeEntry(input: {
   const previous = input.from === null ? null : requireAuditRole(input.from);
   const next = input.to === null ? null : requireAuditRole(input.to);
   if (previous === next) {
-    // Разные роли доступа, одна роль журнала: `financial_controller` и
-    // `head_of_operations` обе записываются как `approver`. Записывать это
-    // сменой нельзя — в журнале ничего не поменялось бы, и цепочка отвергла бы
-    // запись как пустую. Расхождение перечней (`ACTORS.md` §13) обязано быть
-    // видно здесь, а не превращаться в тихо потерянную смену роли.
+    // Разные роли доступа, одна метка журнала. Так было с `financial_controller`
+    // и `head_of_operations` — обе записывались как `approver`, и настоящая
+    // смена уровня утверждения превращалась в «из approver в approver», то есть
+    // в запись, которой цепочка не примет (`roleChangeIsNoop`). Сегодня меток
+    // хватает на все роли (`collidingAuditRoles` пуст), и ветвь недостижима;
+    // остаётся она затем, чтобы следующее схлопывание было видно здесь, а не
+    // превращалось в тихо потерянную смену роли.
     throw new AuthError(AuthErrorCode.auditRoleUnmapped, {
       from: String(input.from),
       to: String(input.to),

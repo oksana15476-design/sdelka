@@ -1,6 +1,14 @@
-import { LedgerError, LedgerErrorCode, accountBalance, clientFreeAccount } from '@sdelka/ledger';
+import {
+  DEFAULT_FEE_CEILING,
+  LedgerError,
+  LedgerErrorCode,
+  accountBalance,
+  clientFreeAccount,
+} from '@sdelka/ledger';
+import { PricingError, PricingErrorCode, tariffPlan } from '@sdelka/pricing';
 import { feeCeilingPolicy } from '@sdelka/domain';
 import {
+  trancheOf,
   trancheOptions,
   trancheStatusOf,
 } from '@sdelka/app';
@@ -25,8 +33,9 @@ import { toPayingOut } from './support/paths';
  * более широким пределом.
  *
  * Сценарий идёт настоящим путём: сделка, транш, деньги, условие, две подписи,
- * выплата. Удержание считает проекция расчёта из удержаний транша
- * (`PLATFORM_FEE`, 1,5 % — 300 000 из 20 000 000 тетри).
+ * выплата. Удержание считает проекция расчёта из тарифа транша — версии плана,
+ * действовавшей в момент его создания (`TARIFF_SERIES`, 1,5 % — 300 000 из
+ * 20 000 000 тетри).
  */
 const SETTLED = trancheOptions(POLICY_VERSION, { payoutResponse: BANK_RESPONSE_SOURCE });
 
@@ -86,24 +95,58 @@ describe('потолок удержания транша доезжает до �
     );
   });
 
-  it('политика транша только сужает: объявленный потолок в единицу ничего не разрешает', async () => {
+  /**
+   * ⚠ **Эта проба изменилась вместе с подключением журнала версий тарифа, и
+   * изменение названо вслух.** Прежде она заводила транш с удержанием 5 % и
+   * объявленным потолком в единицу и проверяла, что запись расчёта не
+   * послушалась объявления. Сегодня ставка приходит **версией тарифного плана**
+   * (`@sdelka/pricing`), а план с пятипроцентной ставкой не собирается вовсе:
+   * потолок плана сам сужен до жёстких двух процентов учёта, и ставка выше него
+   * отвергается на записи настройки, а не на живом транше. То есть проба «5 %
+   * дошли до записи» стала невыразимой — не потому, что правило ослабили, а
+   * потому, что запрет переехал на рубеж раньше.
+   *
+   * Свойство при этом проверяется двумя половинами, и обе здесь:
+   *
+   *  1. пятипроцентный план не существует как величина — отказ конструктора;
+   *  2. объявленный траншем потолок в единицу не расширяет предел версии:
+   *     на транше остаётся потолок плана, а не объявленный.
+   *
+   * Третья половина — та же дисциплина на самой записи учёта, куда величина
+   * может прийти из хранилища мимо конструктора, — стоит в
+   * `packages/ledger/test/fee-ceiling.test.ts` («объявленный потолок только
+   * сужает предел, но не расширяет его»).
+   */
+  it('объявленный потолок в единицу ничего не разрешает: ни плану, ни траншу', async () => {
+    // (1) Величины не существует: ставка выше потолка того же плана.
+    let raised: unknown = null;
+    try {
+      tariffPlan({ rateBp: 500, currency: GEL, ceiling: EVERYTHING });
+    } catch (error) {
+      raised = error;
+    }
+    expect(raised).toBeInstanceOf(PricingError);
+    expect((raised as PricingError).code).toBe(PricingErrorCode.rateAboveCeiling);
+
+    // (2) Объявление траншем ничего не расширяет: на транше остаётся потолок
+    // версии плана — жёсткие два процента, а не объявленная единица.
     const path = await toPayingOut({
       dealId: 'deal-ceiling-wide',
       trancheId: 'tranche-ceiling-wide',
       feeCeilingPolicy: EVERYTHING,
-      // 5 % — сверх жёсткого предела учёта. Транш объявил, что удержать можно
-      // всё; запись обязана считать по строжайшему из двух.
-      deductions: [{ key: 'platform_fee', rate: rational(500n, 10_000n) }],
     });
-    expectLedgerCode(
-      () =>
-        applyTrancheEvent(
-          path.world,
-          'tranche-ceiling-wide',
-          { type: 'payout_result', outcome: 'settled' },
-          SETTLED,
-        ),
-      LedgerErrorCode.entryFeeExceedsCeiling,
+    expect(trancheOf(path.world, 'tranche-ceiling-wide').facts.feeCeilingPolicy).toEqual(
+      DEFAULT_FEE_CEILING,
+    );
+    // И расчёт идёт по тарифу версии — 1,5 %, а не «удержать можно всё».
+    const world = applyTrancheEvent(
+      path.world,
+      'tranche-ceiling-wide',
+      { type: 'payout_result', outcome: 'settled' },
+      SETTLED,
+    ).world;
+    expect(accountBalance(world.journal, clientFreeAccount(path.sellerKey), GEL).minor).toBe(
+      19_700_000n,
     );
   });
 });

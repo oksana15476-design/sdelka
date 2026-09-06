@@ -75,6 +75,9 @@ importers:
       '@sdelka/oracle':
         specifier: workspace:*
         version: link:../oracle
+      '@sdelka/pricing':
+        specifier: workspace:*
+        version: link:../pricing
       '@sdelka/settings':
         specifier: workspace:*
         version: link:../settings
@@ -169,6 +172,9 @@ importers:
       '@sdelka/oracle':
         specifier: workspace:*
         version: link:../oracle
+      '@sdelka/pricing':
+        specifier: workspace:*
+        version: link:../pricing
       '@sdelka/settings':
         specifier: workspace:*
         version: link:../settings
@@ -199,9 +205,15 @@ importers:
       '@sdelka/auth':
         specifier: workspace:*
         version: link:../auth
+      '@sdelka/compliance':
+        specifier: workspace:*
+        version: link:../compliance
       '@sdelka/domain':
         specifier: workspace:*
         version: link:../domain
+      '@sdelka/intake':
+        specifier: workspace:*
+        version: link:../intake
       '@sdelka/ledger':
         specifier: workspace:*
         version: link:../ledger

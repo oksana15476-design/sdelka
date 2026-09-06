@@ -43,7 +43,18 @@ export function fp(seed: number): string {
 }
 
 export const OPERATOR: AuditActor = auditActor('operator-1', 'operator', 'run_screening');
-export const APPROVER: AuditActor = auditActor('approver-1', 'approver', 'approve_payout');
+/**
+ * Утверждающий — **уровень 1** (`financial_controller`), а не «approver».
+ *
+ * Прежняя метка выведена из употребления (`RETIRED_AUDIT_ROLES`): одна роль на
+ * оба уровня не отвечала на вопрос, кто именно утвердил. Имя учётной записи
+ * оставлено прежним — на нём стоят утверждения сценариев о фактах домена.
+ */
+export const APPROVER: AuditActor = auditActor(
+  'approver-1',
+  'financial_controller',
+  'approve_payout',
+);
 export const ANALYST: AuditActor = auditActor(
   'analyst-1',
   'compliance_analyst',

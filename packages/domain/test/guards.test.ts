@@ -22,9 +22,11 @@ import {
   BUYER_PARTY_ID,
   CONDITION_ACT,
   CREATED_ON,
+  DEAL_ID,
   MATCHING_STATEMENT,
   NOW,
   RECIPIENT_PARTY_ID,
+  beneficiary,
   facts,
   observation,
 } from './support/facts';
@@ -42,7 +44,10 @@ function check(
   event: TrancheEvent = fundsReceived,
   now = NOW,
 ): boolean {
-  return evaluateGuard(guard, { facts: facts(overrides), event, now });
+  // `dealId` — из той же фикстуры, что и участие получателя в фактах: guard
+  // строит ключ участия сам, и разъехавшийся `dealId` означал бы «реквизиты
+  // другой сделки», а не «реквизиты не подтверждены».
+  return evaluateGuard(guard, { facts: facts(overrides), event, now, dealId: DEAL_ID });
 }
 
 describe('каждый guard проходит и не проходит', () => {
@@ -415,19 +420,19 @@ describe('каждый guard проходит и не проходит', () => {
     expect(check('g_beneficiary_locked', {})).toBe(true);
     expect(
       check('g_beneficiary_locked', {
-        beneficiary: { status: 'verified', locked: false, lastChangedAt: null },
+        beneficiary: beneficiary({ status: 'verified', locked: false, lastChangedAt: null }),
       }),
     ).toBe(false);
     const justChanged = instant(NOW - BENEFICIARY_PRE_RELEASE_BLACKOUT_MS + 1);
     expect(
       check('g_beneficiary_locked', {
-        beneficiary: { status: 'verified', locked: true, lastChangedAt: justChanged },
+        beneficiary: beneficiary({ status: 'verified', locked: true, lastChangedAt: justChanged }),
       }),
     ).toBe(false);
     const changedLongAgo = instant(NOW - BENEFICIARY_PRE_RELEASE_BLACKOUT_MS);
     expect(
       check('g_beneficiary_locked', {
-        beneficiary: { status: 'verified', locked: true, lastChangedAt: changedLongAgo },
+        beneficiary: beneficiary({ status: 'verified', locked: true, lastChangedAt: changedLongAgo }),
       }),
     ).toBe(true);
     // Guard про запертость и запретное окно, а не про владение: реквизиты,
@@ -436,7 +441,7 @@ describe('каждый guard проходит и не проходит', () => {
     // невозможно проверить поимённо, как требует §7.
     expect(
       check('g_beneficiary_locked', {
-        beneficiary: { status: 'name_consistent', locked: true, lastChangedAt: null },
+        beneficiary: beneficiary({ status: 'name_consistent', locked: true, lastChangedAt: null }),
       }),
     ).toBe(true);
   });
@@ -448,7 +453,7 @@ describe('каждый guard проходит и не проходит', () => {
     for (const status of ['draft', 'name_consistent', 'blocked'] as const) {
       expect(
         check('g_beneficiary_verified', {
-          beneficiary: { status, locked: true, lastChangedAt: null },
+          beneficiary: beneficiary({ status, locked: true, lastChangedAt: null }),
         }),
       ).toBe(false);
     }

@@ -260,13 +260,13 @@ describe('смена роли', () => {
     const chain = change({
       kind: 'role_changed',
       previous: 'operator',
-      next: 'approver',
+      next: 'financial_controller',
       order: { kind: 'ordered_by', actor: CONSOLE_ACTOR },
       reasonKey: 'access.role.reassigned',
     });
     const body = chain.records[1]?.body;
     expect(body?.kind === 'role_changed' && body.previous).toBe('operator');
-    expect(body?.kind === 'role_changed' && body.next).toBe('approver');
+    expect(body?.kind === 'role_changed' && body.next).toBe('financial_controller');
     expect(verifyChain(chain).intact).toBe(true);
   });
 
@@ -308,7 +308,7 @@ describe('смена роли', () => {
           body: {
             kind: 'role_changed',
             previous: 'operator',
-            next: 'approver',
+            next: 'financial_controller',
             order: { kind: 'ordered_by', actor: CONSOLE_ACTOR },
             reasonKey: 'access.role.reassigned',
           },
@@ -540,7 +540,7 @@ describe('новые виды идут через ту же дверь, что �
       body: {
         kind: 'role_changed',
         previous: 'operator',
-        next: 'approver',
+        next: 'financial_controller',
         order: { kind: 'ordered_by', actor: CONSOLE_ACTOR },
         reasonKey: 'access.role.reassigned',
       },

@@ -6,7 +6,7 @@ import {
   compare,
   convertAtRate,
 } from '@sdelka/money';
-import type { BeneficiaryLock } from './beneficiary';
+import { type BeneficiaryConfirmation, beneficiaryForParticipation } from './beneficiary';
 import { type ConditionAct, isConditionActValid } from './condition-act';
 import { type Instant, HOUR } from './instant';
 import {
@@ -16,6 +16,7 @@ import {
   allStatementFieldsMatch,
   observationSatisfies,
 } from './observation';
+import { type ParticipationKey, participationKey } from './participation';
 import { type PartyRef, isSameParty } from './party';
 import type { FeeCeilingPolicy } from './tariff';
 import type { TrancheEvent } from './tranche-events';
@@ -336,7 +337,20 @@ export interface TrancheFacts {
    * политики, действовавшую в момент принятия.
    */
   readonly observationPolicy: ObservationPolicy;
-  readonly beneficiary: BeneficiaryLock;
+  /**
+   * Подтверждение реквизитов выплаты **участия получателя этой сделки**, а не
+   * лица вообще (`participation.ts`, ROADMAP.md И13.1).
+   *
+   * `null` — подтверждения нет, и это законное состояние: у транша до акта
+   * получателя получателя ещё нет, а у мира, поднятого из снимка, реквизитов
+   * нет вовсе. Оба guard'а на пустом подтверждении отказывают — закрыто.
+   *
+   * Подтверждение **чужого** участия здесь неотличимо от отсутствующего: его
+   * разрешает не сравнение полей, а `beneficiaryForParticipation` по ключу,
+   * который домен строит себе сам из сделки и получателя из акта. Второго
+   * места, откуда взять ответ «чьё это подтверждение», не существует.
+   */
+  readonly beneficiary: BeneficiaryConfirmation | null;
   /** Учётная запись, готовившая операцию: она не может быть утверждающей. */
   readonly preparedBy: string | null;
   readonly approvals: readonly Approval[];
@@ -373,6 +387,14 @@ export interface GuardInput {
   readonly facts: TrancheFacts;
   readonly event: TrancheEvent;
   readonly now: Instant;
+  /**
+   * Сделка, по которой идёт разбор. Приходит **из `TrancheContext`**, а не из
+   * фактов, и это принципиально: ключ участия строится здесь, внутри домена, из
+   * той же сделки, по которой собирается вся запись. Лежи он в фактах — его
+   * подавало бы приложение, то есть ответ на вопрос «чьё это участие» давал бы
+   * тот же, кто задаёт вопрос (ср. `payerAccountKey` в `tranche.ts`).
+   */
+  readonly dealId: string;
 }
 
 /**
@@ -476,6 +498,35 @@ function effectiveConditionAct(input: GuardInput): ConditionAct | null {
     : input.facts.conditionAct;
 }
 
+/**
+ * Участие получателя **этой** сделки: сделка из контекста, сторона — из акта об
+ * условии. Ни одна половина ключа не приходит свободным параметром.
+ *
+ * Получатель берётся из акта по той же причине, по которой из акта его берёт
+ * подтверждение сторон в `tranche.ts`: акт привязан к состоянию на выходе из
+ * `pending`, редьюсер отвергает подмену акта до вычисления guard'ов
+ * (`conditionActSubstituted`), и получателем расчёта не может оказаться никто,
+ * кроме того, кто определил условие (ст. 27(2), CORE.md Ф13).
+ */
+function recipientParticipation(input: GuardInput): ParticipationKey | null {
+  const act = effectiveConditionAct(input);
+  if (act === null) return null;
+  return participationKey(input.dealId, act.recipient, 'recipient');
+}
+
+/**
+ * Подтверждение реквизитов для участия получателя этой сделки — или `null`.
+ *
+ * Единственная дверь к `facts.beneficiary`: читать это поле напрямую в guard'ах
+ * нельзя, иначе вернётся ровно та дыра, ради которой заведено участие —
+ * подтверждение по чужой сделке, принятое как своё (И13.1).
+ */
+function beneficiaryOfParticipation(input: GuardInput): BeneficiaryConfirmation | null {
+  const key = recipientParticipation(input);
+  if (key === null) return null;
+  return beneficiaryForParticipation(input.facts.beneficiary, key);
+}
+
 export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> = Object.freeze({
   g_amount_sufficient: ({ facts, event }) => {
     if (event.type !== 'funds_received') return false;
@@ -541,11 +592,24 @@ export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> =
     if (required === null) return false;
     return distinctApprovers(facts) >= required;
   },
-  g_beneficiary_locked: ({ facts, now }) => {
-    if (!facts.beneficiary.locked) return false;
-    const changedAt = facts.beneficiary.lastChangedAt;
+  /**
+   * Реквизиты заперты и не менялись в запретном окне — **по этому участию**.
+   *
+   * Блокировка наступает при финансировании **сделки** (Ф15), и потому она
+   * свойство участия, а не лица: сделка Б того же получателя не профинансирована,
+   * и запирать там нечего. Обратная асимметрия — у отказа: `blocked` в статусе
+   * выводится из материала о **личности** (имя владельца счёта против профиля
+   * стороны), поэтому воспроизводится на каждом новом участии сам собой, а
+   * `verified` без нового доказательства владения не воспроизводится никогда.
+   * Положительный вывод не переносится, отрицательный переносится — и это
+   * единственно безопасная сторона обеих ошибок.
+   */
+  g_beneficiary_locked: (input) => {
+    const confirmation = beneficiaryOfParticipation(input);
+    if (confirmation === null || !confirmation.locked) return false;
+    const changedAt = confirmation.lastChangedAt;
     if (changedAt === null) return true;
-    return now - changedAt >= BENEFICIARY_PRE_RELEASE_BLACKOUT_MS;
+    return input.now - changedAt >= BENEFICIARY_PRE_RELEASE_BLACKOUT_MS;
   },
   /**
    * Доказательство владения счётом (ROADMAP.md И13.1: «доказательства владения
@@ -556,8 +620,14 @@ export const GUARDS: Readonly<Record<GuardId, (input: GuardInput) => boolean>> =
    * грузинского необратима, и разные люди сходятся в одной латинской форме.
    * `applyBeneficiaryChange` возвращает реквизиты именно в `name_consistent`,
    * то есть после смены реквизитов выплата заперта до повторной верификации.
+   *
+   * Статус читается **у подтверждения этого участия**, а не у поля фактов: пока
+   * подтверждение было одним значением на транш, `verified`, полученный по
+   * сделке А, открывал выплату по сделке Б тому же лицу, и комплаенс был закрыт
+   * ровно наполовину — на той половине, где злоумышленник, один раз прошедший
+   * проверку, получал подтверждённый канал вывода навсегда (И13.1).
    */
-  g_beneficiary_verified: ({ facts }) => facts.beneficiary.status === 'verified',
+  g_beneficiary_verified: (input) => beneficiaryOfParticipation(input)?.status === 'verified',
   g_no_active_payout: ({ facts }) => facts.activePayouts === 0,
   /**
    * Сравнение с валютой транша, а не только с нулём: собранное в другой валюте

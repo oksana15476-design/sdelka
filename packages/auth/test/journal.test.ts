@@ -6,6 +6,7 @@ import {
   type AuditRecordKind,
   type AuditSecondFactorKind,
   type RoleChangedBody,
+  RETIRED_AUDIT_ROLES,
   type SessionDeniedBody,
   type SessionEstablishedBody,
   appendRecord,
@@ -15,10 +16,12 @@ import {
   auditRef,
   auditToken,
   genesisChain,
+  policyRef,
   verifyChain,
 } from '@sdelka/audit';
 import { describe, expect, it } from 'vitest';
 import {
+  AUDIT_ROLE_BY_ROLE,
   AUTH_EVENT_JOURNAL,
   AUTH_EVENT_KINDS,
   AUTH_REASON_KEYS,
@@ -27,14 +30,17 @@ import {
   AuthErrorCode,
   PRIMARY_METHODS,
   type PrimaryMethod,
+  RETIRED_JOURNAL_ROLES,
   ROLE_CHANGE_REASON_KEYS,
   type RoleChangeJournalEntry,
+  type RoleId,
   SECOND_FACTOR_KINDS,
   type SecondFactorKind,
   type SessionDeniedJournalEntry,
   type SessionEstablishedJournalEntry,
   accountId,
   auditRoleFor,
+  collidingAuditRoles,
   fingerprint,
   personId,
   requireAuditRole,
@@ -213,9 +219,10 @@ describe('вход ложится в цепочку', () => {
   });
 
   it('роль сессии записывается ролью журнала', () => {
-    // `financial_controller` → `approver`: перечни разные, и перевод сделан
-    // картой, а не подстановкой похожего имени.
-    expect(requireAuditRole(session.roleId)).toBe('approver');
+    // `financial_controller` → `financial_controller`. До миграции `0023` здесь
+    // стоял `approver` — одна метка на оба уровня утверждения, из-за чего запись
+    // не отвечала, кто именно утвердил (`ACTORS.md` §1 расхождение №5).
+    expect(requireAuditRole(session.roleId)).toBe('financial_controller');
   });
 });
 
@@ -308,23 +315,60 @@ describe('смена роли ложится одной записью', () => {
   });
 });
 
-describe('расхождение перечней ролей названо, а не спрятано', () => {
-  it('роли без соответствия в журнале перечислены поимённо', () => {
-    // `ACTORS.md` §13: миграция `sdelka.audit_role` не сделана. Практическое
-    // следствие — изменение настройки владельцем (`principal`) записать нечем.
-    expect([...rolesWithoutAuditRole()]).toEqual([
-      'oracle_operator',
-      'compliance_officer',
-      'principal',
-      'auditor',
-      'client_counsel',
-    ]);
+describe('расхождение перечней ролей закрыто, а не спрятано', () => {
+  it('ролей без метки журнала не осталось ни одной', () => {
+    // Было пять (`oracle_operator`, `compliance_officer`, `principal`,
+    // `auditor`, `client_counsel`), и практическое следствие было не крайним
+    // случаем, а обычным путём: `manage_settings` есть ровно у `principal`, то
+    // есть изменение настройки владельцем записать было нечем (E16-12).
+    expect([...rolesWithoutAuditRole()]).toEqual([]);
   });
 
-  it('роль без соответствия — отказ, а не похожая роль', () => {
-    expect(auditRoleFor('principal')).toBeNull();
+  it('каждая роль доступа записывается **своей** меткой', () => {
+    // Карта целиком, значением: вывод её из `JOURNAL_ROLE_MAP` не должен
+    // молча поменяться — метка роли уходит в вечный журнал.
+    expect({ ...AUDIT_ROLE_BY_ROLE }).toEqual({
+      party: 'client',
+      representative: 'representative',
+      operator: 'operator',
+      oracle_operator: 'oracle_operator',
+      compliance_analyst: 'compliance_analyst',
+      compliance_officer: 'compliance_officer',
+      financial_controller: 'financial_controller',
+      head_of_operations: 'head_of_operations',
+      support: 'support',
+      principal: 'principal',
+      auditor: 'auditor',
+      client_counsel: 'client_counsel',
+      system: 'system',
+      oracle_source: 'oracle',
+    });
+  });
+
+  it('двух ролей на одну метку не осталось', () => {
+    // Обратная сторона предыдущего: пока `financial_controller` и
+    // `head_of_operations` делили `approver`, запись «утвердил approver» не
+    // говорила, кто утвердил, и «четыре глаза» по журналу не доказывались.
+    expect([...collidingAuditRoles()]).toEqual([]);
+  });
+
+  it('выведенная из употребления метка не выдаётся ни одной роли', () => {
+    // `approver` остаётся в перечне журнала ради прежних записей и не
+    // назначается никому: подстановка её новой записи вернула бы ровно ту
+    // неполноту, ради устранения которой перечень и расщеплён.
+    expect(Object.values(AUDIT_ROLE_BY_ROLE)).not.toContain('approver');
+    expect([...RETIRED_JOURNAL_ROLES]).toEqual([...RETIRED_AUDIT_ROLES]);
+  });
+
+  it('роль без метки — отказ, а не похожая роль', () => {
+    // Ролей без метки сегодня нет, поэтому отказ проверяется значением,
+    // которого в перечне нет вовсе: так в этот код приходит роль из хранилища
+    // и из чужого адаптера, где типов нет. Отказ обязан остаться отказом —
+    // `undefined` вместо метки ушёл бы в вечный журнал записью без роли.
+    const unknown = 'notary' as RoleId;
+    expect(auditRoleFor(unknown)).toBeNull();
     try {
-      requireAuditRole('principal');
+      requireAuditRole(unknown);
       throw new Error('ожидался отказ');
     } catch (error) {
       expect(error).toBeInstanceOf(AuthError);
@@ -332,24 +376,51 @@ describe('расхождение перечней ролей названо, а 
     }
   });
 
-  it('две роли доступа с одной ролью журнала не записываются сменой', () => {
-    // `financial_controller` → `head_of_operations` — настоящая смена, но обе
-    // роли записываются как `approver`. Записать это сменой значит записать
-    // «из approver в approver», то есть неправду; цепочка такую запись и не
-    // примет (`roleChangeIsNoop` в `@sdelka/audit`).
-    try {
-      roleChangeEntry({
-        account: accountId('acc-1'),
-        from: 'financial_controller',
-        to: 'head_of_operations',
-        order: { kind: 'ordered_by', accountId: accountId('acc-admin'), roleId: 'principal' },
-        at: NOW,
-      });
-      throw new Error('ожидался отказ');
-    } catch (error) {
-      expect(error).toBeInstanceOf(AuthError);
-      expect((error as AuthError).code).toBe(AuthErrorCode.auditRoleUnmapped);
-    }
+  it('владелец записывает изменение настройки собой — блокер E16-12 снят', () => {
+    // Проверка по существу, а не по карте: актор собирается тем же
+    // конструктором, что и в проде, и запись ложится в цепочку.
+    const actor = auditActor('acc-principal', requireAuditRole('principal'), 'manage_settings');
+    expect(actor.roleId).toBe('principal');
+    const appended = appendRecord(chain(), {
+      recordId: 'rec-setting',
+      recordedAt: auditInstant(NOW),
+      actor,
+      subject: auditRef('setting', 'deal_currencies'),
+      body: {
+        kind: 'setting_changed',
+        change: 'introduced',
+        setting: auditToken('deal_currencies'),
+        next: Object.freeze(['GEL']),
+        orderedBy: actor,
+        reasonKey: 'settings.reason.owner_decision',
+        policy: policyRef('deal_currencies/2026-09-04.1'),
+        effectiveFrom: auditInstant(NOW),
+      },
+    });
+    expect(appended.records[1]?.actor.roleId).toBe('principal');
+    expect(verifyChain(appended).intact).toBe(true);
+  });
+
+  it('смена уровня утверждения записывается сменой, а не пустой записью', () => {
+    // До `0023` это был отказ: обе роли записывались как `approver`, и
+    // настоящая смена уровня превращалась в «из approver в approver».
+    const entry = roleChangeEntry({
+      account: accountId('acc-1'),
+      from: 'financial_controller',
+      to: 'head_of_operations',
+      order: { kind: 'ordered_by', accountId: accountId('acc-admin'), roleId: 'principal' },
+      at: NOW,
+    });
+    expect(entry.previous).toBe('financial_controller');
+    expect(entry.next).toBe('head_of_operations');
+    const appended = appendRecord(chain(), {
+      recordId: 'rec-level',
+      recordedAt: auditInstant(entry.recordedAt),
+      actor: SYSTEM,
+      subject: auditRef('account', entry.subjectAccount),
+      body: roleChangedBody(entry),
+    });
+    expect(verifyChain(appended).intact).toBe(true);
   });
 
   it('нечеловеческие акторы соответствие имеют', () => {

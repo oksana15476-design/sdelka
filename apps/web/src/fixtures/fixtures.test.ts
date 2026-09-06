@@ -2,7 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { isFullyCovered } from '@sdelka/ledger';
 import { MONEY_STATES } from '@/view/money-state';
 import { SCENARIOS } from './scenarios';
-import { TASK_TYPES, getAccount, getDeal, getOpsQueue, listDeals, reviewKindOf, worldJournal } from './store';
+import {
+  TASK_TYPES,
+  getAccount,
+  getDeal,
+  getOpsQueue,
+  listDeals,
+  now as fixtureNow,
+  reviewKindOf,
+  worldJournal,
+} from './store';
+import { closingRuleOf, decidesAnything, evidenceOf, outcomesOf } from '@/ui/ops-work';
 
 /**
  * Фикстуры проверяются автоматом, а не глазами: если событие не проходит
@@ -126,7 +136,7 @@ describe('фикстуры', () => {
     const ops = await getOpsQueue();
     const task = ops.tasks.find((item) => item.type === 'intakeUnderpayment');
     expect(task).toBeDefined();
-    const deal = await getDeal(task?.dealId ?? '');
+    const deal = await getDeal(task?.subject.kind === 'deal' ? task.subject.dealId : '');
     expect(deal?.moneyState).toBe('partiallyFunded');
     // Недостача в карточке — та же величина, что в учёте, и в той же валюте.
     const shortfall = task?.facts.find((fact) => fact.labelKey === 'ops.fact.shortfall');
@@ -135,6 +145,41 @@ describe('фикстуры', () => {
     expect(shortfall?.kind === 'money' ? shortfall.value.currency : null).toBe(
       deal?.required.currency,
     );
+  });
+
+  it('простой заявки на вывод не выдумывает ни сделки, ни суммы', async () => {
+    // Три отсутствия из `ReviewTask`: сделки у вывода нет вовсе, лица нет (у
+    // заявки известен ключ счёта, а не идентификатор лица), суммы ранжирования
+    // нет — пересчёт требует официального курса. Проверяется типом предмета:
+    // подставить сюда чужую сделку нельзя, не поменяв объединение.
+    const ops = await getOpsQueue();
+    const task = ops.tasks.find((item) => item.type === 'withdrawalStalled');
+    expect(task).toBeDefined();
+    expect(task?.subject.kind).toBe('withdrawal');
+    expect(task?.claimedBy).toBeNull();
+    // Возраст идёт от входа в состояние, срок — своей дорогой. Именно поэтому
+    // задача существует: по сроку она **не просрочена** и без возраста
+    // выглядела бы свежей.
+    const now = fixtureNow();
+    expect(task?.ageMs ?? 0).toBeGreaterThan(48 * 3_600_000);
+    expect(task?.deadline?.at ?? 0).toBeGreaterThan(now);
+  });
+
+  it('на карточке простоя заявки нет ни одного исхода — и это значение', async () => {
+    // Красная линия №8: повтор из «неизвестно» запрещён без сверки. У машины
+    // вывода нет ни одного события по сроку, значит, и ребра, которое человек
+    // выбрал бы здесь. Кнопка появится только вместе с исходом — поэтому
+    // проверяется перечень, а не разметка.
+    expect(outcomesOf('withdrawalStalled')).toEqual([]);
+    expect(decidesAnything('withdrawalStalled')).toBe(false);
+    expect(evidenceOf('withdrawalStalled')).toBeNull();
+    expect(closingRuleOf('withdrawalStalled')).toBeNull();
+    // У остальных семнадцати решение есть, и все три ответа сходятся.
+    for (const type of TASK_TYPES.filter((item) => item !== 'withdrawalStalled')) {
+      expect(decidesAnything(type), type).toBe(true);
+      expect(evidenceOf(type), type).not.toBeNull();
+      expect(closingRuleOf(type), type).not.toBeNull();
+    }
   });
 
   it('суммы в фактах разбора не смешивают валюты с суммой ранжирования', async () => {

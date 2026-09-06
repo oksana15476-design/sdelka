@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type ClientAccountFacts,
   type Instant,
+  type WithdrawalArrival,
   type WithdrawalContext,
   type WithdrawalEvent,
   type WithdrawalState,
@@ -11,16 +12,20 @@ import {
   RejectionCode,
   WITHDRAWAL_CLOCK_EVENTS,
   WITHDRAWAL_GUARD_IDS,
+  WITHDRAWAL_INITIAL_STATUS,
   WITHDRAWAL_REQUIRED_APPROVALS,
+  WITHDRAWAL_STATUSES,
   WITHDRAWAL_TRANSITIONS,
   createWithdrawal,
   evaluateWithdrawalGuard,
   instant,
   isTerminalWithdrawalStatus,
+  isWithdrawalArrival,
   lockedTotal,
   planAllocationToDeal,
   reduceWithdrawal,
   statusesWithoutTerminalPath,
+  withdrawalArrivals,
   withdrawalIdempotencyKey,
   isWithdrawalStalled,
   withdrawalStateAge,
@@ -256,6 +261,59 @@ describe('вывод: машина состояний', () => {
     expect(newWithdrawal('w-7').idempotencyKey).toBe(withdrawalIdempotencyKey('w-7'));
     expect(newWithdrawal('w-7').idempotencyKey).toBe(newWithdrawal('w-7').idempotencyKey);
     expect(newWithdrawal('w-7').idempotencyKey).not.toBe(newWithdrawal('w-8').idempotencyKey);
+  });
+});
+
+describe('чем заявка пришла в состояние (красная линия №8)', () => {
+  it('перечень исходов читается у таблицы переходов, а не пишется рядом', () => {
+    // Смысл проверки: перечень, набранный вторым списком, разъезжается с
+    // таблицей молча. Здесь список считается из той же таблицы, поэтому новое
+    // ребро с новым исходом попадёт в ответ само — а если кто-то напишет
+    // перечень руками, тест это поймает.
+    for (const status of WITHDRAWAL_STATUSES) {
+      const fromTable = new Set<WithdrawalArrival>(
+        WITHDRAWAL_TRANSITIONS.filter((item) => item.to === status).map((item) => item.outcome),
+      );
+      if (status === WITHDRAWAL_INITIAL_STATUS) fromTable.add(null);
+      expect([...withdrawalArrivals(status)].sort()).toEqual([...fromTable].sort());
+    }
+  });
+
+  it('различает четыре положения, которые статус сливает в одно', () => {
+    // Ровно то расхождение с красной линией №8, ради которого величина и
+    // заведена: «поручение ушло» и «ответа банка нет» — один статус, разные
+    // положения; «остановила наша проверка» и «банк не исполнил» — тоже.
+    expect(withdrawalArrivals('paying_out')).toEqual([null, 'unknown']);
+    expect(withdrawalArrivals('blocked')).toEqual([null, 'rejected']);
+    expect(withdrawalArrivals('paid_out')).toEqual(['settled']);
+    expect(withdrawalArrivals('cancelled')).toEqual([null]);
+    // Созданная заявка входящих рёбер не имеет вовсе — и всё же существует.
+    expect(withdrawalArrivals(WITHDRAWAL_INITIAL_STATUS)).toEqual([null]);
+  });
+
+  it('невозможную пару статуса и исхода не подтверждает', () => {
+    expect(isWithdrawalArrival('paying_out', 'unknown')).toBe(true);
+    expect(isWithdrawalArrival('blocked', 'rejected')).toBe(true);
+    // «Выплачено» после отказа банка и «отменено» после подтверждения — рёбер
+    // нет, и утверждать такое положение экрану не с чего.
+    expect(isWithdrawalArrival('paid_out', 'rejected')).toBe(false);
+    expect(isWithdrawalArrival('cancelled', 'settled')).toBe(false);
+    expect(isWithdrawalArrival('blocked', 'unknown')).toBe(false);
+    expect(isWithdrawalArrival('approved', 'settled')).toBe(false);
+  });
+
+  it('«неизвестно» приходит только самопереходом, и повтор из него запрещён', () => {
+    // Вторая половина красной линии №8 держится отсутствием рёбер: из
+    // `paying_out` с исходом `unknown` нет дороги ни в одно состояние, кроме
+    // самого себя и разбора сверкой.
+    const fromUnknown = WITHDRAWAL_TRANSITIONS.filter(
+      (item) => item.from === 'paying_out' && item.outcome === 'unknown',
+    );
+    expect(fromUnknown.map((item) => item.to)).toEqual(['paying_out']);
+    const byReconciliation = WITHDRAWAL_TRANSITIONS.filter(
+      (item) => item.from === 'paying_out' && item.event === 'reconciliation_resolved',
+    );
+    expect(byReconciliation.map((item) => item.to).sort()).toEqual(['blocked', 'paid_out']);
   });
 });
 

@@ -22,12 +22,14 @@ import {
 } from './support/acting';
 import {
   BANK_RESPONSE_SOURCE,
+  BUYER,
   DAY_MS,
   DEAL_AMOUNT,
   GEL,
   POLICY_VERSION,
   STATEMENT_SOURCE,
   WITHDRAWAL_CLOCK,
+  partyRef,
 } from './support/fixtures';
 import { toCollected, toReserved } from './support/paths';
 import {
@@ -104,7 +106,7 @@ describe('вывод свободных денег со счёта клиент�
 
     scene = requestWithdrawal(scene, {
       withdrawalId: 'wd-1',
-      owner: buyer,
+      party: partyRef(BUYER),
       amount: PART,
     });
 
@@ -159,7 +161,7 @@ describe('вывод свободных денег со счёта клиент�
     let scene = start.scene;
     scene = requestWithdrawal(scene, {
       withdrawalId: 'wd-6',
-      owner: start.buyer,
+      party: partyRef(BUYER),
       amount: PART,
     });
 
@@ -178,7 +180,7 @@ describe('вывод свободных денег со счёта клиент�
     let own = start.scene;
     own = requestWithdrawal(own, {
       withdrawalId: 'wd-6b',
-      owner: start.buyer,
+      party: partyRef(BUYER),
       amount: PART,
     });
     own = approveWithdrawal(own, 'wd-6b', STAFF.controller);
@@ -208,7 +210,7 @@ describe('вывод свободных денег со счёта клиент�
 
     scene = requestWithdrawal(scene, {
       withdrawalId: 'wd-2',
-      owner: buyer,
+      party: partyRef(BUYER),
       amount: DEAL_AMOUNT,
     });
     scene = approveWithdrawal(scene, 'wd-2', STAFF.controller);
@@ -235,7 +237,7 @@ describe('вывод свободных денег со счёта клиент�
 
     scene = requestWithdrawal(scene, {
       withdrawalId: 'wd-3',
-      owner: buyer,
+      party: partyRef(BUYER),
       amount: PART,
       sourceAccount: FOREIGN_SOURCE_ACCOUNT,
     });
@@ -253,7 +255,7 @@ describe('вывод свободных денег со счёта клиент�
     let unknown = withWithdrawals(start.world, WITHDRAWAL_CLOCK);
     unknown = requestWithdrawal(unknown, {
       withdrawalId: 'wd-3b',
-      owner: buyer,
+      party: partyRef(BUYER),
       amount: PART,
       sourceAccount: null,
     });
@@ -271,7 +273,7 @@ describe('вывод свободных денег со счёта клиент�
     for (const id of ['wd-4a', 'wd-4b']) {
       scene = requestWithdrawal(scene, {
         withdrawalId: id,
-        owner: buyer,
+        party: partyRef(BUYER),
         amount: PART,
       });
       scene = approveWithdrawal(scene, id, STAFF.controller);
@@ -306,7 +308,7 @@ describe('вывод свободных денег со счёта клиент�
 
     scene = requestWithdrawal(scene, {
       withdrawalId: 'wd-5',
-      owner: buyer,
+      party: partyRef(BUYER),
       amount: PART,
     });
     scene = approveWithdrawal(scene, 'wd-5', STAFF.controller);
@@ -368,7 +370,7 @@ describe('вывод свободных денег со счёта клиент�
 
     scene = requestWithdrawal(scene, {
       withdrawalId: 'wd-7',
-      owner: buyer,
+      party: partyRef(BUYER),
       amount: PART,
     });
     scene = approveWithdrawal(scene, 'wd-7', STAFF.controller);

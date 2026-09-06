@@ -57,6 +57,19 @@ const EXTERNAL: Readonly<Partial<Record<TaskType, ExternalFact>>> = Object.freez
      переводится в удержание, а не в «чисто». Пока ответа нет, решать человеку
      нечего — ровно та полка, ради которой она заведена. */
   sanctionsUnavailable: 'screening',
+  /*
+   * `withdrawalStalled` сюда **не входит**, и это выбор, а не пропуск.
+   *
+   * Внешнего факта ждёт не задача, а сама заявка, и какого именно — зависит от
+   * её состояния, а не от вида задачи: `requested` ждёт двух подписей, то есть
+   * людей; `paying_out` — выписки; `blocked` — разбора человеком. Положить вид
+   * целиком на полку «ждём внешний факт» значило бы обещать выписку и по
+   * заявке, которая стоит без единой подписи.
+   *
+   * Задача же ждёт ровно одного: чтобы человек посмотрел. Простой — это наше
+   * бездействие (`REVIEW_TASK_KINDS`, `withdrawal_stalled`), а не ожидание
+   * ответа снаружи, и полка «ждут вас» — та самая, где такое лежит.
+   */
 });
 
 export function externalFactOf(type: TaskType): ExternalFact | null {
@@ -260,10 +273,44 @@ const OUTCOMES: Readonly<Record<TaskType, readonly string[]>> = Object.freeze({
     'ops.outcome.awaitTopUp',
     'ops.outcome.returnToSender',
   ]),
+
+  /*
+   * Единственный вид задачи, у которого исходов **нет ни одного**, — и это
+   * значение, а не пропуск.
+   *
+   * Часы заявки на вывод не порождают ни одного события: `WITHDRAWAL_CLOCK_EVENTS`
+   * объявлена как `Record<…, null>` — событие по сроку нельзя завести правкой
+   * значения, только правкой типа (`packages/domain/src/client-account.ts`,
+   * `STATE-MACHINES.md` §11.4.1). Проход часов задачу заводит и заявку не
+   * трогает ничем (`tickWithdrawals`, `packages/app/src/scheduler.ts`).
+   *
+   * Значит, ребра, которое человек мог бы выбрать **здесь**, не существует, и
+   * любая кнопка на этом экране была бы обещанием перехода, которого нет.
+   * Отдельно про одну из них: повтор поручения из «исход неизвестен» запрещён
+   * без сверки — красная линия №8, и событие по сроку было бы ровно тем самым
+   * автоматическим повтором.
+   *
+   * Пустой перечень поэтому — не «мы не разобрались, что предложить», а ответ:
+   * задача поднимает заявку человеку, а решают её там, где она стоит. Экран
+   * говорит это словами, а не пустым местом (`OutcomesCard`).
+   */
+  withdrawalStalled: Object.freeze([]),
 });
 
 export function outcomesOf(type: TaskType): readonly string[] {
   return OUTCOMES[type];
+}
+
+/**
+ * Принимается ли на этой карточке решение вообще.
+ *
+ * Отвечает перечень исходов, а не отдельный список: вид задачи, у которого нет
+ * ни одного ребра, не имеет и решения — а значит, у него нет ни доказательства,
+ * ни правила закрытия. Три ответа обязаны сходиться, поэтому считаются из
+ * одного места, а не перечисляются трижды.
+ */
+export function decidesAnything(type: TaskType): boolean {
+  return outcomesOf(type).length > 0;
 }
 
 /* ---------------------------------------------- чем решение подтверждается */
@@ -299,7 +346,7 @@ export type EvidenceKind =
  * `packages/intake/src/manual-match.ts:126`), а откат без единого основания
  * журнал не принимает по типу (`packages/app/src/unwind.ts:115`).
  */
-const EVIDENCE: Readonly<Record<TaskType, readonly EvidenceKind[]>> = Object.freeze({
+const EVIDENCE: Readonly<Record<TaskType, readonly EvidenceKind[] | null>> = Object.freeze({
   approvePayout: Object.freeze(['registry_extract', 'contract'] as const),
   reviewBreak: Object.freeze(['bank_statement'] as const),
   reviewSanction: Object.freeze(['screening_response', 'operator_note'] as const),
@@ -317,9 +364,17 @@ const EVIDENCE: Readonly<Record<TaskType, readonly EvidenceKind[]>> = Object.fre
   relatedParties: Object.freeze(['identity_document', 'kinship_document'] as const),
   beneficiaryChange: Object.freeze(['ownership_document', 'identity_document', 'operator_note'] as const),
   intakeUnderpayment: Object.freeze(['bank_statement', 'operator_note'] as const),
+  /*
+   * `null` — не «доказательств пока не подобрали», а «решения нет, и
+   * подтверждать нечего». Пустой список сказал бы первое: карточка «чем
+   * подтверждается решение» осталась бы на месте с пустой строкой, то есть
+   * прочерком вместо смысла. Решения на этом экране не принимают — карточки
+   * основания у него нет вовсе.
+   */
+  withdrawalStalled: null,
 });
 
-export function evidenceOf(type: TaskType): readonly EvidenceKind[] {
+export function evidenceOf(type: TaskType): readonly EvidenceKind[] | null {
   return EVIDENCE[type];
 }
 
@@ -342,7 +397,7 @@ export function evidenceOf(type: TaskType): readonly EvidenceKind[] {
  */
 export type ClosingRule = 'quorum' | 'dualControl' | 'thresholdSecond' | 'singleWithRecord';
 
-const CLOSING: Readonly<Record<TaskType, ClosingRule>> = Object.freeze({
+const CLOSING: Readonly<Record<TaskType, ClosingRule | null>> = Object.freeze({
   approvePayout: 'quorum',
   reviewSanction: 'dualControl',
   releaseBlock: 'dualControl',
@@ -378,9 +433,19 @@ const CLOSING: Readonly<Record<TaskType, ClosingRule>> = Object.freeze({
   flipping: 'singleWithRecord',
   relatedParties: 'singleWithRecord',
   intakeUnderpayment: 'singleWithRecord',
+  /*
+   * `null` по той же причине, что и у доказательства: закрывать нечего.
+   * Задача уходит не решением человека, а тем, что заявка сдвинулась, — переход
+   * в другое состояние начинает новый простой и заводит новую задачу
+   * (`tickWithdrawals`: ключ следа — пара «статус, момент входа»).
+   *
+   * `singleWithRecord` здесь был бы мягче на вид и хуже по сути: он обещает
+   * запись решения с версией политики и причинами, а записывать нечего.
+   */
+  withdrawalStalled: null,
 });
 
-export function closingRuleOf(type: TaskType): ClosingRule {
+export function closingRuleOf(type: TaskType): ClosingRule | null {
   return CLOSING[type];
 }
 
@@ -423,6 +488,14 @@ const DETAIL: Readonly<Record<TaskType, DetailKind>> = Object.freeze({
   relatedParties: 'facts',
   beneficiaryChange: 'facts',
   intakeUnderpayment: 'facts',
+  /*
+   * Та же рамка, что у девяти видов выше, и наполнена она тем же способом —
+   * величинами, которые уже посчитаны. Считает их здесь не детектор, а часы
+   * заявки: состояние, исход поручения, момент входа, длина простоя. Поэтому
+   * подпись под фактами у этого вида своя (`CaseFacts`, `noteKey`) — «детектор»
+   * в ней был бы неправдой.
+   */
+  withdrawalStalled: 'facts',
 });
 
 export function detailKindOf(type: TaskType): DetailKind {

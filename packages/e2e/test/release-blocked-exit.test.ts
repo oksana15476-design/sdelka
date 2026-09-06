@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { payerKeyForDomain, toBeneficiaryLock } from '@sdelka/compliance';
+import { payerKeyForDomain, toBeneficiaryConfirmation } from '@sdelka/compliance';
 import { STAFF } from './support/actors';
 import {
   accountBalance,
@@ -118,7 +118,7 @@ describe('выход из блокировки', () => {
     );
     const beneficiary = trancheOf(world, TRANCHE).beneficiary;
     world = patchFacts(world, TRANCHE, {
-      beneficiary: toBeneficiaryLock({ ...beneficiary, locked: true }),
+      beneficiary: toBeneficiaryConfirmation({ ...beneficiary, locked: true }),
     });
     world = approve(world, TRANCHE, STAFF.controller);
     world = approve(world, TRANCHE, STAFF.head);

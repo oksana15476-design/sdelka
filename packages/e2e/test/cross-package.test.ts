@@ -34,7 +34,17 @@ import { BUYER_DOCUMENT, POLICY_VERSION } from './support/fixtures';
  * `packages/e2e` и есть тот пакет.
  */
 describe('сверка перечней между пакетами', () => {
-  it('роли журнала аудита совпадают с ролями комплаенса плюс system и oracle', () => {
+  it('каждая роль комплаенса имеет метку в журнале аудита', () => {
+    // Прежде перечни сверялись на равенство, и равными они быть перестали:
+    // `0023` дописала в журнал семь меток — пять ролей, которым записи не было
+    // вовсе, и два уровня утверждения вместо одного `approver` (`ACTORS.md` §13,
+    // §1 расхождение №5). Перечень комплаенса при этом не рос: он покрывает
+    // комплаенс-периметр, а не штат целиком.
+    //
+    // Поэтому утверждение стало односторонним и осталось проверяемым: роль
+    // комплаенса, которой нет метки, — это действие, которое нечем записать.
+    // Обратную сторону (метка журнала без роли доступа) держит
+    // `auth/test/legacy.test.ts` — тот пакет видит оба перечня целиком.
     const complianceRoles = [
       SUPPORT_ROLE,
       OPERATOR_ROLE,
@@ -43,8 +53,22 @@ describe('сверка перечней между пакетами', () => {
       REPRESENTATIVE_ROLE,
       CLIENT_ROLE,
     ].map((role) => role.id);
-    const auditRoles = AUDIT_ROLES.filter((role) => role !== 'system' && role !== 'oracle');
-    expect([...auditRoles].sort()).toEqual([...complianceRoles].sort());
+    for (const role of complianceRoles) {
+      expect(AUDIT_ROLES, role).toContain(role);
+    }
+  });
+
+  it('⚠ `approver` в комплаенсе — одна роль на оба уровня утверждения', () => {
+    // Надгробие. В журнале метка `approver` выведена из употребления: два
+    // уровня утверждения принадлежат разным людям с разными полномочиями
+    // (`ACTORS.md` §5.2 — **[решение]**), и запись «утвердил approver» не
+    // говорит, кто утвердил. В `packages/compliance` расщепления ещё нет, и
+    // роль оттуда в журнал сегодня не пишет: актор записи выводится из
+    // `Authority` (`app/src/authority.ts`, `requireAuditRole`), то есть из
+    // перечня `@sdelka/auth`, где оба уровня разведены.
+    expect(APPROVER_ROLE.id).toBe('approver');
+    expect(AUDIT_ROLES).toContain('financial_controller');
+    expect(AUDIT_ROLES).toContain('head_of_operations');
   });
 
   it('перечень типов условия у домена и у журнала аудита один и тот же', () => {

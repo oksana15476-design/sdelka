@@ -22,12 +22,15 @@ import {
   type TrancheState,
   type TrancheStatus,
   type ObservationLevel,
+  type PartyRef,
   type ReleaseObservation,
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_DEADLINE_POLICY,
   DEFAULT_OBSERVATION_POLICY,
+  beneficiaryConfirmation,
   initialTrancheState,
   isTerminalTrancheStatus,
+  participationKey,
   reduceTranche,
 } from '../src/index';
 import {
@@ -226,6 +229,16 @@ describe('свойства на случайных последовательн�
       let runExpected: ExpectedBalances = { totals: new Map() };
       let state: TrancheState = initialTrancheState(NOW, DEFAULT_DEADLINE_POLICY);
 
+      // Получатель прогона — своё лицо в своей сделке, и участие у него своё.
+      // Подтверждение реквизитов строится **на этом участии**: собранное на
+      // константах фикстуры сюда не подходит по построению, и это ровно то
+      // свойство, ради которого участие заведено (И13.1).
+      const recipient: PartyRef = {
+        partyId: RECIPIENT_PARTY_ID,
+        accountKey: `seller-${run}`,
+      };
+      const recipientParticipation = participationKey(dealId, recipient, 'recipient');
+
       for (let step = 0; step < 24 && !isTerminalTrancheStatus(state.status); step += 1) {
         const facts: TrancheFacts = {
           requiredAmount: required,
@@ -245,10 +258,7 @@ describe('свойства на случайных последовательн�
           buyer: { partyId: BUYER_PARTY_ID, accountKey: `client-${run}` },
           // Получатель расчёта берётся **из акта**, а не из параметра проекции:
           // деньги идут тому, кто определил условие (ст. 27(2)).
-          conditionAct: {
-            ...CONDITION_ACT,
-            recipient: { partyId: RECIPIENT_PARTY_ID, accountKey: `seller-${run}` },
-          },
+          conditionAct: { ...CONDITION_ACT, recipient },
           evidenceBundleId: random() < 0.9 ? 'evidence-1' : null,
           // Наблюдение счастливого пути на всём прогоне — по той же причине, по
           // которой реквизиты `verified`: с наблюдением ниже L3 ни один прогон
@@ -262,7 +272,12 @@ describe('свойства на случайных последовательн�
           // дошёл бы до выплаты, и пороги ниже проверяли бы пустое свойство.
           // Проверка «имя сошлось не пускает» живёт отдельным тестом, а не
           // порчей случайного блуждания.
-          beneficiary: { status: 'verified', locked: true, lastChangedAt: null },
+          beneficiary: beneficiaryConfirmation({
+            participation: recipientParticipation,
+            status: 'verified',
+            locked: true,
+            lastChangedAt: null,
+          }),
           preparedBy: 'operator-1',
           approvals: [{ userId: 'operator-2' }, { userId: 'operator-3' }],
           approvalPolicy: DEFAULT_APPROVAL_POLICY,
@@ -354,6 +369,14 @@ describe('свойства на случайных последовательн�
         random() < 0.4 ? null : observationOf({ level: pick(random, weakLevels) });
       let collected: Money<'GEL'> | null = null;
       let state: TrancheState = initialTrancheState(NOW, DEFAULT_DEADLINE_POLICY);
+      const recipient: PartyRef = {
+        partyId: RECIPIENT_PARTY_ID,
+        accountKey: `seller-${run}`,
+      };
+      // Участие получателя — этой сделки: подтверждение реквизитов чужого
+      // участия отказало бы раньше наблюдения, и свойство «без L3 до выплаты не
+      // доходят» проверялось бы не тем guard'ом.
+      const recipientParticipation = participationKey(`deal-${run}`, recipient, 'recipient');
 
       for (let step = 0; step < 24 && !isTerminalTrancheStatus(state.status); step += 1) {
         const facts: TrancheFacts = {
@@ -362,21 +385,19 @@ describe('свойства на случайных последовательн�
           lockedAmount: collected,
           buyerPayerKey: 'buyer-1',
           buyer: { partyId: BUYER_PARTY_ID, accountKey: `client-${run}` },
-          conditionAct: {
-            ...CONDITION_ACT,
-            recipient: { partyId: RECIPIENT_PARTY_ID, accountKey: `seller-${run}` },
-          },
+          conditionAct: { ...CONDITION_ACT, recipient },
           evidenceBundleId: random() < 0.9 ? 'evidence-1' : null,
           observation,
           expectedCadastralCode: CADASTRAL_CODE,
           observationPolicy: DEFAULT_OBSERVATION_POLICY,
           // Остальные факты случайны: свойство утверждает «ни при каких
           // значениях остальных guard'ов», и значит, они обязаны меняться.
-          beneficiary: {
+          beneficiary: beneficiaryConfirmation({
+            participation: recipientParticipation,
             status: random() < 0.8 ? 'verified' : 'name_consistent',
             locked: random() < 0.9,
             lastChangedAt: null,
-          },
+          }),
           preparedBy: 'operator-1',
           approvals: [{ userId: 'operator-2' }, { userId: 'operator-3' }].slice(
             0,
