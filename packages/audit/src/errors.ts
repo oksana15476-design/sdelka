@@ -47,6 +47,18 @@ export const AuditErrorCode = {
    * бы той же неполнотой, ради устранения которой перечень и расщеплён.
    */
   auditRoleRetired: 'audit.role.retired',
+  /**
+   * Схема чеканки не из закрытого перечня (`MINT_SCHEMES`). Перечень
+   * расширяется правкой кода и ревью: реестр, пополняемый в рантайме, был бы
+   * дверью «объявить своим что угодно».
+   */
+  mintSchemeUnknown: 'audit.mint.scheme_unknown',
+  /**
+   * Заявка о собственной чеканке не сошлась с пересчётом: объявленное значение
+   * из объявленных схемы и входа не получается. Это и есть попытка провести
+   * чужое значение мимо правил о сырых идентификаторах — отказ, а не поправка.
+   */
+  mintNotDerived: 'audit.mint.not_derived',
 } as const;
 
 export type AuditErrorCode = (typeof AuditErrorCode)[keyof typeof AuditErrorCode];

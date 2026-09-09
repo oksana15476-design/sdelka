@@ -1,5 +1,6 @@
 import { AuditError, AuditErrorCode } from './errors';
 import { isSha256Hex, type Sha256Hex, sha256Hex } from './hash';
+import { type AuditMinted, isMintScheme, mintIsAuthentic } from './minted';
 
 /**
  * Значения, которым разрешено попасть в тело записи.
@@ -211,7 +212,41 @@ const RAW_PATTERNS: readonly (readonly [string, RegExp])[] = [
   ['phone', /\+\d{8,}/u],
 ];
 
-function checkString(value: string, path: string, key: string | null): void {
+/**
+ * Значения, которые мы отчеканили сами и доказали пересчётом.
+ *
+ * Именно **множество строк**, а не признак поля и не форма значения. Из этого
+ * следуют оба нужных свойства:
+ *
+ * - послабление действует на строку целиком и только на неё: значение,
+ *   содержащее отчеканенный ключ как часть, послабления не получает;
+ * - пополнить множество можно единственным способом — предъявив схему и вход
+ *   (`auditMinted`). Строку, пришедшую снаружи, в него не положить: для этого
+ *   пришлось бы найти прообраз SHA-1, дающий её образом.
+ */
+function provenMinted(claims: readonly AuditMinted[]): ReadonlySet<string> {
+  const proven = new Set<string>();
+  for (const claim of claims) {
+    if (!mintIsAuthentic(claim)) {
+      // В деталях — только схема, и только если она из закрытого перечня:
+      // значение и вход в отказ не кладутся никогда (дисциплина `errors.ts`).
+      const scheme: unknown = (claim as { scheme?: unknown } | null)?.scheme;
+      throw new AuditError(
+        AuditErrorCode.mintNotDerived,
+        isMintScheme(scheme) ? { scheme } : {},
+      );
+    }
+    proven.add(claim.value);
+  }
+  return proven;
+}
+
+function checkString(
+  value: string,
+  path: string,
+  key: string | null,
+  minted: ReadonlySet<string>,
+): void {
   if (key !== null && OPAQUE_KEYS.has(key)) {
     return;
   }
@@ -222,6 +257,13 @@ function checkString(value: string, path: string, key: string | null): void {
   if (!AUDIT_TOKEN.test(value)) {
     throw new AuditError(AuditErrorCode.tokenInvalid, { path });
   }
+  if (minted.has(value)) {
+    // Наш собственный детерминированный ключ, доказанный пересчётом из схемы и
+    // входа. Идентификатором человека он не является ни в каком смысле: это
+    // образ отпечатка, и сведений о человеке в нём нет. Форму ключа он при
+    // этом прошёл выше — послабление касается только правил ниже.
+    return;
+  }
   for (const [rule, pattern] of RAW_PATTERNS) {
     if (pattern.test(value)) {
       throw new AuditError(AuditErrorCode.rawIdentifier, { path, rule });
@@ -229,9 +271,14 @@ function checkString(value: string, path: string, key: string | null): void {
   }
 }
 
-function walk(value: unknown, path: string, key: string | null): void {
+function walk(
+  value: unknown,
+  path: string,
+  key: string | null,
+  minted: ReadonlySet<string>,
+): void {
   if (typeof value === 'string') {
-    checkString(value, path, key);
+    checkString(value, path, key, minted);
     return;
   }
   if (value === null || typeof value !== 'object') {
@@ -239,7 +286,7 @@ function walk(value: unknown, path: string, key: string | null): void {
   }
   if (Array.isArray(value)) {
     value.forEach((item, index) => {
-      walk(item, `${path}[${index}]`, key);
+      walk(item, `${path}[${index}]`, key, minted);
     });
     return;
   }
@@ -249,10 +296,22 @@ function walk(value: unknown, path: string, key: string | null): void {
     return;
   }
   for (const [childKey, child] of Object.entries(source)) {
-    walk(child, `${path}.${childKey}`, childKey);
+    walk(child, `${path}.${childKey}`, childKey, minted);
   }
 }
 
-export function assertNoRawIdentifiers(value: unknown, path: string = '$'): void {
-  walk(value, path, null);
+/**
+ * Экран от сырых идентификаторов.
+ *
+ * Третий аргумент — заявки о **собственной** чеканке (`minted.ts`). Каждая
+ * пересчитывается здесь же, и только сошедшаяся даёт послабление своему
+ * значению. Заявок нет — проверка ровно та же, что была: значение, пришедшее от
+ * человека или из внешнего источника, послаблений не получает никаких.
+ */
+export function assertNoRawIdentifiers(
+  value: unknown,
+  path: string = '$',
+  minted: readonly AuditMinted[] = [],
+): void {
+  walk(value, path, null, provenMinted(minted));
 }

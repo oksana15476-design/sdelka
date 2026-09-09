@@ -10,6 +10,7 @@ import {
   assertWritableAuditRole,
   recordDigest,
 } from './record';
+import type { AuditMinted } from './minted';
 import { type AuditRef, assertNoRawIdentifiers, auditRef, auditToken } from './values';
 
 /**
@@ -37,6 +38,19 @@ export interface AuditRecordInput {
   readonly subject: AuditRef;
   readonly related?: readonly AuditRef[];
   readonly body: AuditBody;
+  /**
+   * Чем отчеканены **наши собственные** детерминированные ключи этой записи:
+   * ключ идемпотентности выплаты, возврата, вывода (`minted.ts`).
+   *
+   * Это пропуск на входе, а не поле журнала: в запись заявка не попадает, в
+   * канонический вид и хеш — тоже. Иначе правка меняла бы прочтение уже
+   * записанного, а журнал не редактируется (красная линия №11).
+   *
+   * Заявка не «разрешает строку», а доказывает её пересчётом: `auditMinted`
+   * значение не принимает, он его вычисляет из схемы и входа. Объявить своим
+   * произвольное значение, пришедшее снаружи, этим путём нельзя.
+   */
+  readonly minted?: readonly AuditMinted[];
 }
 
 function sealed(chainId: string, records: readonly AuditRecord[]): AuditChain {
@@ -55,6 +69,7 @@ function build(
   assertNoRawIdentifiers(
     { actor: input.actor, subject: input.subject, related, body: input.body },
     '$',
+    input.minted ?? [],
   );
   // Та же дверь и для выведенных из употребления ролей. Тип отсекает их у
   // `auditActor`, но актор доезжает сюда и из хранилища, и из чужого адаптера,

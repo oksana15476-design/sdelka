@@ -7,6 +7,7 @@ export * from './errors';
 export * from './hash';
 export * from './instant';
 export * from './log-safe';
+export * from './minted';
 export * from './ports';
 export * from './raw-source';
 export * from './record';
