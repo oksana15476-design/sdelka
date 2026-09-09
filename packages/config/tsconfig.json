@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Пакет содержит запускаемую команду (`pnpm env:check`), которую node
+    // исполняет напрямую со снятием типов. Node — не сборщик: он требует
+    // расширение в спецификаторе. Поэтому относительные импорты здесь с явным
+    // `.ts`, как в `packages/db` по той же причине.
+    "allowImportingTsExtensions": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

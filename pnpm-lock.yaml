@@ -20,6 +20,15 @@ importers:
 
   apps/web:
     dependencies:
+      '@sdelka/app':
+        specifier: workspace:*
+        version: link:../../packages/app
+      '@sdelka/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@sdelka/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@sdelka/domain':
         specifier: workspace:*
         version: link:../../packages/domain
@@ -97,6 +106,28 @@ importers:
         specifier: workspace:*
         version: link:../audit
 
+  packages/backup:
+    dependencies:
+      '@sdelka/audit':
+        specifier: workspace:*
+        version: link:../audit
+      '@sdelka/db':
+        specifier: workspace:*
+        version: link:../db
+      '@sdelka/ledger':
+        specifier: workspace:*
+        version: link:../ledger
+      '@sdelka/money':
+        specifier: workspace:*
+        version: link:../money
+      pg:
+        specifier: 8.13.1
+        version: 8.13.1
+    devDependencies:
+      '@types/pg':
+        specifier: 8.11.10
+        version: 8.11.10
+
   packages/compliance:
     dependencies:
       '@sdelka/domain':
@@ -106,8 +137,13 @@ importers:
         specifier: workspace:*
         version: link:../money
 
+  packages/config: {}
+
   packages/db:
     dependencies:
+      '@sdelka/app':
+        specifier: workspace:*
+        version: link:../app
       '@sdelka/audit':
         specifier: workspace:*
         version: link:../audit

@@ -42,6 +42,7 @@ export {
   PLATFORM_SUBJECT,
   SYSTEM_ACTOR,
   actingAccount,
+  adoptSession,
   actingPerson,
   actingRole,
   actionContextFor,
@@ -75,6 +76,7 @@ export * from './keys';
 export * from './ledger-app';
 export * from './ports';
 export * from './scheduler';
+export * from './sign-in';
 /**
  * ⚠ **`store.ts` вывозится целиком, и это безопасно.**
  *
@@ -97,6 +99,15 @@ export * from './store';
  * умеет выплатить.
  */
 export * from './resume';
+/**
+ * ⚠ **`seed.ts` вывозится целиком, и это безопасно.**
+ *
+ * Засев не собирает мир сам: он зовёт те же шаги, что и продукт, под теми же
+ * полномочиями и пишет через тот же порт. Дверью мимо `sealed` он не является
+ * ни в одну сторону, а отказ работать на настоящих данных стоит выше — там, где
+ * известна схема (`@sdelka/db`).
+ */
+export * from './seed';
 export * from './unwind';
 export * from './withdrawal';
 /**

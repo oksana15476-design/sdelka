@@ -1,0 +1,170 @@
+# Непрерывная проверка: на каждый пуш и на каждое предложение изменений.
+#
+# ## Что здесь есть и чего здесь нет
+#
+# До этой работы все проверки репозитория были зелёными ровно до тех пор, пока
+# их кто-то запускал руками. Теперь запускаются:
+#
+#   * быстрые — типы, тесты, сборка;
+#   * интеграционные — на живом Postgres, с доказательством, что набор
+#     действительно выполнился, а не пропустил себя (см. `scripts/int-suite.mjs`);
+#   * мутационные стенды — отдельной работой, параллельно быстрым;
+#   * обход интерфейса в настоящем браузере.
+#
+# `pnpm env:check` сюда НЕ включён намеренно. Это ворота развёртывания: они
+# требуют заданными все переменные окружения продукта, и в чистом дереве —
+# без окружения стенда — они красные по замыслу. Ворота, которые обязаны быть
+# красными, в проверке качества кода означали бы, что красное — норма, а это
+# ровно тот способ, которым перестают читать проверки вообще.
+#
+# ## Секретов здесь нет ни одного
+#
+# Красная линия №12. Пароль тестовой базы рождается внутри работы
+# (`scripts/start-postgres.sh`), помечается для журнала и умирает вместе с
+# контейнером. Ни одна работа не обращается к хранилищу секретов.
+
+name: Проверки
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Ветка, у которой открыто предложение изменений, отдаёт два события на один
+# пуш. Ключ по `head_ref` (он задан только у предложения) сводит их в одну
+# группу: свежий прогон отменяет предыдущий по той же ветке, а не встаёт с ним
+# в очередь за одними и теми же исполнителями.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Типы, тесты, сборка
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      - name: Типы
+        run: pnpm typecheck
+
+      # Корневой `pnpm test` — бессетевой по построению: интеграционные наборы
+      # вынесены в отдельные конфигурации (`test:int`) и идут работой ниже.
+      - name: Тесты
+        run: pnpm test
+
+      - name: Сборка
+        run: pnpm build
+
+  integration:
+    name: Интеграция на живом Postgres
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      - name: Поднять Postgres
+        run: .github/scripts/start-postgres.sh
+
+      # Оба набора идут через посредника, который разбирает отчёт vitest и
+      # отказывается считать «11 skipped» успехом. Без него работа была бы
+      # зелёной на машине без базы — то есть проверяла бы ноль инвариантов.
+      - name: '@sdelka/db'
+        run: node .github/scripts/int-suite.mjs @sdelka/db
+
+      - name: '@sdelka/e2e'
+        run: node .github/scripts/int-suite.mjs @sdelka/e2e
+
+      - name: Убрать Postgres
+        if: always()
+        run: docker rm -f sdelka-ci-postgres || true
+
+  mutation:
+    # Стенды идут по полчаса и больше: держать их в одной работе с быстрыми
+    # проверками — значит узнавать об упавшем `tsc` через сорок минут.
+    # Отдельная работа, четыре независимые ветки, `fail-fast: false`: упавший
+    # стенд одного пакета не должен отменять ответ по трём остальным.
+    name: Мутационный стенд ${{ matrix.package }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - '@sdelka/e2e'
+          - '@sdelka/intake'
+          - '@sdelka/compliance'
+          - '@sdelka/ledger'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      # Стенды ничего не пишут на диск (подмена живёт в памяти прогона) и не
+      # ходят в сеть: живой базы здесь нет и не нужно.
+      - name: Стенд
+        run: pnpm --filter ${{ matrix.package }} mutation
+
+  ui:
+    name: Обход интерфейса
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      # Браузер весит больше, чем всё дерево зависимостей: без кэша обход
+      # начинается со стодвадцатимегабайтной загрузки на каждый пуш.
+      - name: Кэш браузера
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      # Системные библиотеки браузера кэшу не поддаются (это пакеты apt),
+      # поэтому ставятся всегда; сам браузер при попадании в кэш не качается.
+      - name: Поставить браузер
+        run: |
+          pnpm --filter @sdelka/web exec playwright install-deps chromium
+          pnpm --filter @sdelka/web exec playwright install chromium
+
+      # Скрипт обхода читает путь к браузеру из CHROMIUM_PATH, а по умолчанию
+      # смотрит в /opt/pw-browsers/chromium — раскладку машины разработчика.
+      # Путь спрашивается у самого playwright, а не собирается из версии и
+      # ревизии: собранный руками он молча разъедется с обновлением пакета.
+      - name: Найти браузер
+        run: |
+          path="$(pnpm --filter @sdelka/web exec node -e \
+            "import('playwright').then(({chromium}) => process.stdout.write(chromium.executablePath()))")"
+          test -x "$path"
+          echo "CHROMIUM_PATH=$path" >>"$GITHUB_ENV"
+
+      # Кэш сборки Next: обход поднимает приложение и собирает его сам, если
+      # входы изменились. Кэш сокращает эту сборку, но не отменяет — отметка
+      # входов проверяется внутри скрипта.
+      - name: Кэш сборки Next
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            next-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+
+      - name: Обход
+        run: node apps/web/scripts/verify-ui.mjs
+
+      # Снимки нужны ровно тогда, когда обход упал: разбирать переполнение
+      # вёрстки на грузинском по тексту сообщения нельзя.
+      - name: Снимки при отказе
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: apps/web/screenshots
+          retention-days: 7
+          if-no-files-found: ignore

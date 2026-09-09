@@ -1,0 +1,96 @@
+# Подъём одной командой: Postgres, накат миграций, приложение.
+#
+#   export SDELKA_DB_PASSWORD=$(head -c 18 /dev/urandom | base64 | tr -d '/+=')
+#   docker compose up -d --build
+#   curl -fsS http://127.0.0.1:3000/health
+#
+# Порядок шагов — не «как получилось», а требование (`docs/DEPLOY.md`):
+#   база готова → накат миграций → приложение.
+# Накат живёт **отдельной службой**, которая отрабатывает и завершается. Не
+# «приложение мигрирует себя на старте»: две копии приложения сделали бы это
+# дважды, и делали бы правами, которых у приложения нет (инвариант 21).
+#
+# Секретов в файле нет и быть не может (красная линия №12). Единственное
+# значение, которое приходит снаружи, — `SDELKA_DB_PASSWORD`, и `:?` ниже
+# означает: не задана — стек не поднимается, с именем переменной в отказе.
+# Умолчания у пароля нет и не будет: умолчание вместо пароля — это пароль в
+# репозитории, просто написанный мелко.
+#
+# Пароль обязан быть безопасным для URL (без `@`, `:`, `/`, `?`, `#`, `%`) —
+# он подставляется в строку подключения. Генератор в примере выше такой и есть.
+#
+# Этот стек — для локального подъёма и стенда. В проде база живёт отдельно,
+# роли заводит тот, кто ею владеет, и суперпользователь кластера не делит
+# пароль с логин-ролью приложения (`docs/DEPLOY.md`, §«Чего этот стек не
+# делает»).
+
+name: sdelka
+
+services:
+  # ------------------------------------------------------------------ база
+  db:
+    image: postgres:17-alpine
+    environment:
+      # Суперпользователь кластера. Им пользуются только инициализация и
+      # проба готовности; ни приложение, ни накат под ним не ходят.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: '${SDELKA_DB_PASSWORD:?переменная не задана: экспортируйте SDELKA_DB_PASSWORD (см. docs/DEPLOY.md)}'
+      POSTGRES_DB: sdelka
+      # Логин-роль приложения и наката. Имя — идентификатор, а не секрет.
+      SDELKA_DB_USER: sdelka
+      SDELKA_DB_PASSWORD: '${SDELKA_DB_PASSWORD:?переменная не задана: экспортируйте SDELKA_DB_PASSWORD (см. docs/DEPLOY.md)}'
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # Роли заводятся один раз, при создании тома. Только чтение: инициализация
+      # не имеет права править собственный скрипт.
+      - ./docker/postgres-init.sh:/docker-entrypoint-initdb.d/10-sdelka-roles.sh:ro
+    # Порт наружу намеренно не публикуется: база доступна только службам стека.
+    # Понадобился psql — `docker compose exec db psql -U postgres -d sdelka`.
+    healthcheck:
+      # `pg_isready` отвечает «кластер принимает соединения». Этого достаточно
+      # ровно для одного: пускать накат. Здоровье приложения — другой вопрос и
+      # другая проба (`/health` ниже).
+      test: ['CMD-SHELL', 'pg_isready -q -U postgres -d sdelka']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+
+  # -------------------------------------------------------- накат миграций
+  migrate:
+    image: sdelka-migrate:local
+    build:
+      context: .
+      target: migrator
+    environment:
+      SDELKA_DATABASE_URL: 'postgresql://sdelka:${SDELKA_DB_PASSWORD:?переменная не задана: экспортируйте SDELKA_DB_PASSWORD (см. docs/DEPLOY.md)}@db:5432/sdelka'
+    depends_on:
+      db:
+        condition: service_healthy
+    # Отработала — и всё. Перезапуск наката по кругу означал бы, что отказ
+    # миграции скрыт от того, кто разворачивает.
+    restart: 'no'
+
+  # ----------------------------------------------------------- приложение
+  web:
+    image: sdelka-web:local
+    build:
+      context: .
+      target: runtime
+    environment:
+      SDELKA_DATABASE_URL: 'postgresql://sdelka:${SDELKA_DB_PASSWORD:?переменная не задана: экспортируйте SDELKA_DB_PASSWORD (см. docs/DEPLOY.md)}@db:5432/sdelka'
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        # Приложение не поднимается, пока накат не завершился **успешно**.
+        # Упал накат — стек не поднялся, и это видно сразу, а не через сутки
+        # на первой операции с колонкой, которой нет.
+        condition: service_completed_successfully
+    ports:
+      - '3000:3000'
+    restart: unless-stopped
+
+volumes:
+  db-data:

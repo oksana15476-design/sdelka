@@ -62,6 +62,17 @@ export const DbErrorCode = {
   authRoleChangeWithLiveSession: 'db.auth.role_change_with_live_session',
   /** Грант выписан раньше, чем открылась сессия, на которую ссылается. */
   authGrantBeforeSession: 'db.auth.grant_before_session',
+  /**
+   * Попытка изменить у вызова личности что-либо, кроме счётчика попыток,
+   * отметки доставки и однократного закрытия (`0024`). Срок продлению не
+   * подлежит — продлеваемый срок одноразового кода делает его паролем.
+   */
+  authChallengeImmutable: 'db.auth.challenge_immutable',
+  /**
+   * Счётчик попыток сдвинут назад. Так снимают ограничение подбора одним
+   * `UPDATE`: попытки обнулены, окно то же, и заметить это потом нечем.
+   */
+  authChallengeAttemptsRegression: 'db.auth.challenge_attempts_regression',
   /** Роль приложения не владеет объектами схемы и не является суперпользователем. */
   roleNotSeparated: 'db.role.not_separated',
   /** Роли схемы не заведены: см. `scripts/dev-db.sh`. */
@@ -72,6 +83,41 @@ export const DbErrorCode = {
   migrationChecksumMismatch: 'db.migration.checksum_mismatch',
   /** Файл миграции пропал, а запись о его применении осталась. */
   migrationMissing: 'db.migration.missing',
+  /**
+   * Каталог миграций разошёлся с `migrations/CHECKSUMS` — **до** подключения к
+   * базе.
+   *
+   * `migrationChecksumMismatch` ловит правку файла, который уже применён **на
+   * этой** базе. На чистой базе он не сработает вовсе: применять нечего, сверять
+   * не с чем, и подменённый файл уехал бы в схему молча. `CHECKSUMS` — это
+   * зафиксированный в репозитории слепок каталога, и накат сверяется с ним
+   * первым делом, ещё до строки подключения.
+   *
+   * Род расхождения — в `details.kind`, потому что чинятся они по-разному:
+   *
+   * - `changed` — файл есть в слепке, но его содержимое другое. Это правка уже
+   *   выпущенной миграции: чинится новой миграцией, не правкой файла;
+   * - `unlisted` — файл есть, строки в слепке нет. Миграцию добавили, а
+   *   `pnpm db:generate` не запустили;
+   * - `orphaned` — строка в слепке есть, файла нет. Миграцию удалили.
+   */
+  migrationChecksumDrift: 'db.migration.checksum_drift',
+  /** Схемы учёта миграций в базе нет вовсе: накат не запускали. */
+  schemaNotInitialized: 'db.schema.not_initialized',
+  /** База отстаёт от кода: часть миграций не применена. Сначала накат. */
+  schemaBehind: 'db.schema.behind',
+  /**
+   * База впереди кода: применены версии, которых в этом дереве нет. Так
+   * выглядит откат приложения на предыдущую сборку после наката. Работать в
+   * таком виде нельзя: код не знает, что именно изменила чужая миграция.
+   */
+  schemaAhead: 'db.schema.ahead',
+  /**
+   * Версия применена, но её контрольная сумма не та. То же расхождение, что
+   * `migrationChecksumMismatch`, увиденное воротами старта приложения, а не
+   * накатом.
+   */
+  schemaChecksumMismatch: 'db.schema.checksum_mismatch',
   /** `SDELKA_DATABASE_URL` не задан: строка подключения только из окружения. */
   databaseUrlMissing: 'db.env.database_url_missing',
   /**

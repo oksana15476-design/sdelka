@@ -8,6 +8,13 @@
     ],
     "jsx": "preserve",
     "noEmit": true,
+    // `@sdelka/db` — единственная зависимость интерфейса, у которой есть
+    // запускаемые команды (`pnpm db:migrate`), поэтому её относительные импорты
+    // с явным `.ts` (см. `packages/db/tsconfig.json`). Интерфейс её тянет ради
+    // проверки здоровья `/health`, и без этого флага `tsc` роняет чужие файлы
+    // на TS5097. Сборке это ничего не меняет: `noEmit` уже стоит, разрешение
+    // модулей у Next то же самое.
+    "allowImportingTsExtensions": true,
     "declaration": false,
     "allowJs": true,
     "module": "ESNext",

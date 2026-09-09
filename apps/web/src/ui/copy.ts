@@ -189,6 +189,49 @@ export const PENDING_COPY_KEYS: readonly string[] = Object.freeze([
   'ops.task.subject.withdrawal.note',
   'ops.task.type.withdrawalStalled',
   'ops.why.withdrawalStalled',
+
+  /*
+   * Вход и выход. Двадцать строк, и **ни одна не прошла связку копирайтер →
+   * главред**: экран входа появился раньше текста к нему, потому что форма без
+   * подписей — это не «пока молчим», а неработающий экран (`SCREENS.md` §0.4 к
+   * этому экрану ещё не написан).
+   *
+   * Что главреду придётся решать, а не вычитывать:
+   *
+   * · **`signIn.error.body`** обязан быть одинаков для «такой записи нет» и
+   *   «код неверен» — разные формулировки здесь работают перечислителем
+   *   учётных записей (`app/src/sign-in.ts`). Переписать можно как угодно, но
+   *   различить два случая нельзя, и это ограничение текста, а не кода.
+   * · **`signIn.sent.body`** говорит прямо, что мы не сообщаем о существовании
+   *   записи. Молчание вместо этой фразы читается как «код точно ушёл», и
+   *   человек ждёт сообщения, которого не будет.
+   * · **`signIn.account.hint`** объясняет, что ключ учётной записи — не почта и
+   *   не телефон. Форма ключа — следствие правила о персональных данных
+   *   (`auth/src/ids.ts`), и без объяснения поле выглядит поломанным.
+   * · **`signIn.code.ttl.*`** — счётная строка: срок подставляется числом из
+   *   политики (`IDENTITY_CODE_POLICY`), а не вписан словом. Менять число в
+   *   тексте нельзя — оно придёт из кода.
+   */
+  'signIn.title',
+  'signIn.subtitle',
+  'signIn.account.label',
+  'signIn.account.hint',
+  'signIn.account.cta',
+  'signIn.sent.title',
+  'signIn.sent.body',
+  'signIn.code.ttl.one',
+  'signIn.code.ttl.few',
+  'signIn.code.ttl.many',
+  'signIn.code.ttl.other',
+  'signIn.code.label',
+  'signIn.code.hint',
+  'signIn.code.cta',
+  'signIn.code.again',
+  'signIn.error.title',
+  'signIn.error.body',
+  'signOut.title',
+  'signOut.body',
+  'signOut.cta',
 ]);
 
 /**
@@ -407,6 +450,34 @@ export const PENDING_NATIVE_REVIEW_KEYS: readonly string[] = Object.freeze([
   'ops.task.subject.withdrawal.note',
   'ops.task.type.withdrawalStalled',
   'ops.why.withdrawalStalled',
+
+  /*
+   * Вход и выход. Русский — черновик (см. перечень выше), английский и
+   * грузинский собраны по нему же и проверены только машиной. Носителю: слово
+   * «გასაღები» здесь — ключ учётной записи, а не ключ шифрования, и в
+   * грузинском у счётной строки одна форма, поэтому все четыре ключа
+   * `signIn.code.ttl.*` совпадают намеренно.
+   */
+  'signIn.title',
+  'signIn.subtitle',
+  'signIn.account.label',
+  'signIn.account.hint',
+  'signIn.account.cta',
+  'signIn.sent.title',
+  'signIn.sent.body',
+  'signIn.code.ttl.one',
+  'signIn.code.ttl.few',
+  'signIn.code.ttl.many',
+  'signIn.code.ttl.other',
+  'signIn.code.label',
+  'signIn.code.hint',
+  'signIn.code.cta',
+  'signIn.code.again',
+  'signIn.error.title',
+  'signIn.error.body',
+  'signOut.title',
+  'signOut.body',
+  'signOut.cta',
 ]);
 
 /**

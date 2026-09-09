@@ -35,7 +35,11 @@ export function middleware(request: NextRequest): NextResponse {
  * показывают — гарнитура просто не та, а такой дефект живёт годами
  * (`CABINETS-REDESIGN.md` §1.6). Ловится он проверкой «чем набран текст» в
  * `scripts/verify-ui.mjs`, и попал сюда именно после неё.
+ *
+ * `health` — по той же причине, но заметной сразу: проверка здоровья, отвечающая
+ * перенаправлением на `/ru/health`, для оркестратора здоровьем не является — он
+ * читает код ответа, а `307` не `200`.
  */
 export const config = {
-  matcher: ['/((?!_next|fonts|favicon.ico|screenshots).*)'],
+  matcher: ['/((?!_next|fonts|favicon.ico|screenshots|health).*)'],
 };

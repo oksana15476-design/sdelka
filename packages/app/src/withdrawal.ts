@@ -5,6 +5,7 @@ import {
   auditAmount,
   auditFingerprint,
   auditInstant,
+  auditMinted,
   auditRef,
   policyRef,
 } from '@sdelka/audit';
@@ -540,6 +541,10 @@ export function applyWithdrawalEvent<E extends WithdrawalEvent>(
     actor: journalActor(authority),
     subject,
     related: [],
+    // Ключ идемпотентности вывода — тот же UUID5, и та же беда: у каждого
+    // тридцать второго девять цифр подряд, и правило `digit_run` отвергало бы
+    // запись. Доказываем чеканкой из номера заявки, а не послаблением правила.
+    minted: [auditMinted('withdrawal_idempotency', moved.state.withdrawalId)],
     body: bodyFor(event, moved, options),
   });
 

@@ -11,6 +11,7 @@ import {
   auditAmount,
   auditFingerprint,
   auditInstant,
+  auditMinted,
   auditRef,
   genesisChain,
   policyRef,
@@ -1596,6 +1597,11 @@ function applyIntents(
           actor,
           subject: auditRef('payout', intent.idempotencyKey),
           related: [auditRef('tranche', runtime.trancheId), auditRef('deal', runtime.dealId)],
+          // Ключ идемпотентности — UUID5, и у каждого тридцать второго девять
+          // цифр последней группы идут подряд: под правило `digit_run` он
+          // подпадает формой, сырым идентификатором человека не будучи.
+          // Доказываем чеканкой: схема и вход, из которых он получен.
+          minted: [auditMinted('payout_idempotency', runtime.trancheId)],
           body: {
             kind: 'payout_ordered',
             idempotencyKey: intent.idempotencyKey,
@@ -1649,6 +1655,8 @@ function applyIntents(
           actor,
           subject: auditRef('payout', intent.idempotencyKey),
           related: [auditRef('tranche', runtime.trancheId), auditRef('deal', runtime.dealId)],
+          // Схема другая: у возврата своё пространство имён (`refundIdempotencyKey`).
+          minted: [auditMinted('refund_idempotency', runtime.trancheId)],
           body: {
             kind: 'state_transition',
             machine: 'payout',
@@ -1909,6 +1917,15 @@ function applyTrancheEventInternal(
         actor,
         subject: auditRef('payout', last.idempotencyKey),
         related: [auditRef('tranche', trancheId), auditRef('deal', runtime.dealId)],
+        // Нога поручения выбирает схему: расчёт и возврат чеканятся из разных
+        // пространств имён, и подставить одну вместо другой нельзя — пересчёт
+        // не сойдётся, и запись не соберётся вовсе.
+        minted: [
+          auditMinted(
+            last.leg === 'refund' ? 'refund_idempotency' : 'payout_idempotency',
+            trancheId,
+          ),
+        ],
         body:
           outcome === 'unknown'
             ? {

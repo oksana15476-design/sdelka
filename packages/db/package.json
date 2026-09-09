@@ -16,9 +16,12 @@
     "test": "vitest run --config vitest.config.ts",
     "test:int": "vitest run --config vitest.int.config.ts",
     "migrate": "node --experimental-strip-types src/cli/migrate.ts",
+    "schema:check": "node --experimental-strip-types src/cli/schema-check.ts",
+    "seed": "node --import ./src/cli/register-ts.mjs --experimental-strip-types src/cli/seed.ts",
     "generate": "node --experimental-strip-types src/cli/generate.ts"
   },
   "dependencies": {
+    "@sdelka/app": "workspace:*",
     "@sdelka/audit": "workspace:*",
     "@sdelka/auth": "workspace:*",
     "@sdelka/domain": "workspace:*",

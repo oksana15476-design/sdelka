@@ -1,32 +1,53 @@
 import { DbError, DbErrorCode } from './errors.ts';
-import { type Migration, loadMigrations } from './migrations.ts';
+import { type Migration, loadVerifiedMigrations } from './migrations.ts';
 import type { Pool, PoolClient } from './pool.ts';
 import { MIGRATION_LOCK_KEY, MIGRATION_TABLE, OWNER_ROLE, SCHEMA_NAME } from './roles.ts';
+import { expectedVersion } from './schema-version.ts';
 
 /**
  * Раннер миграций.
  *
- * Три вещи, ради которых он вообще существует:
+ * Четыре вещи, ради которых он вообще существует:
  *
  * 1. **Консультативная блокировка.** Две параллельные миграции обязаны
  *    выстроиться в очередь. Без неё две реплики приложения, стартовавшие
  *    одновременно, применяют одну миграцию дважды.
- * 2. **Контрольная сумма.** Уже применённая миграция не правится: правка
- *    молча расходится с тем, что стоит на проде. Расхождение — отказ, а не
- *    предупреждение (`db.migration.checksum_mismatch`).
+ * 2. **Контрольная сумма — в двух местах.** Каталог сверяется со слепком
+ *    `migrations/CHECKSUMS` **до** подключения (`db.migration.checksum_drift`);
+ *    уже применённая миграция сверяется с тем, что записано в базе
+ *    (`db.migration.checksum_mismatch`). Первая проверка ловит подменённый файл
+ *    на чистой базе, где применять нечего и сверять не с чем; вторая — правку
+ *    файла, который на этой базе уже стоит. Ни одна не заменяет другую.
  * 3. **`SET LOCAL ROLE`.** Каждый файл выполняется от имени владельца схемы,
  *    поэтому объекты принадлежат `sdelka_owner`, а не тому, кто случайно
  *    подключился. На этом стоит инвариант 21: гранты роли приложения имеют
  *    смысл только тогда, когда она не владелец (`roles.ts`).
+ * 4. **Повторный запуск ничего не делает.** Накат на уже накаченной базе — это
+ *    штатный исход развёртывания, а не ошибка: `applied` пуст, код выхода ноль.
+ *    Команда, падающая на повторе, приучает разворачивающего игнорировать её
+ *    код выхода — и настоящий отказ он тоже проигнорирует.
  *
  * Первая миграция роли заводит, поэтому она одна выполняется без `SET ROLE` —
  * `SET ROLE sdelka_owner` стоит внутри неё самой, после `CREATE ROLE`.
+ *
+ * Каждый файл идёт **в своей транзакции**: DDL в Postgres транзакционен, и
+ * упавшая миграция не оставляет половины себя. Одной транзакции на весь накат
+ * здесь нет намеренно — она откатывала бы и уже удавшиеся файлы, а на длинном
+ * накате держала бы блокировки всё это время. Остановка — на первой упавшей:
+ * следующие не применяются, потому что стоят на её объектах.
  */
 const BOOTSTRAP_MIGRATION = '0001';
 
 export interface MigrateResult {
   readonly applied: readonly string[];
   readonly skipped: readonly string[];
+  /**
+   * Версия схемы после наката — номер последней миграции каталога. Печатается
+   * командой и сверяется воротами старта приложения (`schema-version.ts`):
+   * «накат прошёл» и «схема той версии, которую ждёт код» — разные утверждения,
+   * и второе полезнее.
+   */
+  readonly version: string;
 }
 
 interface AppliedRow {
@@ -76,7 +97,9 @@ async function applyOne(client: PoolClient, migration: Migration): Promise<void>
 }
 
 export async function migrate(pool: Pool, dir?: string): Promise<MigrateResult> {
-  const migrations = dir === undefined ? loadMigrations() : loadMigrations(dir);
+  // Сверка со слепком идёт первой и без соединения: каталог, разошедшийся с
+  // `CHECKSUMS`, нельзя применять ни к какой базе.
+  const migrations = dir === undefined ? loadVerifiedMigrations() : loadVerifiedMigrations(dir);
   const client = await pool.connect();
   const applied: string[] = [];
   const skipped: string[] = [];
@@ -119,5 +142,9 @@ export async function migrate(pool: Pool, dir?: string): Promise<MigrateResult> 
       .catch(() => undefined);
     client.release();
   }
-  return Object.freeze({ applied: Object.freeze(applied), skipped: Object.freeze(skipped) });
+  return Object.freeze({
+    applied: Object.freeze(applied),
+    skipped: Object.freeze(skipped),
+    version: expectedVersion(migrations),
+  });
 }

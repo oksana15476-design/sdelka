@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Как в `packages/db`: пакет содержит запускаемые команды, которые node
+    // исполняет напрямую со снятием типов, а node требует расширение в
+    // спецификаторе. Относительные импорты поэтому с явным `.ts`.
+    "allowImportingTsExtensions": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

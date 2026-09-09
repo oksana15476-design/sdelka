@@ -6,4 +6,5 @@ export * from './migrate.ts';
 export * from './migrations.ts';
 export * from './pool.ts';
 export * from './roles.ts';
+export * from './schema-version.ts';
 export * from './store/index.ts';

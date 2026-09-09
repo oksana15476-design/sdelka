@@ -1,4 +1,5 @@
 export * from './audit.ts';
+export * from './auth.ts';
 export * from './audit-json.ts';
 export * from './errors.ts';
 export * from './journal.ts';

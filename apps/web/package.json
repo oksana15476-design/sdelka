@@ -13,6 +13,9 @@
     "fonts:check": "node scripts/fetch-fonts.mjs --check"
   },
   "dependencies": {
+    "@sdelka/app": "workspace:*",
+    "@sdelka/auth": "workspace:*",
+    "@sdelka/db": "workspace:*",
     "@sdelka/domain": "workspace:*",
     "@sdelka/intake": "workspace:*",
     "@sdelka/ledger": "workspace:*",

@@ -70,6 +70,29 @@ export const AUTH_REASON_KEYS = {
 
   /* --- Реквизиты выплаты --- */
   beneficiaryValueDisclosedToNoRole: 'auth.beneficiary.value_disclosed_to_no_role',
+
+  /* --- Доказательство личности --- */
+  /**
+   * Единственная причина, которую видит экран.
+   *
+   * «Такого лица нет» и «код неверен» снаружи обязаны быть неразличимы: разница
+   * между ними — готовый перечислитель учётных записей, которому не нужен ни
+   * один код. Настоящая причина при этом не теряется: она уходит в журнал
+   * входов, куда экран не смотрит (`challenge.ts`, `uniformIdentityRejection`).
+   */
+  identityRejected: 'auth.identity.rejected',
+  /** Вызова с таким идентификатором нет: не выдавался, либо чужой. */
+  identityChallengeNotFound: 'auth.identity.challenge_not_found',
+  identityChallengeExpired: 'auth.identity.challenge_expired',
+  /** Код уже принят. Повтор одного кода — не вход, а второй вход по одному ключу. */
+  identityChallengeConsumed: 'auth.identity.challenge_consumed',
+  /** Попытки кончились. След подбора, и он не должен теряться под сроком. */
+  identityAttemptsExhausted: 'auth.identity.attempts_exhausted',
+  identityCodeMismatch: 'auth.identity.code_mismatch',
+  /** Учётной записи нет. В журнале — да, на экране — никогда (см. выше). */
+  identityAccountUnknown: 'auth.identity.account_unknown',
+  /** Канал доставки не принял код. Не отказ во входе, а отказ канала. */
+  identityChannelUnavailable: 'auth.identity.channel_unavailable',
 } as const;
 
 export type AuthReasonKey = (typeof AUTH_REASON_KEYS)[keyof typeof AUTH_REASON_KEYS];
