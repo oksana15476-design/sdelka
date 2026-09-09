@@ -3,6 +3,7 @@ export * from './approval';
 export * from './capabilities';
 export * from './challenge';
 export * from './code-policy';
+export * from './code-request';
 export * from './decide';
 export * from './delivery';
 export * from './errors';

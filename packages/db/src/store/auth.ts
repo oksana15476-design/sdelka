@@ -137,18 +137,40 @@ interface ChallengeRow {
   readonly attempts_used: number;
   readonly max_attempts: number;
   readonly consumed_at: Date | null;
+  readonly delivered_at: Date | null;
 }
 
+const CHALLENGE_COLUMNS = `challenge_id, account_id, issued_at, expires_at,
+         attempts_used, max_attempts, consumed_at, delivered_at`;
+
 const SELECT_CHALLENGE = `
-  SELECT challenge_id, account_id, issued_at, expires_at,
-         attempts_used, max_attempts, consumed_at
+  SELECT ${CHALLENGE_COLUMNS}
     FROM ${SCHEMA_NAME}.identity_challenge
    WHERE challenge_id = $1`;
 
+/**
+ * Самый свежий вызов учётной записи.
+ *
+ * Состояние не отбирается: закрытый вызов нужен ради своей отметки об
+ * отправке (`auth/src/code-request.ts`), а «живой ли он» — решение, и его
+ * принимает не хранилище. Порядок разрешается до конца
+ * (`challenge_id` вторым ключом): два вызова в одну миллисекунду иначе
+ * поднимались бы через раз разными, и правило зависело бы от плана запроса.
+ * Обратный проход идёт по `identity_challenge_account (account_id, issued_at)`
+ * из `0024` — второго индекса под это не заводится (`0025`).
+ */
+const SELECT_LATEST_CHALLENGE = `
+  SELECT ${CHALLENGE_COLUMNS}
+    FROM ${SCHEMA_NAME}.identity_challenge
+   WHERE account_id = $1
+   ORDER BY issued_at DESC, challenge_id DESC
+   LIMIT 1`;
+
 const INSERT_CHALLENGE = `
   INSERT INTO ${SCHEMA_NAME}.identity_challenge
-    (challenge_id, account_id, issued_at, expires_at, attempts_used, max_attempts, consumed_at)
-  VALUES ($1, $2, $3, $4, $5, $6, $7)
+    (challenge_id, account_id, issued_at, expires_at, attempts_used, max_attempts,
+     consumed_at, delivered_at)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
   ON CONFLICT (challenge_id) DO NOTHING`;
 
 /**
@@ -165,11 +187,19 @@ const UPDATE_CHALLENGE = `
      AND attempts_used = $4
      AND consumed_at IS NULL`;
 
+/**
+ * Отметка об отправке — на каждую отправку, включая повторную (`0025`).
+ *
+ * Условие сравнения оставлено, но развёрнуто: отметка не двигается назад.
+ * Триггер такой `UPDATE` и так отвергнет, но отвергнет **исключением**, то есть
+ * оборванной транзакцией входа; здесь то же самое — просто ноль строк. Разница
+ * важна для часов, переведённых назад: вход не обязан падать от этого.
+ */
 const MARK_DELIVERED = `
   UPDATE ${SCHEMA_NAME}.identity_challenge
      SET delivered_at = $2
    WHERE challenge_id = $1
-     AND delivered_at IS NULL`;
+     AND (delivered_at IS NULL OR delivered_at <= $2)`;
 
 function challengeOfRow(row: ChallengeRow): IdentityChallenge {
   return Object.freeze({
@@ -180,6 +210,7 @@ function challengeOfRow(row: ChallengeRow): IdentityChallenge {
     attemptsUsed: row.attempts_used,
     maxAttempts: row.max_attempts,
     consumedAt: optionalMoment(row.consumed_at),
+    deliveredAt: optionalMoment(row.delivered_at),
   });
 }
 
@@ -188,6 +219,15 @@ export async function loadChallenge(
   id: ChallengeId,
 ): Promise<IdentityChallenge | null> {
   const found = await client.query<ChallengeRow>(SELECT_CHALLENGE, [id]);
+  const row = found.rows[0];
+  return row === undefined ? null : challengeOfRow(row);
+}
+
+export async function latestChallengeFor(
+  client: PoolClient,
+  account: string,
+): Promise<IdentityChallenge | null> {
+  const found = await client.query<ChallengeRow>(SELECT_LATEST_CHALLENGE, [account]);
   const row = found.rows[0];
   return row === undefined ? null : challengeOfRow(row);
 }
@@ -205,6 +245,12 @@ export async function saveChallenge(
       challenge.attemptsUsed,
       challenge.maxAttempts,
       null,
+      // Отметка об отправке кладётся вместе со строкой: выданный вызов её не
+      // имеет, но вызов и его отметка обязаны класться и подниматься одним
+      // значением — иначе «поднимается целым» перестаёт быть правдой.
+      challenge.deliveredAt === undefined || challenge.deliveredAt === null
+        ? null
+        : stamp(challenge.deliveredAt),
     ]);
     if (inserted.rowCount === 0) {
       // Место занято другим вызовом под тем же идентификатором. Повтором это
@@ -468,6 +514,7 @@ function transactionOf(client: PoolClient): AuthTransaction {
   };
   const challenges: IdentityChallengeStorePort = {
     load: (id) => loadChallenge(client, id),
+    latestFor: (account) => latestChallengeFor(client, account),
     save: (challenge) => saveChallenge(client, challenge),
     markDelivered: (id, at) => markChallengeDelivered(client, id, at),
   };

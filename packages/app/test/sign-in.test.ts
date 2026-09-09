@@ -6,6 +6,7 @@ import {
   AUTH_REASON_KEYS,
   CODE_KEY_MIN_LENGTH,
   IDENTITY_CODE_POLICY,
+  PROVISIONAL_CODE_REQUEST_CLOCK,
   accountId,
   challengeId,
   personId,
@@ -145,6 +146,134 @@ describe('запрос кода', () => {
     expect(requested).toEqual({ ok: false, error: uniformIdentityRejection });
     expect(data.journal.at(-1)?.kind).toBe('session_denied');
     expect(data.delivered.size).toBe(0);
+  });
+});
+
+describe('поток запросов «пришлите код»', () => {
+  it('сто запросов подряд заводят один вызов и одну отправку', async () => {
+    // §Z2: сегодня сотня запросов стоила бы ста строк и ста сообщений в канал.
+    // Это не приближает никого к коду, но это отказ в обслуживании и наш счёт
+    // за отправку.
+    const post = channel();
+    const runtime = deps({ delivery: post.port });
+    const answers: string[] = [];
+    for (let n = 0; n < 100; n += 1) {
+      clock = instant(NOW + n * 100);
+      const requested = await requestSignInCode(runtime, {
+        accountKey: PARTY.accountId,
+        origin: ORIGIN,
+      });
+      if (!requested.ok) throw new Error('ответ обязан быть тем же самым');
+      answers.push(requested.value.challengeId);
+    }
+    expect(data.challenges.size).toBe(1);
+    expect(post.sent).toHaveLength(1);
+    // Ссылка у всех ста одна: человек, у которого сообщение задержалось, всё
+    // это время получает свой живой вызов, а не пустоту.
+    expect(new Set(answers).size).toBe(1);
+    const code = await codeFor(answers[0] as ChallengeId);
+    expect(post.sent[0]?.code).toBe(code);
+  });
+
+  it('придержанный запрос отвечает так же, как обычный, и код по нему подходит', async () => {
+    const runtime = deps();
+    const first = await requestSignInCode(runtime, {
+      accountKey: PARTY.accountId,
+      origin: ORIGIN,
+    });
+    clock = instant(NOW + 1000);
+    const again = await requestSignInCode(runtime, {
+      accountKey: PARTY.accountId,
+      origin: ORIGIN,
+    });
+    // Ответ совпадает полем в поле: «слишком часто» не имеет ни своего отказа,
+    // ни своего поля, иначе форма входа перечисляет учётные записи (§Z3).
+    expect(again).toEqual(first);
+    if (!again.ok) return;
+    const opened = await submitSignInCode(runtime, {
+      challengeId: again.value.challengeId,
+      code: await codeFor(again.value.challengeId),
+      origin: ORIGIN,
+    });
+    expect(opened.ok).toBe(true);
+  });
+
+  it('за окном тот же код уходит ещё раз, а строка остаётся одна', async () => {
+    const post = channel();
+    const runtime = deps({ delivery: post.port });
+    const first = await requestSignInCode(runtime, {
+      accountKey: PARTY.accountId,
+      origin: ORIGIN,
+    });
+    if (!first.ok) throw new Error('вызов не выдан');
+    clock = instant(NOW + PROVISIONAL_CODE_REQUEST_CLOCK.resendWindow);
+    const again = await requestSignInCode(runtime, {
+      accountKey: PARTY.accountId,
+      origin: ORIGIN,
+    });
+    expect(again).toEqual(first);
+    expect(data.challenges.size).toBe(1);
+    expect(post.sent).toHaveLength(2);
+    expect(post.sent[1]?.code).toBe(post.sent[0]?.code);
+    // Срок повтором не двигается: продлеваемый срок — не срок.
+    expect(storedChallenge(first.value.challengeId).expiresAt).toBe(
+      instant(NOW + IDENTITY_CODE_POLICY.ttl),
+    );
+  });
+
+  it('истёкший вызов не запирает вход: следующий запрос выдаёт новый', async () => {
+    const post = channel();
+    const runtime = deps({ delivery: post.port });
+    const first = await requestSignInCode(runtime, {
+      accountKey: PARTY.accountId,
+      origin: ORIGIN,
+    });
+    if (!first.ok) throw new Error('вызов не выдан');
+    clock = instant(NOW + IDENTITY_CODE_POLICY.ttl);
+    const next = await requestSignInCode(runtime, {
+      accountKey: PARTY.accountId,
+      origin: ORIGIN,
+    });
+    if (!next.ok) throw new Error('вызов не выдан');
+    expect(next.value.challengeId).not.toBe(first.value.challengeId);
+    expect(data.challenges.size).toBe(2);
+    expect(post.sent).toHaveLength(2);
+    expect(post.sent[1]?.code).not.toBe(post.sent[0]?.code);
+  });
+
+  it('сто запросов после исчерпания попыток не дают ни одной новой догадки', async () => {
+    // Иначе ограничение обходится за пять секунд: пять неверных ответов
+    // закрывают вызов, следующий запрос заводит новый и шлёт сообщение.
+    const post = channel();
+    const runtime = deps({ delivery: post.port });
+    const requested = await requestSignInCode(runtime, {
+      accountKey: PARTY.accountId,
+      origin: ORIGIN,
+    });
+    if (!requested.ok) throw new Error('вызов не выдан');
+    const id = requested.value.challengeId;
+    const wrong = (await codeFor(id)) === '000000' ? '111111' : '000000';
+    for (let attempt = 0; attempt < IDENTITY_CODE_POLICY.maxAttempts; attempt += 1) {
+      await submitSignInCode(runtime, { challengeId: id, code: wrong, origin: ORIGIN });
+    }
+    for (let n = 0; n < 100; n += 1) {
+      clock = instant(NOW + 1000 + n * 100);
+      await requestSignInCode(runtime, { accountKey: PARTY.accountId, origin: ORIGIN });
+    }
+    expect(data.challenges.size).toBe(1);
+    expect(post.sent).toHaveLength(1);
+  });
+
+  it('другая учётная запись своим окном не ограничена', async () => {
+    // Окно — на запись, а не на процесс: иначе один запрос останавливал бы
+    // вход всем.
+    const post = channel();
+    const runtime = deps({ delivery: post.port });
+    await requestSignInCode(runtime, { accountKey: PARTY.accountId, origin: ORIGIN });
+    clock = instant(NOW + 1000);
+    await requestSignInCode(runtime, { accountKey: OPERATOR.accountId, origin: ORIGIN });
+    expect(post.sent).toHaveLength(2);
+    expect(data.challenges.size).toBe(2);
   });
 });
 

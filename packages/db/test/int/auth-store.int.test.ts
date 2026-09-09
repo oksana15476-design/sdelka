@@ -166,6 +166,83 @@ suite.run(suite.title, () => {
     });
   });
 
+  it('самый свежий вызов записи поднимается в любом состоянии, а чужой — не поднимается', async () => {
+    // По нему считается ограничение потока запросов «пришлите код»
+    // (`auth/src/code-request.ts`): живой возвращается тому, кто попросил
+    // повторно, а закрытый нужен ради своей отметки об отправке.
+    await withRollback(pool, async (client) => {
+      await seedAccount(client);
+      await asApp(client);
+      const tx = pgAuthTransaction(client);
+      expect(await tx.challenges.latestFor(ACCOUNT)).toBeNull();
+
+      const first = freshChallenge();
+      await tx.challenges.save(first);
+      expect((await tx.challenges.latestFor(ACCOUNT))?.challengeId).toBe(first.challengeId);
+
+      // Закрытый вызов остаётся самым свежим, пока не выдан следующий: иначе
+      // пять неверных ответов открывали бы канал заново.
+      await tx.challenges.save(Object.freeze({ ...first, attemptsUsed: 1, consumedAt: at(1000) }));
+      expect((await tx.challenges.latestFor(ACCOUNT))?.consumedAt).toBe(at(1000));
+
+      const second = issueChallenge({
+        challengeId: challengeId('ch-int-2'),
+        accountId: ACCOUNT,
+        issuedAt: at(60_000),
+      });
+      await tx.challenges.save(second);
+      expect((await tx.challenges.latestFor(ACCOUNT))?.challengeId).toBe(second.challengeId);
+
+      // Чужая запись своего вызова не получает ни при каком состоянии нашего.
+      expect(await tx.challenges.latestFor(accountId('acc-int-someone-else'))).toBeNull();
+    });
+  });
+
+  it('отметка об отправке двигается вперёд — окно считается от последней отправки', async () => {
+    await withRollback(pool, async (client) => {
+      await seedAccount(client);
+      await asApp(client);
+      const tx = pgAuthTransaction(client);
+      const challenge = freshChallenge();
+      await tx.challenges.save(challenge);
+      expect((await tx.challenges.load(challenge.challengeId))?.deliveredAt).toBeNull();
+
+      await tx.challenges.markDelivered(challenge.challengeId, NOW);
+      expect((await tx.challenges.load(challenge.challengeId))?.deliveredAt).toBe(NOW);
+
+      // Повторная отправка того же кода двигает отметку. Неподвижная сделала бы
+      // окно повторной отправки бесконечным (`0025`).
+      await tx.challenges.markDelivered(challenge.challengeId, at(60_000));
+      expect((await tx.challenges.load(challenge.challengeId))?.deliveredAt).toBe(at(60_000));
+
+      // Назад отметка не идёт: это была бы ложь о том, когда человеку
+      // сообщили, — и заодно способ открыть окно чужими часами. Адаптер это
+      // не пишет вовсе, поэтому строка просто не меняется.
+      await tx.challenges.markDelivered(challenge.challengeId, at(30_000));
+      expect((await tx.challenges.load(challenge.challengeId))?.deliveredAt).toBe(at(60_000));
+    });
+  });
+
+  it('отметку об отправке не стереть и не отмотать даже напрямую', async () => {
+    await withRollback(pool, async (client) => {
+      await seedAccount(client);
+      await asApp(client);
+      const tx = pgAuthTransaction(client);
+      const challenge = freshChallenge();
+      await tx.challenges.save(challenge);
+      await tx.challenges.markDelivered(challenge.challengeId, at(60_000));
+
+      for (const value of ['NULL', `'${new Date(NOW).toISOString()}'`]) {
+        const error = await refused(
+          client,
+          `UPDATE sdelka.identity_challenge SET delivered_at = ${value}
+            WHERE challenge_id = '${challenge.challengeId}'`,
+        );
+        expect(errorKey(error)).toBe(DbErrorCode.authChallengeImmutable);
+      }
+    });
+  });
+
   it('счётчик попыток идёт вперёд, и назад его не сдвинуть даже напрямую', async () => {
     await withRollback(pool, async (client) => {
       await seedAccount(client);

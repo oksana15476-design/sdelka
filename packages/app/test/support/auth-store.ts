@@ -9,6 +9,7 @@ import {
   type IdentityChallenge,
   type Session,
   type SessionId,
+  recordDelivery,
 } from '@sdelka/auth';
 import type { Instant } from '@sdelka/domain';
 
@@ -54,6 +55,26 @@ function transactionOf(data: AuthTables): AuthTransaction {
     challenges: {
       load: (id: ChallengeId): Promise<IdentityChallenge | null> =>
         Promise.resolve(data.challenges.get(id) ?? null),
+      /**
+       * Самый свежий вызов записи — в любом состоянии, как в базе
+       * (`ORDER BY issued_at DESC, challenge_id DESC LIMIT 1`). Порядок
+       * разрешается до конца: карта хранит порядок вставки, но правило не
+       * должно от него зависеть.
+       */
+      latestFor: (account: string): Promise<IdentityChallenge | null> => {
+        let latest: IdentityChallenge | null = null;
+        for (const challenge of data.challenges.values()) {
+          if (challenge.accountId !== account) continue;
+          if (
+            latest === null ||
+            challenge.issuedAt > latest.issuedAt ||
+            (challenge.issuedAt === latest.issuedAt && challenge.challengeId > latest.challengeId)
+          ) {
+            latest = challenge;
+          }
+        }
+        return Promise.resolve(latest);
+      },
       save: (challenge: IdentityChallenge): Promise<void> => {
         const stored = data.challenges.get(challenge.challengeId);
         if (stored !== undefined) {
@@ -70,8 +91,17 @@ function transactionOf(data: AuthTables): AuthTransaction {
         data.challenges.set(challenge.challengeId, challenge);
         return Promise.resolve();
       },
+      /**
+       * Отметка об отправке — на каждую отправку, включая повторную, и только
+       * вперёд (`0025`). Неподвижная отметка сделала бы окно повторной
+       * отправки бесконечным, и подделка была бы зелёной там, где база красная.
+       */
       markDelivered: (id: ChallengeId, at: Instant): Promise<void> => {
-        if (!data.delivered.has(id)) data.delivered.set(id, at);
+        const stored = data.challenges.get(id);
+        const previous = data.delivered.get(id);
+        if (previous !== undefined && previous > at) return Promise.resolve();
+        data.delivered.set(id, at);
+        if (stored !== undefined) data.challenges.set(id, recordDelivery(stored, at));
         return Promise.resolve();
       },
     },

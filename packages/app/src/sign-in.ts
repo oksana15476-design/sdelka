@@ -17,7 +17,7 @@ import {
   challengeId as toChallengeId,
   deliveryFor,
   establishSession,
-  issueChallenge,
+  planCodeRequest,
   personId as toPersonId,
   policyForRole,
   revoke,
@@ -187,6 +187,29 @@ export interface CodeRequested {
  * выравнивать время искусственно. Первое противоречит правилу о персональных
  * данных, второе — это задержка, которую надо назначить. Развилка вынесена
  * владельцу: `DECISIONS-REVIEW.md` §Z3 **[открыто]**.
+ *
+ * ## Сколько отправок стоит за сотней запросов
+ *
+ * Решает не этот шаг, а `planCodeRequest` (`auth/src/code-request.ts`): не
+ * более одной отправки на учётную запись за окно, по любому пути. Здесь только
+ * три следствия, и каждое видно в коде ниже:
+ *
+ * - повторный запрос в пределах окна не пишет строки и не трогает канал, а
+ *   возвращает **ту же** ссылку — человек, у которого сообщение задержалось,
+ *   входа не теряет;
+ * - за окном тот же вызов и тот же код уходят в канал ещё раз: новой строки не
+ *   появляется, срок не двигается, потраченные попытки не возвращаются;
+ * - отметка об отправке ставится на **каждую** отправку — по ней считается
+ *   окно.
+ *
+ * ⚠ **Одно новое различие ответов это заводит, и закрывается оно не здесь.**
+ * Повторный запрос по существующей записи внутри окна возвращает ту же ссылку,
+ * а по несуществующей — каждый раз новую. Два запроса подряд и сравнение двух
+ * ссылок отвечают на вопрос «есть ли такая запись», не приближая ни к одному
+ * коду. Чтобы этого не было, несуществующему ключу нужна ссылка, устойчивая в
+ * пределах того же окна, — то есть вывод ссылки ключом, а не случайный
+ * идентификатор. Это то же место, что и §Z3 **[открыто]**, и делается тем же
+ * решением владельца.
  */
 export async function requestSignInCode(
   deps: SignInDeps,
@@ -201,12 +224,24 @@ export async function requestSignInCode(
       // ответом по существующей записи до последнего поля.
       return ok({ challengeId: deps.ids.challenge() });
     }
-    const challenge = issueChallenge({
-      challengeId: deps.ids.challenge(),
+    const plan = planCodeRequest({
       accountId: account.accountId,
-      issuedAt: now,
+      latest: await tx.challenges.latestFor(account.accountId),
+      fresh: deps.ids.challenge(),
+      now,
     });
-    await tx.challenges.save(challenge);
+    if (plan.outcome === 'withheld') {
+      // Ни строки, ни отправки: сто запросов подряд стоят одного вызова и одной
+      // отправки. Ответ при этом тот же самый — «слишком часто» не имеет ни
+      // своего отказа, ни своего поля, иначе форма входа отвечала бы по-разному
+      // (§Z3). Ссылка ведёт на живой вызов, если он есть, поэтому человек, у
+      // которого сообщение задержалось, входа не теряет.
+      return ok({ challengeId: plan.reference });
+    }
+    const challenge = plan.challenge;
+    // Повторная отправка строки не пишет: это тот же вызов и тот же код, и
+    // срок с попытками у него прежние.
+    if (plan.outcome === 'issued') await tx.challenges.save(challenge);
     const code = deps.derivation.codeFor(challenge);
     try {
       await deps.delivery.deliver(
@@ -226,8 +261,10 @@ export async function requestSignInCode(
       );
       return failure(uniformIdentityRejection);
     }
+    // Отметка ставится на каждую отправку, включая повторную: по ней считается
+    // окно, и неподвижная отметка открывала бы его навсегда (`0025`).
     await tx.challenges.markDelivered(challenge.challengeId, now);
-    return ok({ challengeId: challenge.challengeId });
+    return ok({ challengeId: plan.reference });
   });
 }
 
