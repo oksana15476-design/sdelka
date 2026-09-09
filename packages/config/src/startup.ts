@@ -58,6 +58,34 @@ export function checkEnvironment(
 }
 
 /**
+ * Проверка по именам вместо области: процесс объявляет, что читает сам.
+ *
+ * Область — грубая мерка. `app` объединяет всё, что нужно приложению, а шагов
+ * у приложения несколько, и читают они разное: накату миграций нужна строка
+ * подключения и больше ничего. Требовать от него переменные входа значит
+ * заставить выставить туда любое значение, то есть научить обходить ворота.
+ *
+ * Перечень остаётся один и тот же: имена сверяются с ним вызывающим
+ * (`findEnvVariable`), незнакомое имя сюда не доезжает.
+ */
+export function checkNamedEnvironment(
+  names: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+  registry: readonly EnvVariable[] = ENV_REGISTRY,
+): EnvironmentCheck {
+  const wanted = new Set(names);
+  const faults: EnvFault[] = [];
+  for (const variable of registry) {
+    if (!wanted.has(variable.name)) continue;
+    if (variable.necessity !== 'required') continue;
+    const presence = presenceOf(env, variable.name);
+    if (presence === Presence.present) continue;
+    faults.push(faultOf(variable, presence));
+  }
+  return { scope: 'app', ok: faults.length === 0, faults };
+}
+
+/**
  * Текст отказа. Технические ключи и имена — не прозаическое сообщение и тем
  * более не пользовательский текст (CLAUDE.md, «Три языка»): читает его тот, кто
  * разворачивает, и ему нужны имя переменной, вид изъяна и кому её не хватило.

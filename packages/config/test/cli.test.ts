@@ -26,7 +26,10 @@ const COMPLETE: Readonly<Record<string, string>> = {
   SDELKA_AUTH_CODE_KEY: 'not-a-real-key-0123456789abcdef',
 };
 
-function run(overrides: Record<string, string | undefined>): {
+function run(
+  overrides: Record<string, string | undefined>,
+  names: readonly string[] = [],
+): {
   status: number | null;
   stdout: string;
   stderr: string;
@@ -36,10 +39,11 @@ function run(overrides: Record<string, string | undefined>): {
     if (value === undefined) delete env[key];
     else env[key] = value;
   }
-  const result = spawnSync(process.execPath, ['--experimental-strip-types', CLI], {
-    env,
-    encoding: 'utf8',
-  });
+  const result = spawnSync(
+    process.execPath,
+    ['--experimental-strip-types', CLI, ...names],
+    { env, encoding: 'utf8' },
+  );
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -82,5 +86,53 @@ describe('pnpm env:check', () => {
     const result = run({ SDELKA_DATABASE_URL: undefined });
     expect(result.stdout).toBe('');
     expect(result.stderr).not.toBe('');
+  });
+
+  /**
+   * Сужение именами в аргументах. Так стартует накат миграций в образе: он
+   * читает строку подключения и ничего больше, и требовать от него переменные
+   * входа значило бы заставить выставить их любым значением.
+   */
+  describe('сужение до названных переменных', () => {
+    it('названная есть, остальные обязательные отсутствуют — проход', () => {
+      const result = run(
+        { SDELKA_AUTH_MODE: undefined, SDELKA_AUTH_CODE_KEY: undefined },
+        ['SDELKA_DATABASE_URL'],
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('config.env.ok');
+    });
+
+    it('тот же набор без сужения — отказ: сужение действительно сужает', () => {
+      const result = run({ SDELKA_AUTH_MODE: undefined, SDELKA_AUTH_CODE_KEY: undefined });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('SDELKA_AUTH_MODE');
+    });
+
+    it('нет самой названной — отказ с её именем', () => {
+      const result = run({ SDELKA_DATABASE_URL: undefined }, ['SDELKA_DATABASE_URL']);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('SDELKA_DATABASE_URL');
+    });
+
+    it('имя не из перечня отвергается, а не пропускается молча', () => {
+      // Опечатка в имени иначе дала бы зелёный запуск без единой проверки —
+      // ворота, о которых никто не узнает, что они открыты настежь.
+      //
+      // Имя собирается из частей намеренно: целиком написанное, оно попадёт в
+      // обход дрейфа (`drift.test.ts`) как чтение переменной, которой нет в
+      // перечне, и уронит его. Проверено — уронило.
+      const misspelled = ['SDELKA', 'DATABAZE', 'URL'].join('_');
+      const result = run({}, [misspelled]);
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain('config.env.ok');
+      expect(result.stderr).toContain(ConfigErrorCode.registryUnknown);
+      expect(result.stderr).toContain(misspelled);
+    });
+
+    it('значение названной переменной не печатается и при сужении', () => {
+      const result = run({ SDELKA_DATABASE_URL: SECRET }, ['SDELKA_DATABASE_URL']);
+      expect(result.stdout + result.stderr).not.toContain('CANARY-SECRET');
+    });
   });
 });

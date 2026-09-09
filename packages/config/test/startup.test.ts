@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigError, ConfigErrorCode } from '../src/errors.ts';
+import { Presence } from '../src/presence.ts';
 import type { EnvVariable } from '../src/registry.ts';
 import { ENV_REGISTRY, requiredVariables } from '../src/registry.ts';
 import {
   assertEnvironment,
   checkEnvironment,
+  checkNamedEnvironment,
   describeEnvironmentCheck,
 } from '../src/startup.ts';
 
@@ -117,6 +119,69 @@ describe('checkEnvironment', () => {
     expect(checkEnvironment({}, 'tooling', SYNTHETIC).faults.map((f) => f.variable)).toEqual([
       'DELTA',
     ]);
+  });
+});
+
+/**
+ * Сужение до названных имён.
+ *
+ * Нужно там, где процесс — часть приложения, но читает не всё, что читает
+ * приложение: накат миграций открывает строку подключения и больше ничего.
+ * Требовать от него остальное значит заставить того, кто накатывает схему,
+ * выставить туда любое значение — то есть научить команду обходить ворота.
+ */
+describe('checkNamedEnvironment', () => {
+  it('неназванная обязательная не проверяется, даже когда её нет', () => {
+    const check = checkNamedEnvironment(['ALPHA'], { ALPHA: 'a' }, SYNTHETIC);
+    expect(check.ok).toBe(true);
+    expect(check.faults).toEqual([]);
+  });
+
+  it('названная обязательная без значения — изъян с её именем', () => {
+    const check = checkNamedEnvironment(['ALPHA', 'BETA'], { ALPHA: 'a' }, SYNTHETIC);
+    expect(check.ok).toBe(false);
+    expect(check.faults.map((fault) => fault.variable)).toEqual(['BETA']);
+  });
+
+  it('пустая строка у названной — отсутствие, а не значение', () => {
+    const check = checkNamedEnvironment(['ALPHA'], { ALPHA: '   ' }, SYNTHETIC);
+    expect(check.ok).toBe(false);
+    expect(check.faults[0]?.presence).toBe(Presence.blank);
+  });
+
+  it('названная необязательная не становится обязательной', () => {
+    expect(checkNamedEnvironment(['GAMMA'], {}, SYNTHETIC).ok).toBe(true);
+  });
+
+  it('область не сужает перечень: спросили имя — проверяется имя', () => {
+    // DELTA живёт в области `tooling`; названа явно — значит проверяется.
+    const check = checkNamedEnvironment(['DELTA'], {}, SYNTHETIC);
+    expect(check.faults.map((fault) => fault.variable)).toEqual(['DELTA']);
+  });
+
+  it('пустой перечень имён не проверяет ничего', () => {
+    expect(checkNamedEnvironment([], {}, SYNTHETIC).ok).toBe(true);
+  });
+
+  it('имя, которого нет в перечне, ничего не проверяет молча', () => {
+    // Отказ по несуществующему имени — забота вызывающего (`cli/check-env.ts`
+    // отвергает такое имя через findEnvVariable). Здесь важно другое: выдумать
+    // проверку для незнакомого имени функция не может и «всё хорошо» по
+    // опечатке не отвечает — она просто не находит, что проверять.
+    const check = checkNamedEnvironment(['ОПЕЧАТКА'], {}, SYNTHETIC);
+    expect(check.faults).toEqual([]);
+  });
+
+  it('на живом перечне сужение до строки подключения не требует входа', () => {
+    const check = checkNamedEnvironment(['SDELKA_DATABASE_URL'], {
+      SDELKA_DATABASE_URL: 'postgresql://u:p@h:5432/d',
+    });
+    expect(check.ok).toBe(true);
+    // Тот же набор без сужения обязательные переменные входа потребовал бы.
+    expect(
+      checkEnvironment({ SDELKA_DATABASE_URL: 'postgresql://u:p@h:5432/d' }, 'app').ok,
+    ).toBe(false);
+    expect(ENV_REGISTRY.some((variable) => variable.name === 'SDELKA_AUTH_MODE')).toBe(true);
   });
 });
 

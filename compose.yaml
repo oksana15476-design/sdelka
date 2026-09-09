@@ -80,6 +80,16 @@ services:
       target: runtime
     environment:
       SDELKA_DATABASE_URL: 'postgresql://sdelka:${SDELKA_DB_PASSWORD:?переменная не задана: экспортируйте SDELKA_DB_PASSWORD (см. docs/DEPLOY.md)}@db:5432/sdelka'
+      # Режим доставки одноразового кода: development | production.
+      #
+      # Умолчания здесь нет намеренно. `development` печатает код в журнал
+      # процесса и не ставит `Secure` на куку сессии; умолчание, подставляющее
+      # его, однажды поднимет так боевой стек — тихо, без единого отказа.
+      # Пусть тот, кто разворачивает, скажет это вслух.
+      SDELKA_AUTH_MODE: '${SDELKA_AUTH_MODE:?переменная не задана: development или production (см. docs/DEPLOY.md)}'
+      # Ключ вывода одноразового кода. Секрет: самого кода нет ни в базе, ни в
+      # журнале — он выводится из вызова этим ключом. Не короче 32 знаков.
+      SDELKA_AUTH_CODE_KEY: '${SDELKA_AUTH_CODE_KEY:?переменная не задана: не короче 32 знаков (см. docs/DEPLOY.md)}'
     depends_on:
       db:
         condition: service_healthy
