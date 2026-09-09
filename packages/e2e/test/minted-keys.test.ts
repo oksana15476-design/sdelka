@@ -5,9 +5,11 @@ import {
   verifyChain,
 } from '@sdelka/audit';
 import {
+  DEAL_APPLICATION_NAMESPACE,
   PAYOUT_NAMESPACE,
   REFUND_NAMESPACE,
   WITHDRAWAL_NAMESPACE,
+  dealApplicationIdempotencyKey,
   payoutIdempotencyKey,
   refundIdempotencyKey,
   withdrawalIdempotencyKey,
@@ -100,6 +102,7 @@ describe('зеркало схем чеканки не разошлось с до
     expect(MINT_SCHEMES.payout_idempotency).toBe(PAYOUT_NAMESPACE);
     expect(MINT_SCHEMES.refund_idempotency).toBe(REFUND_NAMESPACE);
     expect(MINT_SCHEMES.withdrawal_idempotency).toBe(WITHDRAWAL_NAMESPACE);
+    expect(MINT_SCHEMES.deal_application_idempotency).toBe(DEAL_APPLICATION_NAMESPACE);
   });
 
   it('обе реализации UUID5 дают один и тот же ключ на общих входах', () => {
@@ -112,6 +115,12 @@ describe('зеркало схем чеканки не разошлось с до
       const withdrawal = `withdrawal-mirror-${index}`;
       expect(auditMinted('withdrawal_idempotency', withdrawal).value).toBe(
         withdrawalIdempotencyKey(withdrawal),
+      );
+      // Вход заявки — канонический вид намерения, а не номер: разойтись двум
+      // реализациям на нём так же нечем, и проверяется это тем же перебором.
+      const application = `application-mirror-${index}`;
+      expect(auditMinted('deal_application_idempotency', application).value).toBe(
+        dealApplicationIdempotencyKey(application),
       );
     }
   });

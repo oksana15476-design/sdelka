@@ -124,6 +124,18 @@ export const MINT_SCHEMES = {
   refund_idempotency: '7a48b364-df42-5a48-bcbb-1c1929943b1b',
   /** `domain/src/ids.ts`, `WITHDRAWAL_NAMESPACE`: ключ вывода со счёта клиента. */
   withdrawal_idempotency: '285085fc-ffb8-5600-9ad1-3d5c1235c9b5',
+  /**
+   * `domain/src/ids.ts`, `DEAL_APPLICATION_NAMESPACE`: ключ заявки на сделку.
+   *
+   * Схема заведена не ради ровности перечня. Номер заявки — тот же UUID5, и под
+   * правило `digit_run` он подпадает с той же частотой, что ключ выплаты
+   * (замер: 3,1 %). Без доказательства чеканки запись о подаче примерно каждой
+   * тридцать второй заявки не собиралась бы вовсе — то есть заявка была бы
+   * принята, а вечный журнал о ней бы молчал. Ровно тот дефект, который уже был
+   * найден на выплате, и чинится он тем же способом: пересчётом из схемы и
+   * входа, а не послаблением правила.
+   */
+  deal_application_idempotency: '41daa5ea-a04b-5be6-8a79-b3483ffed308',
 } as const;
 
 export type MintScheme = keyof typeof MINT_SCHEMES;

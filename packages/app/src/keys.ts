@@ -1,4 +1,6 @@
+import { type AuditMinted, auditMinted } from '@sdelka/audit';
 import { type IdentityDocument, identityKey } from '@sdelka/compliance';
+import { dealApplicationIdempotencyKey } from '@sdelka/domain';
 import { type ClientKey, clientKey } from '@sdelka/ledger';
 
 /**
@@ -18,4 +20,50 @@ import { type ClientKey, clientKey } from '@sdelka/ledger';
  */
 export function toClientKey(document: IdentityDocument): ClientKey {
   return clientKey(identityKey(document).replaceAll(':', '.'));
+}
+
+/* ------------------------------------------------------------------------- */
+/* Чеканка ключей слоем сценариев                                            */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Отчеканенный ключ: само значение и **доказательство** его происхождения.
+ *
+ * Две половины возвращаются вместе намеренно. Значение уедет в номер строки и в
+ * предмет записи вечного журнала, а доказательство — в `assertNoRawIdentifiers`
+ * (`@sdelka/audit`, `minted.ts`), где оно пересчитывается из схемы и входа.
+ * Разъехаться им нечем: обе половины получены одним вызовом из одного входа, и
+ * подать сюда произвольную строку, объявив её своей, нельзя — `auditMinted`
+ * значение не принимает, он его вычисляет.
+ */
+export interface MintedKey {
+  readonly value: string;
+  readonly minted: AuditMinted;
+}
+
+/**
+ * Ключ заявки на сделку — **функция намерения и подавшего, и ничего больше**.
+ *
+ * Ни момента, ни счётчика попыток, ни значения из браузера: ключ, в котором есть
+ * время, превращает двойной клик во вторую заявку, а ключ, присланный формой,
+ * отдаёт идемпотентность тому, кто её и ломает. Поэтому чеканит слой сценариев,
+ * и чеканит из того, что уже сказано в намерении.
+ *
+ * Части склеиваются каноническим `JSON`, а не разделителем: кадастровый код и
+ * контакт второй стороны — строки от человека, и любой выбранный символ-
+ * разделитель однажды в них окажется. Тогда два разных намерения дали бы один
+ * вход, то есть один ключ, — и вторая заявка молча стала бы повтором первой.
+ *
+ * Вход в вечный журнал не попадает: заявка о чеканке — пропуск на входе, а не
+ * поле записи (`audit/src/chain.ts`, `AuditRecordInput.minted`). Это и делает
+ * безопасным то, что во входе лежат персональные данные.
+ */
+export function mintDealApplicationKey(parts: readonly string[]): MintedKey {
+  const source = JSON.stringify(parts);
+  return Object.freeze({
+    value: dealApplicationIdempotencyKey(source),
+    // Схема и вход — те же, из которых значение посчитал домен. Совпадение двух
+    // реализаций UUID5 проверяется сверкой в `@sdelka/e2e`, а не обещанием.
+    minted: auditMinted('deal_application_idempotency', source),
+  });
 }

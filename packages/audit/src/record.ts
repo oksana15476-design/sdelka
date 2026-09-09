@@ -239,7 +239,31 @@ export interface CoverageMeasurement {
 export type StateTransitionBody =
   | {
       readonly kind: 'state_transition';
-      readonly machine: 'tranche' | 'payout' | 'deal' | 'party_check' | 'oracle_observation';
+      /**
+       * `deal_application` — заявка на сделку (`@sdelka/app`, `application.ts`).
+       *
+       * Дописана **в конец** перечня машин, и это не то же самое, что дописать
+       * вид записи: вид лежит колонкой-перечислением (`sdelka.audit_record_kind`)
+       * и требует миграции, а имя машины живёт внутри `body jsonb`, который база
+       * сверяет только по полю `kind`. То есть перечень расширяется здесь и
+       * больше нигде — зеркала у него нет.
+       *
+       * Заведена именно машина, а не подгонка под соседнее тело: у заявки есть
+       * собственные состояния и собственные терминальные (`подана → принята в
+       * работу | отклонена → превращена в сделку`), и записывать их машиной
+       * `deal` значило бы утверждать в вечном журнале, что сделка существует,
+       * — притом что заводит сделку оператор и позже (`DESCRIPTION.md` §9).
+       * Прежний выход из этого положения назван в `withdrawal.ts`: вывод пишется
+       * чужими телами, потому что своей машины у него нет, и это помечено там
+       * **[открыто]**. Здесь такой цены платить не пришлось.
+       */
+      readonly machine:
+        | 'tranche'
+        | 'payout'
+        | 'deal'
+        | 'party_check'
+        | 'oracle_observation'
+        | 'deal_application';
       readonly from: string;
       readonly to: string;
       readonly eventKey: string;

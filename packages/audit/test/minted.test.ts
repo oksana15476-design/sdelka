@@ -254,11 +254,12 @@ describe('объявить своим произвольную строку не
     );
     expect(isMintScheme('anything')).toBe(false);
     expect(isMintScheme('payout_idempotency')).toBe(true);
-    // Перечень закрыт: три схемы, и новая появляется правкой кода.
+    // Перечень закрыт: четыре схемы, и новая появляется правкой кода.
     expect(MINT_SCHEME_IDS).toEqual([
       'payout_idempotency',
       'refund_idempotency',
       'withdrawal_idempotency',
+      'deal_application_idempotency',
     ]);
   });
 
