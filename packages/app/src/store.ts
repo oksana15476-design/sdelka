@@ -194,6 +194,21 @@ export interface WorldTransaction {
   readChain(chainId: string): Promise<AuditChain>;
   saveDeal(snapshot: DealSnapshot): Promise<WriteOutcome>;
   loadDeal(dealId: string): Promise<DealSnapshot | null>;
+  /**
+   * Сделки, где названная сторона — сторона: и покупателем, и продавцом.
+   *
+   * Отбор — **аргумент, а не фильтр вызывающего**: метода «все сделки» у порта
+   * нет. Чтение всего с отбором в коде означает, что чужая сделка уже приехала
+   * в процесс, и от перечисления чужого её отделяет один не забытый `filter`
+   * (`ROAD-TO-SCREEN.md` §3.2, правило 2). Ключ — `partyId`, тот же, что у
+   * `loadWithdrawals`.
+   *
+   * Порядок назван и полон: от свежих к старым по моменту заведения, при
+   * совпадении — по идентификатору. Список без порядка приходит дважды разным,
+   * и кабинет «прыгает» между переходами. Момент заведения держит хранилище, а
+   * не снимок, — почему именно так, разобрано в `packages/db/src/store/port.ts`.
+   */
+  loadDealsOfParty(partyId: string): Promise<readonly DealSnapshot[]>;
   saveTranche(snapshot: TrancheSnapshot, previous: TrancheSnapshot | null): Promise<WriteOutcome>;
   loadTranche(dealId: string, trancheId: string): Promise<TrancheSnapshot | null>;
   savePayout(snapshot: PayoutSnapshot, previous: PayoutSnapshot | null): Promise<WriteOutcome>;

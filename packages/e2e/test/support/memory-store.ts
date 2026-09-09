@@ -222,6 +222,24 @@ class MemoryTransaction implements WorldTransaction {
     return this.#rows.deals.get(dealId) ?? null;
   }
 
+  /**
+   * Сделки участника — те же правила, что у Postgres, а не «отдать всё».
+   *
+   * Отбор по стороне обязателен: реализация, отдающая карту целиком, сделала бы
+   * зелёным тест, который в базе поймал бы перечисление чужого. Порядок —
+   * **от свежих к старым**: у карты порядок вставки, у таблицы — момент
+   * заведения (`created_at DESC, deal_id`), и это ближайшее, чем карта отвечает
+   * на тот же вопрос. Второй ключ сортировки здесь не нужен: у карты один ключ
+   * встречается один раз, и `saveDeal` при смене статуса позиции не меняет.
+   */
+  async loadDealsOfParty(partyId: string): Promise<readonly DealSnapshot[]> {
+    return Object.freeze(
+      [...this.#rows.deals.values()]
+        .filter((deal) => deal.buyer.partyId === partyId || deal.seller.partyId === partyId)
+        .reverse(),
+    );
+  }
+
   async saveTranche(
     snapshot: TrancheSnapshot,
     previous: TrancheSnapshot | null,

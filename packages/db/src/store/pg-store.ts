@@ -18,6 +18,7 @@ import type {
 } from './port.ts';
 import {
   loadDeal,
+  loadDealsOfParty,
   loadPayouts,
   loadTranche,
   loadWithdrawals,
@@ -77,6 +78,10 @@ class PgTransaction implements WorldTransaction {
 
   loadDeal(dealId: string): Promise<DealSnapshot | null> {
     return loadDeal(this.#client, dealId);
+  }
+
+  loadDealsOfParty(partyId: string): Promise<readonly DealSnapshot[]> {
+    return loadDealsOfParty(this.#client, partyId);
   }
 
   saveTranche(snapshot: TrancheSnapshot, previous: TrancheSnapshot | null): Promise<WriteOutcome> {

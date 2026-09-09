@@ -116,14 +116,40 @@ interface DealRow {
   readonly seller_account_key: string;
 }
 
-const SELECT_DEAL = `
+const DEAL_SOURCE = `
   SELECT d.deal_id, d.status,
          d.buyer_party_id, b.account_key AS buyer_account_key,
          d.seller_party_id, s.account_key AS seller_account_key
     FROM sdelka.deal d
     JOIN sdelka.party b ON b.party_id = d.buyer_party_id
-    JOIN sdelka.party s ON s.party_id = d.seller_party_id
+    JOIN sdelka.party s ON s.party_id = d.seller_party_id`;
+
+const SELECT_DEAL = `${DEAL_SOURCE}
    WHERE d.deal_id = $1`;
+
+/**
+ * Сделки участника — **обе стороны**, и отбор целиком в `WHERE`.
+ *
+ * Скобки вокруг `OR` стоят не для красоты: сегодня других условий в `WHERE`
+ * нет, но приписанное завтра `AND d.status <> …` без них связалось бы только со
+ * вторым слагаемым, и выборка отдала бы чужие сделки — то самое перечисление
+ * чужого, ради запрета которого метод и появился.
+ *
+ * Отбор здесь и **только** здесь: второй проверки «участник действительно
+ * сторона» в коде нет намеренно. Она была бы вторым ответом на тот же вопрос,
+ * и разойтись с первым ей нечем — строку, где участник не сторона, этот
+ * `WHERE` не отдаёт. Что он её не отдаёт, проверяется на живой базе с чужой
+ * сделкой в ней (`test/int/store-deals-of-party.int.test.ts`), а не
+ * рассуждением.
+ *
+ * Порядок полный: `created_at` — момент **транзакции**, поэтому две сделки,
+ * заведённые одним шагом, получают его одинаковым, и без второго ключа
+ * сортировки их взаимный порядок решал бы планировщик. `deal_id` — первичный
+ * ключ, значит пара уникальна, значит порядок один и тот же при каждом чтении.
+ */
+const SELECT_DEALS_OF_PARTY = `${DEAL_SOURCE}
+   WHERE (d.buyer_party_id = $1 OR d.seller_party_id = $1)
+   ORDER BY d.created_at DESC, d.deal_id`;
 
 function dealOfRow(row: DealRow): DealSnapshot {
   return Object.freeze({
@@ -142,6 +168,30 @@ export async function loadDeal(
     const result = await client.query<DealRow>(SELECT_DEAL, [dealId]);
     const row = result.rows[0];
     return row === undefined ? null : dealOfRow(row);
+  });
+}
+
+/**
+ * Сделки участника — одним запросом, без подъёма мира.
+ *
+ * Одним, а не «список номеров, потом по номеру за каждым»: список кабинета
+ * читается на каждом переходе, и цена такого чтения обязана быть ценой одного
+ * ответа, а не числа строк в нём. Мир здесь не поднимается вовсе — это снимки,
+ * а не `resumeWorld`: восстановление мира стоит журнала, цепочки и проверки
+ * инвариантов, а список сделок — вопрос отображения.
+ *
+ * Пустой список — законный ответ («сделок нет», состояние экрана «пусто»), а не
+ * повод для отказа: у участника без сделок ровно ноль сделок, и отличать это от
+ * «участника нет» здесь нечем и не нужно — оба ответа снаружи обязаны быть
+ * одинаковыми (спека §3.2, правило 2).
+ */
+export async function loadDealsOfParty(
+  client: PoolClient,
+  partyId: string,
+): Promise<readonly DealSnapshot[]> {
+  return translating(async () => {
+    const result = await client.query<DealRow>(SELECT_DEALS_OF_PARTY, [partyId]);
+    return Object.freeze(result.rows.map(dealOfRow));
   });
 }
 
